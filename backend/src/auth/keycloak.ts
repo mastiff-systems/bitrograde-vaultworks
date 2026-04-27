@@ -30,9 +30,11 @@ export async function verifyKeycloakToken(token: string): Promise<TokenPayload> 
   const publicKey = key.getPublicKey();
 
   const payload = jwt.verify(token, publicKey) as Record<string, unknown>;
+  const roles: string[] = (payload['realm_access'] as { roles?: string[] })?.roles ?? [];
 
   return {
     userId: payload.sub as string,
     email: (payload.email ?? payload.preferred_username) as string,
+    role: roles.includes('vaultworks-admin') ? 'admin' : 'user',
   };
 }

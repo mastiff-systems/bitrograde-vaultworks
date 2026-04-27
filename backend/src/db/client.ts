@@ -10,7 +10,22 @@ export async function runMigrations(): Promise<void> {
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       email         TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
       created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Add role column to existing deployments that pre-date this migration
+  await pool.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'
+      CHECK (role IN ('admin','user'));
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 

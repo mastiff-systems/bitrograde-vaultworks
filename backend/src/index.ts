@@ -5,6 +5,7 @@ import { runMigrations } from './db/client.js';
 import { uploadRoutes } from './routes/upload.js';
 import { filesRoutes } from './routes/files.js';
 import { authRoutes } from './routes/auth.js';
+import { adminRoutes } from './routes/admin.js';
 import { authenticate } from './auth/middleware.js';
 
 const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login'];
@@ -14,23 +15,20 @@ async function main() {
 
   await app.register(cors, {
     origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
-    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
   await app.register(multipart, {
-    limits: {
-      fileSize: 500 * 1024 * 1024, // 500 MB per file
-      files: 10,
-    },
+    limits: { fileSize: 500 * 1024 * 1024, files: 10 },
   });
 
-  // Protect all /api/* routes except auth endpoints
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/') || AUTH_SKIP.includes(req.url)) return;
     await authenticate(req, reply);
   });
 
   await app.register(authRoutes);
+  await app.register(adminRoutes);
   await app.register(uploadRoutes);
   await app.register(filesRoutes);
 

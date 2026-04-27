@@ -9,6 +9,7 @@ const secret = () => {
 export interface TokenPayload {
   userId: string;
   email: string;
+  role: 'admin' | 'user';
 }
 
 export function signToken(payload: TokenPayload): string {

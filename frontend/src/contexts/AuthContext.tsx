@@ -5,6 +5,7 @@ const TOKEN_KEY = 'vaultworks_token';
 interface AuthUser {
   userId: string;
   email: string;
+  role: 'admin' | 'user';
 }
 
 interface AuthContextValue {
@@ -25,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!token) return;
     try {
       const payload = JSON.parse(atob(token.split('.')[1]));
-      setUser({ userId: payload.userId ?? payload.sub, email: payload.email });
+      setUser({ userId: payload.userId ?? payload.sub, email: payload.email, role: payload.role ?? 'user' });
     } catch {
       setToken(null);
       localStorage.removeItem(TOKEN_KEY);

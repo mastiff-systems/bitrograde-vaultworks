@@ -3,71 +3,6 @@ import { login, register } from '../api/auth.js';
 import { redirectToKeycloak, isKeycloakEnabled } from '../auth/keycloak.js';
 import { useAuth } from '../contexts/AuthContext.js';
 
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '100vh',
-    background: '#0d0d0d',
-    fontFamily: 'system-ui, sans-serif',
-  },
-  card: {
-    background: '#1a1a1a',
-    border: '1px solid #2a2a2a',
-    borderRadius: 12,
-    padding: '40px 36px',
-    width: 360,
-  },
-  title: { color: '#fff', fontSize: 22, fontWeight: 700, margin: '0 0 4px' },
-  subtitle: { color: '#666', fontSize: 13, margin: '0 0 28px' },
-  label: { display: 'block', color: '#aaa', fontSize: 13, marginBottom: 6 },
-  input: {
-    width: '100%',
-    background: '#111',
-    border: '1px solid #333',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 14,
-    padding: '10px 12px',
-    boxSizing: 'border-box',
-    outline: 'none',
-    marginBottom: 16,
-  },
-  btn: {
-    width: '100%',
-    background: '#7c3aed',
-    border: 'none',
-    borderRadius: 6,
-    color: '#fff',
-    cursor: 'pointer',
-    fontSize: 14,
-    fontWeight: 600,
-    padding: '11px 0',
-    marginTop: 4,
-  },
-  btnSecondary: {
-    width: '100%',
-    background: 'transparent',
-    border: '1px solid #333',
-    borderRadius: 6,
-    color: '#aaa',
-    cursor: 'pointer',
-    fontSize: 13,
-    padding: '10px 0',
-    marginTop: 10,
-  },
-  divider: { textAlign: 'center', color: '#444', fontSize: 12, margin: '18px 0' },
-  toggle: {
-    textAlign: 'center',
-    color: '#666',
-    fontSize: 13,
-    marginTop: 20,
-  },
-  toggleLink: { color: '#7c3aed', cursor: 'pointer', background: 'none', border: 'none', fontSize: 13 },
-  error: { color: '#f66', fontSize: 13, marginBottom: 12 },
-};
-
 export function LoginPage() {
   const { setAuth } = useAuth();
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -75,7 +10,6 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
   const keycloak = isKeycloakEnabled();
 
   async function handleSubmit(e: FormEvent) {
@@ -86,7 +20,7 @@ export function LoginPage() {
       const result = mode === 'login'
         ? await login(email, password)
         : await register(email, password);
-      setAuth(result.token, { userId: result.user.id, email: result.user.email });
+      setAuth(result.token, { userId: result.user.id, email: result.user.email, role: (result.user as { role?: 'admin' | 'user' }).role ?? 'user' });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setError(msg ?? 'Something went wrong. Please try again.');
@@ -96,51 +30,103 @@ export function LoginPage() {
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>Bitrograde Vaultworks</h1>
-        <p style={styles.subtitle}>Digital Asset Management</p>
+    <div className="min-h-screen bg-surface-0 flex items-center justify-center p-4">
+      {/* Background glow */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-accent/10 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-accent/5 rounded-full blur-3xl" />
+      </div>
 
-        {keycloak ? (
-          <>
-            <button style={styles.btn} onClick={() => redirectToKeycloak()}>
-              Continue with Keycloak
+      <div className="relative w-full max-w-sm">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-accent mb-4">
+            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-semibold text-content-primary">Bitrograde Vaultworks</h1>
+          <p className="text-sm text-content-muted mt-1">Digital Asset Management</p>
+        </div>
+
+        <div className="card p-6">
+          {keycloak && (
+            <>
+              <button
+                type="button"
+                onClick={() => redirectToKeycloak()}
+                className="btn-secondary w-full justify-center mb-4"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 1.5C6.201 1.5 1.5 6.201 1.5 12S6.201 22.5 12 22.5 22.5 17.799 22.5 12 17.799 1.5 12 1.5zm0 19.5C6.753 21 3 17.247 3 12S6.753 3 12 3s9 3.753 9 9-3.753 9-9 9z" />
+                </svg>
+                Continue with Keycloak
+              </button>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-xs text-content-muted">or</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+            </>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && (
+              <div className="px-3 py-2.5 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
+                {error}
+              </div>
+            )}
+
+            <div>
+              <label className="label">Email</label>
+              <input
+                className="input"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                placeholder="you@example.com"
+              />
+            </div>
+
+            <div>
+              <label className="label">Password</label>
+              <input
+                className="input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                placeholder={mode === 'register' ? 'At least 8 characters' : '••••••••'}
+              />
+            </div>
+
+            <button type="submit" disabled={loading} className="btn-primary w-full justify-center">
+              {loading ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Please wait…
+                </>
+              ) : mode === 'login' ? 'Sign in' : 'Create account'}
             </button>
-            <div style={styles.divider}>or sign in locally</div>
-          </>
-        ) : null}
+          </form>
 
-        <form onSubmit={handleSubmit}>
-          {error && <p style={styles.error}>{error}</p>}
-          <label style={styles.label}>Email</label>
-          <input
-            style={styles.input}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-          />
-          <label style={styles.label}>Password</label>
-          <input
-            style={styles.input}
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          />
-          <button style={styles.btn} type="submit" disabled={loading}>
-            {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
-          </button>
-        </form>
+          <p className="text-center text-sm text-content-muted mt-5">
+            {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+            <button
+              className="text-accent-light hover:underline"
+              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
+            >
+              {mode === 'login' ? 'Register' : 'Sign in'}
+            </button>
+          </p>
+        </div>
 
-        <p style={styles.toggle}>
-          {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-          <button style={styles.toggleLink} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
-            {mode === 'login' ? 'Register' : 'Sign in'}
-          </button>
+        <p className="text-center text-xs text-content-muted mt-4">
+          {mode === 'register' && 'The first account created becomes admin.'}
         </p>
       </div>
     </div>

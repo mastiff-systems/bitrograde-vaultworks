@@ -29,3 +29,11 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply): Pr
     reply.status(401).send({ error: 'Invalid or expired token' });
   }
 }
+
+export async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  await authenticate(req, reply);
+  if (reply.sent) return;
+  if (req.user?.role !== 'admin') {
+    reply.status(403).send({ error: 'Admin access required' });
+  }
+}

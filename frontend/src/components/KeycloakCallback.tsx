@@ -27,6 +27,7 @@ export function KeycloakCallback() {
           setAuth(token, {
             userId: payload.sub,
             email: payload.email ?? payload.preferred_username,
+            role: payload.role ?? 'user',
           });
           window.history.replaceState({}, '', '/');
         } catch {

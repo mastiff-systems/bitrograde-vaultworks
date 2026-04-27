@@ -1,11 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { AuthProvider } from './contexts/AuthContext.js';
 import { App } from './App.js';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('No #root element');
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </StrictMode>,
 );

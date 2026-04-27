@@ -1,8 +1,28 @@
 import axios from 'axios';
 
+const TOKEN_KEY = 'vaultworks_token';
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '',
 });
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// On 401, clear stored token and reload so the auth gate shows
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err?.response?.status === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      window.location.reload();
+    }
+    return Promise.reject(err);
+  },
+);
 
 export interface Asset {
   id: string;
@@ -36,12 +56,10 @@ export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
 
-// Triggers a browser download with Content-Disposition: attachment
 export function downloadUrl(id: string): string {
   return `/api/files/${id}/download`;
 }
 
-// Inline stream for previews (3D loaders, audio players) — no download prompt
 export function streamUrl(id: string): string {
   return `/api/files/${id}/stream`;
 }

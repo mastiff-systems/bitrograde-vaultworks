@@ -13,7 +13,8 @@ export const s3 = new S3Client({
     accessKeyId: process.env.S3_ACCESS_KEY!,
     secretAccessKey: process.env.S3_SECRET_KEY!,
   },
-  forcePathStyle: false,
+  // MinIO (local dev) requires path-style; DO Spaces uses virtual-hosted style
+  forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
 });
 
 const BUCKET = process.env.S3_BUCKET!;

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
-import { pool } from '../db/client.js';
-import { uploadToS3 } from '../storage/s3.js';
+import { pool } from '../db/client';
+import { uploadToS3 } from '../storage/s3';
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
 const MODEL_EXTS = new Set(['.glb', '.gltf', '.obj', '.fbx']);

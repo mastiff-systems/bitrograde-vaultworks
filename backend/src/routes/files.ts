@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { pool } from '../db/client.js';
-import { deleteFromS3, getSignedDownloadUrl } from '../storage/s3.js';
+import { pool } from '../db/client';
+import { deleteFromS3, getSignedDownloadUrl } from '../storage/s3';
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/files', async (_req, reply) => {

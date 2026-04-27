@@ -99,7 +99,7 @@ export function FileList({ assets, onDeleted }: Props) {
               <button style={btnClose} onClick={() => setPreviewing(null)}>✕</button>
             </div>
             {previewing.asset_type === '3d' ? (
-              <Preview3D assetId={previewing.id} />
+              <Preview3D assetId={previewing.id} filename={previewing.original_name} />
             ) : (
               <AudioPreview assetId={previewing.id} />
             )}

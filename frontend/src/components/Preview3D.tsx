@@ -3,13 +3,14 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { downloadUrl } from '../api/client.js';
+import { streamUrl } from '../api/client.js';
 
 interface Props {
   assetId: string;
+  filename: string;
 }
 
-export function Preview3D({ assetId }: Props) {
+export function Preview3D({ assetId, filename }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,8 +40,8 @@ export function Preview3D({ assetId }: Props) {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
-    const url = downloadUrl(assetId);
-    const isObj = url.toLowerCase().includes('.obj');
+    const url = streamUrl(assetId);
+    const isObj = filename.toLowerCase().endsWith('.obj');
 
     const onLoad = (obj: THREE.Object3D) => {
       const box = new THREE.Box3().setFromObject(obj);

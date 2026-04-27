@@ -4,7 +4,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
 } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'stream';
 
 export const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT,
@@ -38,10 +38,13 @@ export async function deleteFromS3(key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
 }
 
-export async function getSignedDownloadUrl(key: string): Promise<string> {
-  return getSignedUrl(
-    s3,
-    new GetObjectCommand({ Bucket: BUCKET, Key: key }),
-    { expiresIn: 3600 },
-  );
+export async function getS3ObjectStream(
+  key: string,
+): Promise<{ stream: Readable; contentType: string | undefined; contentLength: number | undefined }> {
+  const resp = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  return {
+    stream: resp.Body as Readable,
+    contentType: resp.ContentType,
+    contentLength: resp.ContentLength,
+  };
 }

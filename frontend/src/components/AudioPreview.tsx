@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { downloadUrl } from '../api/client.js';
+import { streamUrl } from '../api/client.js';
 
 interface Props {
   assetId: string;
@@ -27,7 +27,7 @@ export function AudioPreview({ assetId }: Props) {
     });
 
     wsRef.current = ws;
-    ws.load(downloadUrl(assetId));
+    ws.load(streamUrl(assetId));
     ws.on('ready', () => setLoading(false));
     ws.on('finish', () => setPlaying(false));
 

@@ -36,7 +36,12 @@ export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
 
+// Triggers a browser download with Content-Disposition: attachment
 export function downloadUrl(id: string): string {
-  const base = import.meta.env.VITE_API_URL ?? '';
-  return `${base}/api/files/${id}/download`;
+  return `/api/files/${id}/download`;
+}
+
+// Inline stream for previews (3D loaders, audio players) — no download prompt
+export function streamUrl(id: string): string {
+  return `/api/files/${id}/stream`;
 }

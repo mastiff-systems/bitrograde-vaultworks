@@ -24,6 +24,7 @@ model Asset {
   sizeBytes    BigInt?  @map("size_bytes")
   storageKey   String   @unique @map("storage_key")
   assetType    String?  @map("asset_type")
+  thumbnailKey String?  @map("thumbnail_key")
   uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
 
   @@map("assets")

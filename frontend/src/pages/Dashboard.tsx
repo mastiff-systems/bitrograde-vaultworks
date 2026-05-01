@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { listFiles, uploadFiles, deleteFile, downloadUrl } from '../api/client.js';
+import { listFiles, uploadFiles, deleteFile, downloadUrl, thumbnailUrl } from '../api/client.js';
 import type { Asset } from '../api/client.js';
 import { AudioPreview } from '../components/AudioPreview.js';
 import { Preview3D } from '../components/Preview3D.js';
@@ -48,7 +48,7 @@ function AssetIcon({ type }: { type: Asset['asset_type'] }) {
   return icons[type];
 }
 
-type PreviewState = { asset: Asset; type: 'audio' | '3d' } | null;
+type PreviewState = { asset: Asset; type: 'audio' | '3d' | 'image' } | null;
 
 export function Dashboard() {
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -97,7 +97,7 @@ export function Dashboard() {
   };
 
   const openPreview = (asset: Asset) => {
-    if (asset.asset_type === 'audio' || asset.asset_type === '3d') {
+    if (asset.asset_type === 'audio' || asset.asset_type === '3d' || asset.asset_type === 'image') {
       setPreview({ asset, type: asset.asset_type });
     }
   };
@@ -224,13 +224,21 @@ export function Dashboard() {
                   <td>
                     <button
                       onClick={() => openPreview(asset)}
-                      disabled={asset.asset_type !== 'audio' && asset.asset_type !== '3d'}
+                      disabled={asset.asset_type !== 'audio' && asset.asset_type !== '3d' && asset.asset_type !== 'image'}
                       className="flex items-center gap-3 text-left disabled:cursor-default group"
                     >
-                      <div className="w-8 h-8 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
-                        <AssetIcon type={asset.asset_type} />
+                      <div className="w-8 h-8 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {asset.asset_type === 'image' && asset.thumbnail_key ? (
+                          <img
+                            src={thumbnailUrl(asset.id)}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <AssetIcon type={asset.asset_type} />
+                        )}
                       </div>
-                      <span className={`font-medium text-content-primary truncate max-w-xs ${(asset.asset_type === 'audio' || asset.asset_type === '3d') ? 'group-hover:text-accent-light transition-colors' : ''}`}>
+                      <span className={`font-medium text-content-primary truncate max-w-xs ${(asset.asset_type === 'audio' || asset.asset_type === '3d' || asset.asset_type === 'image') ? 'group-hover:text-accent-light transition-colors' : ''}`}>
                         {asset.original_name}
                       </span>
                     </button>
@@ -291,6 +299,13 @@ export function Dashboard() {
             <div className="p-5">
               {preview.type === 'audio' && <AudioPreview assetId={preview.asset.id} />}
               {preview.type === '3d' && <Preview3D assetId={preview.asset.id} filename={preview.asset.original_name} />}
+              {preview.type === 'image' && (
+                <img
+                  src={thumbnailUrl(preview.asset.id)}
+                  alt={preview.asset.original_name}
+                  className="max-w-full max-h-[60vh] mx-auto rounded-lg object-contain"
+                />
+              )}
             </div>
           </div>
         </div>

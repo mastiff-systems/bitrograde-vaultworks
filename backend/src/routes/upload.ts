@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3 } from '../storage/s3.js';
 
@@ -17,6 +18,17 @@ function detectAssetType(filename: string, mime: string): string {
   if (mime.startsWith('model/') || MODEL_EXTS.has(ext)) return '3d';
   if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
   return 'other';
+}
+
+async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
+  try {
+    return await sharp(buffer)
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+  } catch {
+    return null;
+  }
 }
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {
@@ -47,6 +59,15 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
 
       await uploadToS3(storageKey, buffer, mime);
 
+      let thumbnailKey: string | undefined;
+      if (assetType === 'image') {
+        const thumbBuffer = await generateThumbnail(buffer);
+        if (thumbBuffer) {
+          thumbnailKey = `assets/${id}/thumbnail.webp`;
+          await uploadToS3(thumbnailKey, thumbBuffer, 'image/webp');
+        }
+      }
+
       const asset = await prisma.asset.create({
         data: {
           id,
@@ -55,6 +76,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           sizeBytes: BigInt(buffer.length),
           storageKey,
           assetType,
+          thumbnailKey,
         },
         select: {
           id: true,
@@ -62,6 +84,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           mimeType: true,
           sizeBytes: true,
           assetType: true,
+          thumbnailKey: true,
           uploadedAt: true,
         },
       });
@@ -72,6 +95,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         mime_type: asset.mimeType,
         size_bytes: asset.sizeBytes !== null ? Number(asset.sizeBytes) : null,
         asset_type: asset.assetType,
+        thumbnail_key: asset.thumbnailKey,
         uploaded_at: asset.uploadedAt,
       });
     }

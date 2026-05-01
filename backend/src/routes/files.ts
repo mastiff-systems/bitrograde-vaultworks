@@ -13,6 +13,7 @@ type AssetSelect = {
   mimeType: string | null;
   sizeBytes: bigint | null;
   assetType: string | null;
+  thumbnailKey: string | null;
   uploadedAt: Date;
 };
 
@@ -23,6 +24,7 @@ function formatAsset(a: AssetSelect) {
     mime_type: a.mimeType,
     size_bytes: a.sizeBytes !== null ? Number(a.sizeBytes) : null,
     asset_type: a.assetType,
+    thumbnail_key: a.thumbnailKey,
     uploaded_at: a.uploadedAt,
   };
 }
@@ -33,6 +35,7 @@ const assetSelect = {
   mimeType: true,
   sizeBytes: true,
   assetType: true,
+  thumbnailKey: true,
   uploadedAt: true,
 } as const;
 
@@ -96,6 +99,25 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(stream);
   });
 
+  // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
+  app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
+    const asset = await prisma.asset.findUnique({
+      where: { id: params.id },
+      select: { thumbnailKey: true },
+    });
+    if (!asset || !asset.thumbnailKey) return reply.status(404).send({ error: 'No thumbnail available' });
+
+    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.thumbnailKey);
+
+    reply.header('Content-Type', contentType ?? 'image/webp');
+    if (contentLength) reply.header('Content-Length', contentLength);
+
+    return reply.send(stream);
+  });
+
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -103,9 +125,10 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     try {
       const asset = await prisma.asset.delete({
         where: { id: params.id },
-        select: { storageKey: true },
+        select: { storageKey: true, thumbnailKey: true },
       });
       await deleteFromS3(asset.storageKey);
+      if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         return reply.status(404).send({ error: 'Not found' });

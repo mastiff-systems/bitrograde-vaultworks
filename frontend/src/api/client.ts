@@ -30,6 +30,7 @@ export interface Asset {
   mime_type: string | null;
   size_bytes: number;
   asset_type: '3d' | 'audio' | 'image' | 'other';
+  thumbnail_key: string | null;
   uploaded_at: string;
 }
 
@@ -62,4 +63,8 @@ export function downloadUrl(id: string): string {
 
 export function streamUrl(id: string): string {
   return `/api/files/${id}/stream`;
+}
+
+export function thumbnailUrl(id: string): string {
+  return `/api/files/${id}/thumbnail`;
 }

@@ -1,6 +1,10 @@
 import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { pool } from '../db/client';
 import { deleteFromS3, getS3ObjectStream } from '../storage/s3';
+import { parseParams } from '../lib/validate';
+
+const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/files', async (_req, reply) => {
@@ -11,9 +15,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
     const { rows } = await pool.query(
       'SELECT id, original_name, mime_type, size_bytes, asset_type, uploaded_at FROM assets WHERE id = $1',
-      [req.params.id],
+      [params.id],
     );
     if (!rows[0]) return reply.status(404).send({ error: 'Not found' });
     return reply.send(rows[0]);
@@ -21,9 +28,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
   app.get<{ Params: { id: string } }>('/api/files/:id/download', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
     const { rows } = await pool.query(
       'SELECT storage_key, original_name, mime_type FROM assets WHERE id = $1',
-      [req.params.id],
+      [params.id],
     );
     if (!rows[0]) return reply.status(404).send({ error: 'Not found' });
 
@@ -41,9 +51,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Inline stream for previews — no Content-Disposition attachment
   app.get<{ Params: { id: string } }>('/api/files/:id/stream', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
     const { rows } = await pool.query(
       'SELECT storage_key, mime_type FROM assets WHERE id = $1',
-      [req.params.id],
+      [params.id],
     );
     if (!rows[0]) return reply.status(404).send({ error: 'Not found' });
 
@@ -56,9 +69,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
     const { rows } = await pool.query(
       'DELETE FROM assets WHERE id = $1 RETURNING storage_key',
-      [req.params.id],
+      [params.id],
     );
     if (!rows[0]) return reply.status(404).send({ error: 'Not found' });
     await deleteFromS3(rows[0].storage_key);

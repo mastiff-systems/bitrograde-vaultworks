@@ -1,25 +1,30 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db/client.js';
 import { signToken } from '../auth/tokens.js';
 import { authenticate } from '../auth/middleware.js';
+import { parseBody } from '../lib/validate.js';
+
+const RegisterSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+const LoginSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   if ((process.env.AUTH_PROVIDER ?? 'local') !== 'local') return;
 
   app.post('/api/auth/register', async (req, reply) => {
-    const body = req.body as Record<string, unknown>;
-    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
-    const password = typeof body?.password === 'string' ? body.password : '';
+    const body = parseBody(RegisterSchema, req.body, reply);
+    if (!body) return;
 
-    if (!email || !password) {
-      return reply.status(400).send({ error: 'email and password are required' });
-    }
-    if (password.length < 8) {
-      return reply.status(400).send({ error: 'password must be at least 8 characters' });
-    }
-
-    const hash = await bcrypt.hash(password, 12);
+    const email = body.email.trim().toLowerCase();
+    const hash = await bcrypt.hash(body.password, 12);
 
     // First user becomes admin
     const { rows: existing } = await pool.query<{ count: string }>('SELECT COUNT(*) as count FROM users');
@@ -41,13 +46,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/auth/login', async (req, reply) => {
-    const body = req.body as Record<string, unknown>;
-    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
-    const password = typeof body?.password === 'string' ? body.password : '';
+    const body = parseBody(LoginSchema, req.body, reply);
+    if (!body) return;
 
-    if (!email || !password) {
-      return reply.status(400).send({ error: 'email and password are required' });
-    }
+    const email = body.email.trim().toLowerCase();
 
     const { rows } = await pool.query<{ id: string; email: string; password_hash: string; role: string }>(
       'SELECT id, email, password_hash, role FROM users WHERE email = $1',
@@ -56,8 +58,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     const dummyHash = '$2a$12$invalidhashpadding.............';
     const valid = rows[0]
-      ? await bcrypt.compare(password, rows[0].password_hash)
-      : await bcrypt.compare(password, dummyHash).then(() => false);
+      ? await bcrypt.compare(body.password, rows[0].password_hash)
+      : await bcrypt.compare(body.password, dummyHash).then(() => false);
 
     if (!rows[0] || !valid) {
       return reply.status(401).send({ error: 'Invalid email or password' });

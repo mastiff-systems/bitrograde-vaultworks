@@ -1,4 +1,4 @@
-import { pool } from './client.js';
+import { prisma } from './client.js';
 
 export interface S3Config {
   endpoint: string;
@@ -23,9 +23,7 @@ export function invalidateSettingsCache(): void {
 export async function getAllSettings(): Promise<Record<string, string>> {
   if (cache && Date.now() - cacheAt < CACHE_TTL) return cache;
 
-  const { rows } = await pool.query<{ key: string; value: string }>(
-    'SELECT key, value FROM settings',
-  );
+  const rows = await prisma.setting.findMany({ select: { key: true, value: true } });
   cache = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   cacheAt = Date.now();
   return cache;
@@ -54,14 +52,15 @@ export async function upsertSettings(updates: Record<string, string>): Promise<v
   const entries = Object.entries(updates);
   if (!entries.length) return;
 
-  for (const [key, value] of entries) {
-    await pool.query(
-      `INSERT INTO settings (key, value, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-      [key, value],
-    );
-  }
+  await prisma.$transaction(
+    entries.map(([key, value]) =>
+      prisma.setting.upsert({
+        where: { key },
+        create: { key, value },
+        update: { value, updatedAt: new Date() },
+      }),
+    ),
+  );
   invalidateSettingsCache();
 }
 

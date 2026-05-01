@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
-import { runMigrations } from './db/client.js';
+import { prisma } from './db/client.js';
 import { uploadRoutes } from './routes/upload.js';
 import { filesRoutes } from './routes/files.js';
 import { authRoutes } from './routes/auth.js';
@@ -53,7 +53,7 @@ async function main() {
     app.log.warn('Frontend dist not found — run "npm run build:frontend" to enable UI');
   }
 
-  await runMigrations();
+  await prisma.$connect();
   await app.listen({ port: Number(process.env.PORT ?? 3001), host: '0.0.0.0' });
 }
 

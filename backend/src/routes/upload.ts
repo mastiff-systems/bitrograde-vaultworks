@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
-import { pool } from '../db/client';
-import { uploadToS3 } from '../storage/s3';
+import { prisma } from '../db/client.js';
+import { uploadToS3 } from '../storage/s3.js';
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
 const MODEL_EXTS = new Set(['.glb', '.gltf', '.obj', '.fbx']);
@@ -47,13 +47,33 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
 
       await uploadToS3(storageKey, buffer, mime);
 
-      const { rows } = await pool.query(
-        `INSERT INTO assets (id, original_name, mime_type, size_bytes, storage_key, asset_type)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, original_name, mime_type, size_bytes, asset_type, uploaded_at`,
-        [id, part.filename, mime, buffer.length, storageKey, assetType],
-      );
-      uploaded.push(rows[0]);
+      const asset = await prisma.asset.create({
+        data: {
+          id,
+          originalName: part.filename,
+          mimeType: mime,
+          sizeBytes: BigInt(buffer.length),
+          storageKey,
+          assetType,
+        },
+        select: {
+          id: true,
+          originalName: true,
+          mimeType: true,
+          sizeBytes: true,
+          assetType: true,
+          uploadedAt: true,
+        },
+      });
+
+      uploaded.push({
+        id: asset.id,
+        original_name: asset.originalName,
+        mime_type: asset.mimeType,
+        size_bytes: asset.sizeBytes !== null ? Number(asset.sizeBytes) : null,
+        asset_type: asset.assetType,
+        uploaded_at: asset.uploadedAt,
+      });
     }
 
     if (uploaded.length === 0) {

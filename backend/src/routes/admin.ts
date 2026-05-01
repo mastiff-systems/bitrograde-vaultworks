@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { pool } from '../db/client.js';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../db/client.js';
 import { getAllSettings, upsertSettings } from '../db/settings.js';
 import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
@@ -27,20 +28,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // GET /api/admin/stats
   app.get('/api/admin/stats', opts, async (_req, reply) => {
-    const [users, assets] = await Promise.all([
-      pool.query<{ count: string; admin_count: string }>(
-        `SELECT COUNT(*) as count, COUNT(*) FILTER (WHERE role='admin') as admin_count FROM users`,
-      ),
-      pool.query<{ count: string; total_size: string }>(
-        `SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total_size FROM assets`,
-      ),
+    const [userCount, adminCount, assetCount, assetSum] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: 'admin' } }),
+      prisma.asset.count(),
+      prisma.asset.aggregate({ _sum: { sizeBytes: true } }),
     ]);
 
     return reply.send({
-      users: parseInt(users.rows[0].count, 10),
-      admins: parseInt(users.rows[0].admin_count, 10),
-      assets: parseInt(assets.rows[0].count, 10),
-      totalSizeBytes: parseInt(assets.rows[0].total_size, 10),
+      users: userCount,
+      admins: adminCount,
+      assets: assetCount,
+      totalSizeBytes: Number(assetSum._sum.sizeBytes ?? 0n),
     });
   });
 
@@ -73,10 +72,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // GET /api/admin/users
   app.get('/api/admin/users', opts, async (_req, reply) => {
-    const { rows } = await pool.query<{ id: string; email: string; role: string; created_at: string }>(
-      'SELECT id, email, role, created_at FROM users ORDER BY created_at ASC',
-    );
-    return reply.send(rows);
+    const users = await prisma.user.findMany({
+      select: { id: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return reply.send(users.map((u) => ({ id: u.id, email: u.email, role: u.role, created_at: u.createdAt })));
   });
 
   // PATCH /api/admin/users/:id/role
@@ -92,11 +92,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Cannot demote your own account' });
     }
 
-    const { rows } = await pool.query<{ id: string; email: string; role: string }>(
-      'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, email, role',
-      [body.role, params.id],
-    );
-    if (!rows[0]) return reply.status(404).send({ error: 'User not found' });
-    return reply.send(rows[0]);
+    try {
+      const user = await prisma.user.update({
+        where: { id: params.id },
+        data: { role: body.role },
+        select: { id: true, email: true, role: true },
+      });
+      return reply.send(user);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        return reply.status(404).send({ error: 'User not found' });
+      }
+      throw err;
+    }
   });
 }

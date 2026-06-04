@@ -40,6 +40,18 @@ services:
         exit 0;
       "
 
+  postgres-test:
+    image: postgres:16-alpine
+    profiles: [test]
+    environment:
+      POSTGRES_DB: vaultworks_test
+      POSTGRES_USER: vaultworks
+      POSTGRES_PASSWORD: vaultworks
+    ports:
+      - '5433:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+
 volumes:
   pg_data:
   minio_data:

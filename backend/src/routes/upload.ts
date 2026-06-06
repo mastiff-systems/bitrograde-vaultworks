@@ -7,7 +7,11 @@ import { uploadToS3 } from '../storage/s3.js';
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
 const MODEL_EXTS = new Set(['.glb', '.gltf', '.obj', '.fbx']);
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.tga', '.bmp', '.tiff', '.exr']);
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']);
+const FONT_EXTS = new Set(['.ttf', '.otf', '.woff', '.woff2', '.eot']);
+const DOC_EXTS = new Set(['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf', '.odt']);
+const SCRIPT_EXTS = new Set(['.js', '.ts', '.lua', '.py', '.gd', '.cs', '.cpp', '.c', '.h', '.hlsl', '.glsl', '.wgsl', '.shader']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.tga', '.bmp', '.tiff', '.exr', '.hdr', '.svg']);
 
 const FilenameSchema = z.string().min(1, 'Filename is required').max(255, 'Filename too long');
 const MimeSchema = z.string().min(1).max(127);
@@ -15,8 +19,12 @@ const MimeSchema = z.string().min(1).max(127);
 function detectAssetType(filename: string, mime: string): string {
   const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
   if (mime.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio';
-  if (mime.startsWith('model/') || MODEL_EXTS.has(ext)) return '3d';
-  if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
+  if (mime.startsWith('video/') || VIDEO_EXTS.has(ext)) return 'video';
+  if (mime.startsWith('model/') || MODEL_EXTS.has(ext)) return '3d_model';
+  if (mime.startsWith('font/') || FONT_EXTS.has(ext)) return 'font';
+  if (mime === 'application/pdf' || DOC_EXTS.has(ext)) return 'document';
+  if (SCRIPT_EXTS.has(ext)) return 'script';
+  if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'texture';
   return 'other';
 }
 
@@ -60,7 +68,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       await uploadToS3(storageKey, buffer, mime);
 
       let thumbnailKey: string | undefined;
-      if (assetType === 'image') {
+      if (assetType === 'texture' || assetType === 'sprite') {
         const thumbBuffer = await generateThumbnail(buffer);
         if (thumbBuffer) {
           thumbnailKey = `assets/${id}/thumbnail.webp`;

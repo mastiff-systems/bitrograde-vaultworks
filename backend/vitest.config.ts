@@ -6,6 +6,7 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
     fileParallelism: false,
+    pool: 'forks',
     testTimeout: 30000,
     env: {
       DATABASE_URL: 'postgresql://vaultworks:vaultworks@localhost:5433/vaultworks_test',

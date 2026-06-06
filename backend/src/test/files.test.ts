@@ -47,7 +47,7 @@ describe('GET /api/files', () => {
     await prisma.asset.createMany({
       data: [
         { originalName: 'first.txt', storageKey: 'assets/1/first.txt', assetType: 'other' },
-        { originalName: 'second.png', storageKey: 'assets/2/second.png', assetType: 'image' },
+        { originalName: 'second.png', storageKey: 'assets/2/second.png', assetType: 'texture' },
       ],
     });
 
@@ -74,7 +74,7 @@ describe('GET /api/files/:id', () => {
         mimeType: 'image/png',
         sizeBytes: 1024n,
         storageKey: 'assets/test/test.png',
-        assetType: 'image',
+        assetType: 'texture',
       },
     });
 
@@ -85,7 +85,7 @@ describe('GET /api/files/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(asset.id);
     expect(res.body.original_name).toBe('test.png');
-    expect(res.body.asset_type).toBe('image');
+    expect(res.body.asset_type).toBe('texture');
   });
 
   it('returns 404 for unknown id', async () => {
@@ -132,7 +132,7 @@ describe('DELETE /api/files/:id', () => {
         originalName: 'img.png',
         storageKey: 'assets/img/img.png',
         thumbnailKey: 'assets/img/thumbnail.webp',
-        assetType: 'image',
+        assetType: 'texture',
       },
     });
 

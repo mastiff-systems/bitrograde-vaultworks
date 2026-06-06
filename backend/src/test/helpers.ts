@@ -9,7 +9,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 }
 
 export async function cleanDb(): Promise<void> {
+  await prisma.assetTag.deleteMany();
   await prisma.asset.deleteMany();
+  await prisma.tag.deleteMany();
   await prisma.user.deleteMany();
   await prisma.setting.deleteMany();
 }

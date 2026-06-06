@@ -7,6 +7,15 @@ import { parseParams } from '../lib/validate.js';
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
 
+const FilesQuerySchema = z.object({
+  q: z.string().optional(),
+  tags: z.string().optional(),
+  assetType: z.string().optional(),
+  mimeType: z.string().optional(),
+});
+
+type TagInfo = { id: string; name: string };
+
 type AssetSelect = {
   id: string;
   originalName: string;
@@ -14,7 +23,9 @@ type AssetSelect = {
   sizeBytes: bigint | null;
   assetType: string | null;
   thumbnailKey: string | null;
+  description: string | null;
   uploadedAt: Date;
+  tags: { tag: TagInfo }[];
 };
 
 function formatAsset(a: AssetSelect) {
@@ -25,7 +36,9 @@ function formatAsset(a: AssetSelect) {
     size_bytes: a.sizeBytes !== null ? Number(a.sizeBytes) : null,
     asset_type: a.assetType,
     thumbnail_key: a.thumbnailKey,
+    description: a.description,
     uploaded_at: a.uploadedAt,
+    tags: a.tags.map((at) => at.tag),
   };
 }
 
@@ -36,12 +49,51 @@ const assetSelect = {
   sizeBytes: true,
   assetType: true,
   thumbnailKey: true,
+  description: true,
   uploadedAt: true,
+  tags: { select: { tag: { select: { id: true, name: true } } } },
 } as const;
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/files', async (_req, reply) => {
+  app.get('/api/files', async (req, reply) => {
+    const query = FilesQuerySchema.safeParse(req.query);
+    const params = query.success ? query.data : {};
+
+    const conditions: Prisma.AssetWhereInput[] = [];
+
+    if (params.q) {
+      const q = params.q.trim();
+      conditions.push({
+        OR: [
+          { originalName: { contains: q, mode: 'insensitive' } },
+          { description: { contains: q, mode: 'insensitive' } },
+          { tags: { some: { tag: { name: { contains: q, mode: 'insensitive' } } } } },
+        ],
+      });
+    }
+
+    if (params.assetType) {
+      conditions.push({ assetType: params.assetType });
+    }
+
+    if (params.mimeType) {
+      conditions.push({ mimeType: params.mimeType });
+    }
+
+    if (params.tags) {
+      const tagNames = params.tags
+        .split(',')
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean);
+      for (const name of tagNames) {
+        conditions.push({ tags: { some: { tag: { name } } } });
+      }
+    }
+
+    const where: Prisma.AssetWhereInput = conditions.length > 0 ? { AND: conditions } : {};
+
     const assets = await prisma.asset.findMany({
+      where,
       select: assetSelect,
       orderBy: { uploadedAt: 'desc' },
     });

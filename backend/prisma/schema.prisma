@@ -25,9 +25,30 @@ model Asset {
   storageKey   String   @unique @map("storage_key")
   assetType    String?  @map("asset_type")
   thumbnailKey String?  @map("thumbnail_key")
+  description  String?  @map("description")
   uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  tags         AssetTag[]
 
   @@map("assets")
+}
+
+model Tag {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String     @unique
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  assets    AssetTag[]
+
+  @@map("tags")
+}
+
+model AssetTag {
+  assetId String @map("asset_id") @db.Uuid
+  tagId   String @map("tag_id") @db.Uuid
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, tagId])
+  @@map("asset_tags")
 }
 
 model Setting {

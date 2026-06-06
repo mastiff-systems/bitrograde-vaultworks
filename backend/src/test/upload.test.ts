@@ -14,9 +14,9 @@ vi.mock('../storage/s3.js', () => ({
   }),
 }));
 
-// Minimal valid 1×1 PNG for thumbnail generation testing
+// Minimal valid 1×1 RGB PNG for thumbnail generation testing
 const TINY_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=',
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
   'base64',
 );
 
@@ -52,7 +52,7 @@ describe('POST /api/upload', () => {
     expect(res.status).toBe(201);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].original_name).toBe('hello.txt');
-    expect(res.body[0].asset_type).toBe('other');
+    expect(res.body[0].asset_type).toBe('document');
     expect(res.body[0].id).toBeTruthy();
   });
 
@@ -93,7 +93,7 @@ describe('POST /api/upload', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body[0].asset_type).toBe('3d');
+    expect(res.body[0].asset_type).toBe('3d_model');
   });
 
   it('generates thumbnail for image uploads', async () => {
@@ -106,7 +106,7 @@ describe('POST /api/upload', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body[0].asset_type).toBe('image');
+    expect(res.body[0].asset_type).toBe('texture');
     expect(res.body[0].thumbnail_key).toBeTruthy();
   });
 

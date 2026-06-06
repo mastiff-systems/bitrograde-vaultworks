@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { uploadRoutes } from './routes/upload.js';
 import { filesRoutes } from './routes/files.js';
+import { tagsRoutes } from './routes/tags.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { authenticate } from './auth/middleware.js';
@@ -30,6 +31,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(adminRoutes);
   await app.register(uploadRoutes);
   await app.register(filesRoutes);
+  await app.register(tagsRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

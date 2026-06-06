@@ -12,6 +12,7 @@ const FilesQuerySchema = z.object({
   tags: z.string().optional(),
   assetType: z.string().optional(),
   mimeType: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 type TagInfo = { id: string; name: string };
@@ -59,35 +60,91 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const query = FilesQuerySchema.safeParse(req.query);
     const params = query.success ? query.data : {};
 
-    const conditions: Prisma.AssetWhereInput[] = [];
+    const limit = params.limit ?? 50;
+    const tagNames = params.tags
+      ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+      : [];
 
     if (params.q) {
       const q = params.q.trim();
-      conditions.push({
-        OR: [
-          { originalName: { contains: q, mode: 'insensitive' } },
-          { description: { contains: q, mode: 'insensitive' } },
-          { tags: { some: { tag: { name: { contains: q, mode: 'insensitive' } } } } },
-        ],
+      if (!q) return reply.send([]);
+
+      const like = `%${q}%`;
+
+      // Build optional filter fragments for raw SQL
+      let extraFilters: Prisma.Sql = Prisma.empty;
+      if (params.assetType) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.asset_type = ${params.assetType}`;
+      }
+      if (params.mimeType) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.mime_type = ${params.mimeType}`;
+      }
+      if (tagNames.length > 0) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
+          SELECT jat2.asset_id FROM asset_tags jat2
+          JOIN tags t2 ON t2.id = jat2.tag_id
+          WHERE t2.name = ANY(${tagNames})
+          GROUP BY jat2.asset_id
+          HAVING COUNT(DISTINCT t2.name) = ${tagNames.length}
+        )`;
+      }
+
+      // Phase 1: ranked ID list via pg_trgm similarity + ILIKE fallback
+      // Ranking: name match (1) > tag match (2) > description match (3)
+      const rankedIds = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT a.id
+        FROM assets a
+        LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+        LEFT JOIN tags t ON t.id = jat.tag_id
+        WHERE (
+          similarity(a.original_name, ${q}) > 0.3
+          OR a.original_name ILIKE ${like}
+          OR a.description ILIKE ${like}
+          OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+        )
+        ${extraFilters}
+        GROUP BY a.id, a.original_name, a.description
+        ORDER BY
+          MIN(CASE
+            WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
+            WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
+            WHEN a.description ILIKE ${like} THEN 3
+            ELSE 4
+          END) ASC,
+          similarity(a.original_name, ${q}) DESC
+        LIMIT ${limit}
+      `;
+
+      if (rankedIds.length === 0) return reply.send([]);
+
+      const ids = rankedIds.map((r) => r.id);
+
+      // Phase 2: fetch full asset data (including all tags) for matched IDs
+      const assets = await prisma.asset.findMany({
+        where: { id: { in: ids } },
+        select: assetSelect,
       });
+
+      // Restore ranked order from phase 1
+      const orderMap = new Map(ids.map((id, i) => [id, i]));
+      const sorted = assets.sort(
+        (a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999),
+      );
+
+      return reply.send(sorted.map(formatAsset));
     }
+
+    // No query: standard filtered list
+    const conditions: Prisma.AssetWhereInput[] = [];
 
     if (params.assetType) {
       conditions.push({ assetType: params.assetType });
     }
-
     if (params.mimeType) {
       conditions.push({ mimeType: params.mimeType });
     }
-
-    if (params.tags) {
-      const tagNames = params.tags
-        .split(',')
-        .map((t) => t.trim().toLowerCase())
-        .filter(Boolean);
-      for (const name of tagNames) {
-        conditions.push({ tags: { some: { tag: { name } } } });
-      }
+    for (const name of tagNames) {
+      conditions.push({ tags: { some: { tag: { name } } } });
     }
 
     const where: Prisma.AssetWhereInput = conditions.length > 0 ? { AND: conditions } : {};
@@ -96,6 +153,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       where,
       select: assetSelect,
       orderBy: { uploadedAt: 'desc' },
+      take: limit,
     });
     return reply.send(assets.map(formatAsset));
   });

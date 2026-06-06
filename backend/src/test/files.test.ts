@@ -105,6 +105,156 @@ describe('GET /api/files/:id', () => {
   });
 });
 
+describe('GET /api/files?q= (fuzzy search)', () => {
+  beforeEach(async () => {
+    const dragon = await prisma.asset.create({
+      data: {
+        originalName: 'dragon_sprite.png',
+        storageKey: 'assets/s/dragon_sprite.png',
+        assetType: 'sprite',
+        mimeType: 'image/png',
+      },
+    });
+    await prisma.asset.create({
+      data: {
+        originalName: 'background_tile.png',
+        storageKey: 'assets/s/background_tile.png',
+        assetType: 'texture',
+        mimeType: 'image/png',
+        description: 'dungeon floor tile',
+      },
+    });
+    const tagged = await prisma.asset.create({
+      data: {
+        originalName: 'hero_idle.png',
+        storageKey: 'assets/s/hero_idle.png',
+        assetType: 'sprite',
+        mimeType: 'image/png',
+      },
+    });
+    const unrelated = await prisma.asset.create({
+      data: {
+        originalName: 'audio_bgm.mp3',
+        storageKey: 'assets/s/audio_bgm.mp3',
+        assetType: 'audio',
+        mimeType: 'audio/mpeg',
+      },
+    });
+
+    // Tag dragon with 'fire', hero_idle with 'epic'
+    const tagFire = await prisma.tag.create({ data: { name: 'fire' } });
+    const tagEpic = await prisma.tag.create({ data: { name: 'epic' } });
+    await prisma.assetTag.create({ data: { assetId: dragon.id, tagId: tagFire.id } });
+    await prisma.assetTag.create({ data: { assetId: tagged.id, tagId: tagEpic.id } });
+  });
+
+  it('exact match on name returns the asset', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=dragon_sprite.png')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+  });
+
+  it('partial match (substring) finds the asset', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=dragon')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+  });
+
+  it('fuzzy match with typo finds the asset via trigram similarity', async () => {
+    // "drago" is sufficiently similar to "dragon_sprite" (trigram similarity > 0.3)
+    const res = await request(app.server)
+      .get('/api/files?q=drago')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+  });
+
+  it('matches via tag name', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=fire')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+  });
+
+  it('matches via description', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=dungeon')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].original_name).toBe('background_tile.png');
+  });
+
+  it('returns empty array when nothing matches', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=xyzzy_no_match_here')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('combined with assetType filter narrows results', async () => {
+    // 'hero' matches hero_idle.png (sprite) and could match others; filter to texture
+    const res = await request(app.server)
+      .get('/api/files?q=background&assetType=texture')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.every((a: { asset_type: string }) => a.asset_type === 'texture')).toBe(true);
+    expect(res.body.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
+  });
+
+  it('combined with tags filter requires both match and tag', async () => {
+    // 'hero' matches hero_idle.png (name contains hero, has 'epic' tag); dragon_sprite.png has no 'epic' tag
+    const res = await request(app.server)
+      .get('/api/files?q=hero&tags=epic')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].original_name).toBe('hero_idle.png');
+  });
+
+  it('result includes all asset tags regardless of which tag matched', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=fire')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].tags).toBeDefined();
+    expect(Array.isArray(res.body[0].tags)).toBe(true);
+    expect(res.body[0].tags[0].name).toBe('fire');
+  });
+
+  it('limit param caps the number of results', async () => {
+    // All 4 assets match 'png' via name ILIKE; limit=2 should return only 2
+    const res = await request(app.server)
+      .get('/api/files?q=png&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+  });
+
+  it('returns 401 without auth', async () => {
+    const res = await request(app.server).get('/api/files?q=dragon');
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('DELETE /api/files/:id', () => {
   it('deletes asset and returns 204', async () => {
     const asset = await prisma.asset.create({

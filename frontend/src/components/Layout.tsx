@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext.js';
+import { NotificationBell } from './NotificationBell.js';
 
 type Page = 'dashboard' | 'admin-settings' | 'admin-users';
 
@@ -8,6 +9,7 @@ interface Props {
   onNavigate: (p: Page) => void;
   children: ReactNode;
 }
+
 
 const navItems: { id: Page; label: string; icon: string; adminOnly?: boolean }[] = [
   { id: 'dashboard', label: 'Assets', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
@@ -80,6 +82,7 @@ export function Layout({ page, onNavigate, children }: Props) {
               <div className="text-xs font-medium text-content-primary truncate">{user?.email}</div>
               <div className="text-[10px] text-content-muted capitalize">{user?.role}</div>
             </div>
+            <NotificationBell onNavigateDashboard={() => onNavigate('dashboard')} />
             <button
               onClick={logout}
               title="Sign out"

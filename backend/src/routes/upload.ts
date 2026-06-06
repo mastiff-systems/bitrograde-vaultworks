@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3 } from '../storage/s3.js';
+import { createNotification } from '../notifications/service.js';
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
 const MODEL_EXTS = new Set(['.glb', '.gltf', '.obj', '.fbx']);
@@ -106,6 +107,39 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         thumbnail_key: asset.thumbnailKey,
         uploaded_at: asset.uploadedAt,
       });
+
+      // Fire-and-forget notifications — don't block the upload response
+      void (async () => {
+        try {
+          // Notify uploader their upload finished
+          await createNotification({
+            userId: req.user.userId,
+            type: 'upload_complete',
+            title: 'Upload complete',
+            body: `${part.filename} is ready.`,
+            resourceId: asset.id,
+          });
+
+          // Notify all other users about the new asset
+          const others = await prisma.user.findMany({
+            where: { id: { not: req.user.userId } },
+            select: { id: true },
+          });
+          await Promise.all(
+            others.map((u) =>
+              createNotification({
+                userId: u.id,
+                type: 'new_asset',
+                title: 'New asset uploaded',
+                body: `${part.filename} was added to the library.`,
+                resourceId: asset.id,
+              }),
+            ),
+          );
+        } catch {
+          // Notification failure should not affect upload response
+        }
+      })();
     }
 
     if (uploaded.length === 0) {

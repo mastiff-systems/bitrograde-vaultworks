@@ -8,28 +8,48 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  role         String   @default("user")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String         @unique
+  passwordHash  String         @map("password_hash")
+  role          String         @default("user")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  notifications Notification[]
 
   @@map("users")
 }
 
 model Asset {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  originalName String   @map("original_name")
-  mimeType     String?  @map("mime_type")
-  sizeBytes    BigInt?  @map("size_bytes")
-  storageKey   String   @unique @map("storage_key")
-  assetType    String?  @map("asset_type")
-  thumbnailKey String?  @map("thumbnail_key")
-  description  String?  @map("description")
-  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  tags         AssetTag[]
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  originalName  String         @map("original_name")
+  mimeType      String?        @map("mime_type")
+  sizeBytes     BigInt?        @map("size_bytes")
+  storageKey    String         @unique @map("storage_key")
+  assetType     String?        @map("asset_type")
+  thumbnailKey  String?        @map("thumbnail_key")
+  description   String?        @map("description")
+  uploadedAt    DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  tags          AssetTag[]
+  notifications Notification[]
 
   @@map("assets")
+}
+
+model Notification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  type       String
+  title      String
+  body       String
+  resourceId String?  @map("resource_id") @db.Uuid
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource Asset? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@map("notifications")
 }
 
 model Tag {

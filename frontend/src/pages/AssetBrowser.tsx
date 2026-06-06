@@ -6,9 +6,13 @@ import {
   uploadFiles,
   deleteFile,
   updateAssetTags,
+  listVersions,
+  uploadVersion,
   downloadUrl,
   thumbnailUrl,
+  versionDownloadUrl,
   type Asset,
+  type AssetVersion,
   type Tag,
 } from '../api/client.js';
 import { AudioPreview } from '../components/AudioPreview.js';
@@ -233,6 +237,173 @@ function AssetCard({
           <span>{formatDate(asset.uploaded_at)}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- Version History ---
+
+function VersionHistory({ assetId }: { assetId: string }) {
+  const [versions, setVersions] = useState<AssetVersion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [message, setMessage] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    listVersions(assetId)
+      .then(setVersions)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [assetId]);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const v = await uploadVersion(assetId, file, message);
+      setVersions((prev) => {
+        const withoutOld = prev.filter((p) => p.version_number !== 1);
+        return [...withoutOld, ...(prev.length === 0 ? [{ ...v, version_number: 1 } as AssetVersion] : []), v]
+          .sort((a, b) => a.version_number - b.version_number);
+      });
+      // Reload to get accurate snapshot
+      const updated = await listVersions(assetId);
+      setVersions(updated);
+      setMessage('');
+      setShowUpload(false);
+    } catch {
+      // ignore
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-4">
+        <div className="w-4 h-4 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      {versions.length === 0 ? (
+        <div className="card p-4 bg-surface-1 text-center">
+          <p className="text-xs text-content-muted">No versions saved yet.</p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {[...versions].reverse().map((v, idx) => (
+            <div
+              key={v.id}
+              className={`flex items-start gap-3 p-3 rounded-lg border ${idx === 0 ? 'border-accent/30 bg-accent/5' : 'border-border bg-surface-1'}`}
+            >
+              <div className="flex-shrink-0 mt-0.5">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${idx === 0 ? 'bg-accent text-white' : 'bg-surface-3 text-content-muted'}`}>
+                  v{v.version_number}
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  {idx === 0 && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-light">
+                      Latest
+                    </span>
+                  )}
+                  <span className="text-xs text-content-muted">
+                    {formatDate(v.uploaded_at)}
+                  </span>
+                  {v.uploader && (
+                    <span className="text-xs text-content-muted truncate">
+                      · {v.uploader.email.split('@')[0]}
+                    </span>
+                  )}
+                </div>
+                {v.message && (
+                  <p className="text-xs text-content-secondary mt-0.5 leading-relaxed truncate">
+                    "{v.message}"
+                  </p>
+                )}
+                {v.size_bytes !== null && (
+                  <p className="text-[10px] text-content-muted mt-0.5 tabular-nums">
+                    {formatBytes(v.size_bytes)}
+                  </p>
+                )}
+              </div>
+              <a
+                href={versionDownloadUrl(assetId, v.id)}
+                download
+                className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
+                title="Download this version"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Upload new version */}
+      {!showUpload ? (
+        <button
+          onClick={() => setShowUpload(true)}
+          className="btn-secondary btn-sm text-xs w-full"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+          </svg>
+          Upload new version
+        </button>
+      ) : (
+        <div className="card p-3 bg-surface-1 space-y-2.5">
+          <input
+            className="input py-1.5 text-xs w-full"
+            placeholder="Commit message (optional)…"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setShowUpload(false)}
+          />
+          <div className="flex items-center gap-2">
+            <label className="btn-primary btn-sm text-xs flex-1 justify-center cursor-pointer">
+              {uploading ? (
+                <>
+                  <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                  </svg>
+                  Choose file…
+                </>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                className="hidden"
+                disabled={uploading}
+                onChange={handleUpload}
+              />
+            </label>
+            <button
+              onClick={() => { setShowUpload(false); setMessage(''); }}
+              className="btn-ghost btn-sm text-xs"
+              disabled={uploading}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -485,15 +656,10 @@ function AssetDetailModal({
             )}
           </div>
 
-          {/* Version history placeholder */}
+          {/* Version history */}
           <div>
-            <div className="label">Version history</div>
-            <div className="card p-4 bg-surface-1 text-center">
-              <svg className="w-5 h-5 text-content-muted mx-auto mb-2" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p className="text-xs text-content-muted">Version history coming soon</p>
-            </div>
+            <div className="label mb-2.5">Version history</div>
+            <VersionHistory assetId={asset.id} />
           </div>
         </div>
 

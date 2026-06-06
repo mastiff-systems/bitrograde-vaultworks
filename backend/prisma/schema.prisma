@@ -14,6 +14,7 @@ model User {
   role          String         @default("user")
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   notifications Notification[]
+  assetVersions AssetVersion[]
 
   @@map("users")
 }
@@ -30,6 +31,7 @@ model Asset {
   uploadedAt    DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   tags          AssetTag[]
   notifications Notification[]
+  versions      AssetVersion[]
 
   @@map("assets")
 }
@@ -69,6 +71,25 @@ model AssetTag {
 
   @@id([assetId, tagId])
   @@map("asset_tags")
+}
+
+model AssetVersion {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetId       String   @map("asset_id") @db.Uuid
+  versionNumber Int      @map("version_number")
+  storageKey    String   @map("storage_key")
+  sizeBytes     BigInt?  @map("size_bytes")
+  mimeType      String?  @map("mime_type")
+  message       String?
+  uploadedBy    String?  @map("uploaded_by") @db.Uuid
+  uploadedAt    DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  asset    Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, versionNumber])
+  @@index([assetId])
+  @@map("asset_versions")
 }
 
 model Setting {

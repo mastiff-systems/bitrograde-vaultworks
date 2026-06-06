@@ -7,6 +7,7 @@ import { tagsRoutes } from './routes/tags.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { notificationsRoutes } from './routes/notifications.js';
+import { versionsRoutes } from './routes/versions.js';
 import { authenticate } from './auth/middleware.js';
 
 // SSE stream uses ?token= query param auth — skip global Bearer check for that path
@@ -35,6 +36,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(filesRoutes);
   await app.register(tagsRoutes);
   await app.register(notificationsRoutes);
+  await app.register(versionsRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

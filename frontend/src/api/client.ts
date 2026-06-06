@@ -36,6 +36,16 @@ export interface Asset {
   tags: { id: string; name: string }[];
 }
 
+export interface AssetVersion {
+  id: string;
+  version_number: number;
+  size_bytes: number | null;
+  mime_type: string | null;
+  message: string | null;
+  uploaded_at: string;
+  uploader: { id: string; email: string } | null;
+}
+
 export interface Tag {
   id: string;
   name: string;
@@ -88,6 +98,32 @@ export async function uploadFiles(
 
 export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
+}
+
+export async function listVersions(assetId: string): Promise<AssetVersion[]> {
+  const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);
+  return data;
+}
+
+export async function uploadVersion(
+  assetId: string,
+  file: File,
+  message?: string,
+  onProgress?: (pct: number) => void,
+): Promise<AssetVersion> {
+  const form = new FormData();
+  if (message?.trim()) form.append('message', message.trim());
+  form.append('file', file, file.name);
+  const { data } = await api.post<AssetVersion>(`/api/files/${assetId}/versions`, form, {
+    onUploadProgress: (e) => {
+      if (e.total && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
+  });
+  return data;
+}
+
+export function versionDownloadUrl(assetId: string, versionId: string): string {
+  return `/api/files/${assetId}/versions/${versionId}/download`;
 }
 
 export function downloadUrl(id: string): string {

@@ -61,7 +61,7 @@ export function FileList({ assets, onDeleted }: Props) {
                   {a.asset_type}
                 </span>
               </td>
-              <td style={td}>{formatBytes(a.size_bytes)}</td>
+              <td style={td}>{formatBytes(a.size_bytes ?? 0)}</td>
               <td style={td}>{formatDate(a.uploaded_at)}</td>
               <td style={td}>
                 <button style={btnPrimary} onClick={() => setPreviewing(a)}

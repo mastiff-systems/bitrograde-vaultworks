@@ -244,7 +244,7 @@ export function Dashboard() {
                     </button>
                   </td>
                   <td><TypeBadge type={asset.asset_type} /></td>
-                  <td className="tabular-nums">{formatBytes(asset.size_bytes)}</td>
+                  <td className="tabular-nums">{formatBytes(asset.size_bytes ?? 0)}</td>
                   <td>{formatDate(asset.uploaded_at)}</td>
                   <td>
                     <div className="flex items-center justify-end gap-1">
@@ -288,7 +288,7 @@ export function Dashboard() {
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <div>
                 <p className="font-medium text-content-primary text-sm">{preview.asset.original_name}</p>
-                <p className="text-xs text-content-muted mt-0.5">{formatBytes(preview.asset.size_bytes)}</p>
+                <p className="text-xs text-content-muted mt-0.5">{formatBytes(preview.asset.size_bytes ?? 0)}</p>
               </div>
               <button onClick={() => setPreview(null)} className="btn-ghost btn-sm">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">

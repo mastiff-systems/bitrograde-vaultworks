@@ -28,15 +28,48 @@ export interface Asset {
   id: string;
   original_name: string;
   mime_type: string | null;
-  size_bytes: number;
+  size_bytes: number | null;
   asset_type: '3d' | 'audio' | 'image' | 'other';
   thumbnail_key: string | null;
+  description: string | null;
   uploaded_at: string;
+  tags: { id: string; name: string }[];
 }
 
-export async function listFiles(): Promise<Asset[]> {
-  const { data } = await api.get<Asset[]>('/api/files');
+export interface Tag {
+  id: string;
+  name: string;
+  created_at: string;
+  asset_count: number;
+}
+
+export interface ListFilesParams {
+  q?: string;
+  tags?: string[];
+  assetType?: string;
+  mimeType?: string;
+  limit?: number;
+}
+
+export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
+  const p: Record<string, string> = {};
+  if (params?.q) p.q = params.q;
+  if (params?.assetType) p.assetType = params.assetType;
+  if (params?.mimeType) p.mimeType = params.mimeType;
+  if (params?.limit) p.limit = String(params.limit);
+  if (params?.tags?.length) p.tags = params.tags.join(',');
+  const { data } = await api.get<Asset[]>('/api/files', { params: p });
   return data;
+}
+
+export async function listTags(): Promise<Tag[]> {
+  const { data } = await api.get<Tag[]>('/api/tags');
+  return data;
+}
+
+export async function updateAssetTags(id: string, tags: string[]): Promise<{ id: string; name: string }[]> {
+  const { data } = await api.put<{ tags: { id: string; name: string }[] }>(`/api/files/${id}/tags`, { tags });
+  return data.tags;
 }
 
 export async function uploadFiles(

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { LoginPage } from './components/LoginPage.js';
 import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
-import { Dashboard } from './pages/Dashboard.js';
+import { AssetBrowser } from './pages/AssetBrowser.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminUsers } from './pages/admin/Users.js';
 import { useAuth } from './contexts/AuthContext.js';
@@ -20,7 +20,7 @@ function AppShell() {
 
   return (
     <Layout page={page} onNavigate={handleNavigate}>
-      {page === 'dashboard' && <Dashboard />}
+      {page === 'dashboard' && <AssetBrowser />}
       {page === 'admin-settings' && user?.role === 'admin' && <AdminSettings />}
       {page === 'admin-users' && user?.role === 'admin' && <AdminUsers />}
     </Layout>

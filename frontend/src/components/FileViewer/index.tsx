@@ -8,6 +8,9 @@ import { FallbackViewer } from './renderers/FallbackViewer.js';
 
 const PDFViewer = lazy(() => import('./renderers/PDFViewer.js').then((m) => ({ default: m.PDFViewer })));
 const CodeViewer = lazy(() => import('./renderers/CodeViewer.js').then((m) => ({ default: m.CodeViewer })));
+const ModelViewer3D = lazy(() => import('./renderers/ModelViewer3D.js').then((m) => ({ default: m.ModelViewer3D })));
+const OfficeViewer = lazy(() => import('./renderers/OfficeViewer.js').then((m) => ({ default: m.OfficeViewer })));
+const ArchiveViewer = lazy(() => import('./renderers/ArchiveViewer.js').then((m) => ({ default: m.ArchiveViewer })));
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -252,6 +255,18 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
           ) : renderer === 'code' ? (
             <Suspense fallback={<RendererLoadingSpinner />}>
               <CodeViewer url={url} filename={currentAsset.original_name} downloadHref={downloadHref} onError={handleError} />
+            </Suspense>
+          ) : renderer === 'model' ? (
+            <Suspense fallback={<RendererLoadingSpinner />}>
+              <ModelViewer3D url={url} filename={currentAsset.original_name} downloadHref={downloadHref} onError={handleError} />
+            </Suspense>
+          ) : renderer === 'office' ? (
+            <Suspense fallback={<RendererLoadingSpinner />}>
+              <OfficeViewer url={url} filename={currentAsset.original_name} downloadHref={downloadHref} onError={handleError} />
+            </Suspense>
+          ) : renderer === 'archive' ? (
+            <Suspense fallback={<RendererLoadingSpinner />}>
+              <ArchiveViewer url={url} filename={currentAsset.original_name} downloadHref={downloadHref} onError={handleError} />
             </Suspense>
           ) : (
             <FallbackViewer downloadHref={downloadHref} filename={currentAsset.original_name} />

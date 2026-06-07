@@ -15,7 +15,7 @@ export const EXT_TO_MIME: Record<string, string> = {
   zip: 'application/zip',
 };
 
-export type RendererType = 'image' | 'audio' | 'video' | 'pdf' | 'code' | 'unsupported';
+export type RendererType = 'image' | 'audio' | 'video' | 'pdf' | 'code' | 'model' | 'office' | 'archive' | 'unsupported';
 
 export function resolveMimeType(mimeType: string | null, filename: string): string {
   if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
@@ -34,5 +34,11 @@ export function resolveRenderer(mimeType: string): RendererType {
     mimeType === 'application/xml' ||
     mimeType === 'application/yaml'
   ) return 'code';
+  if (mimeType.startsWith('model/')) return 'model';
+  if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ) return 'office';
+  if (mimeType === 'application/zip') return 'archive';
   return 'unsupported';
 }

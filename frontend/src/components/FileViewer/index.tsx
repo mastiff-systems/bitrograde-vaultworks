@@ -40,6 +40,7 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
   const [fullscreen, setFullscreen] = useState(false);
   const returnFocusRef = useRef<Element | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   const { url, downloadHref, renderer } = useFilePreview(currentAsset);
 
@@ -67,18 +68,41 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
     };
   }, []);
 
-  // Keyboard: Esc closes; arrows navigate (skips interactive elements)
+  // Keyboard: Esc closes; arrows navigate; Tab trapped within dialog
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+
+      // Tab focus trap
+      if (e.key === 'Tab') {
+        const modal = modalRef.current;
+        if (!modal) return;
+        const focusable = Array.from(
+          modal.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter((el) => !el.closest('[aria-hidden="true"]'));
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+        return;
+      }
+
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'VIDEO' || tag === 'AUDIO') return;
+      // Audio/video renderers own arrow keys for seek/skip — skip navigation
+      if (renderer === 'audio' || renderer === 'video') return;
       if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev(); }
       if (e.key === 'ArrowRight') { e.preventDefault(); goNext(); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, goPrev, goNext]);
+  }, [onClose, goPrev, goNext, renderer]);
 
   // Prevent body scroll while open
   useEffect(() => {
@@ -102,6 +126,7 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
       onClick={fullscreen ? undefined : onClose}
     >
       <div
+        ref={modalRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="fileviewer-title"

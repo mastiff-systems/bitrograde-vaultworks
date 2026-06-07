@@ -40,13 +40,14 @@ export function PDFViewer({ url, filename, downloadHref, onError }: Props) {
 
   useEffect(() => {
     setLoading(true);
+    setZoom(100);
+    setPage(1);
+    setPageInput('1');
     pdfjsLib.getDocument(url).promise
       .then(async (pdf) => {
         pdfRef.current = pdf;
         setNumPages(pdf.numPages);
-        setPage(1);
-        setPageInput('1');
-        await renderPage(pdf, 1, zoom);
+        await renderPage(pdf, 1, 100);
         setLoading(false);
       })
       .catch((e) => {

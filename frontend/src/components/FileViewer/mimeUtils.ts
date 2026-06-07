@@ -13,6 +13,7 @@ export const EXT_TO_MIME: Record<string, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   zip: 'application/zip',
+  psd: 'application/x-photoshop',
 };
 
 export type RendererType = 'image' | 'audio' | 'video' | 'pdf' | 'code' | 'model' | 'office' | 'archive' | 'unsupported';
@@ -23,7 +24,13 @@ export function resolveMimeType(mimeType: string | null, filename: string): stri
   return EXT_TO_MIME[ext] ?? 'application/octet-stream';
 }
 
+const NON_RENDERABLE_IMAGE_TYPES = new Set([
+  'image/vnd.adobe.photoshop',
+  'image/x-photoshop',
+]);
+
 export function resolveRenderer(mimeType: string): RendererType {
+  if (NON_RENDERABLE_IMAGE_TYPES.has(mimeType)) return 'unsupported';
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
   if (mimeType.startsWith('video/')) return 'video';

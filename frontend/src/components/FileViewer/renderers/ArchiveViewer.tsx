@@ -100,7 +100,8 @@ export function ArchiveViewer({ url, filename, downloadHref, onError }: Props) {
       a.href = objUrl;
       a.download = entry.name.split('/').pop() ?? entry.name;
       a.click();
-      URL.revokeObjectURL(objUrl);
+      // Defer revocation to give the browser time to read the blob URL
+      setTimeout(() => URL.revokeObjectURL(objUrl), 10_000);
     } finally {
       setExtracting(null);
     }

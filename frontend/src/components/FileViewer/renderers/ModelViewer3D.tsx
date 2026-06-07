@@ -124,6 +124,21 @@ export function ModelViewer3D({ url, filename, downloadHref, onError }: Props) {
       cancelAnimationFrame(animId);
       ro.disconnect();
       controls.dispose();
+      // Traverse scene and free GPU-side geometry, material, and texture memory
+      scene.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const mesh = obj as THREE.Mesh;
+          mesh.geometry.dispose();
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const mat of mats) {
+            for (const key of Object.keys(mat)) {
+              const val = (mat as unknown as Record<string, unknown>)[key];
+              if (val instanceof THREE.Texture) val.dispose();
+            }
+            mat.dispose();
+          }
+        }
+      });
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };

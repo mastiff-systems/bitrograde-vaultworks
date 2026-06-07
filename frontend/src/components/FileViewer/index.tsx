@@ -113,7 +113,7 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
     return () => { document.body.style.overflow = ''; };
   }, []);
 
-  const handleError = (e: Error) => setRenderError(e);
+  const handleError = useCallback((e: Error) => setRenderError(e), []);
 
   const containerCls = fullscreen
     ? 'fixed inset-0 z-50 flex flex-col bg-surface-0'

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { uploadToS3, getS3ObjectStream } from '../storage/s3.js';
+import { uploadToS3, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid asset ID') });
@@ -100,53 +100,59 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
 
     const newVersionNumber = (maxVersionRecord?.versionNumber ?? 1) + 1;
 
-    const newVersion = await prisma.$transaction(async (tx) => {
-      // Snapshot the current asset as v1 if this is the first version upload
-      if (!maxVersionRecord) {
-        await tx.assetVersion.create({
+    let newVersion;
+    try {
+      newVersion = await prisma.$transaction(async (tx) => {
+        // Snapshot the current asset as v1 if this is the first version upload
+        if (!maxVersionRecord) {
+          await tx.assetVersion.create({
+            data: {
+              assetId: params.id,
+              versionNumber: 1,
+              storageKey: asset.storageKey,
+              sizeBytes: asset.sizeBytes,
+              mimeType: asset.mimeType,
+              uploadedBy: req.user.userId,
+            },
+          });
+        }
+
+        const version = await tx.assetVersion.create({
           data: {
             assetId: params.id,
-            versionNumber: 1,
-            storageKey: asset.storageKey,
-            sizeBytes: asset.sizeBytes,
-            mimeType: asset.mimeType,
+            versionNumber: newVersionNumber,
+            storageKey: newStorageKey,
+            sizeBytes: BigInt(uploadBuffer!.length),
+            mimeType: uploadMime,
+            message: message ?? null,
             uploadedBy: req.user.userId,
           },
+          select: {
+            id: true,
+            versionNumber: true,
+            sizeBytes: true,
+            mimeType: true,
+            message: true,
+            uploadedAt: true,
+            uploader: { select: { id: true, email: true } },
+          },
         });
-      }
 
-      const version = await tx.assetVersion.create({
-        data: {
-          assetId: params.id,
-          versionNumber: newVersionNumber,
-          storageKey: newStorageKey,
-          sizeBytes: BigInt(uploadBuffer!.length),
-          mimeType: uploadMime,
-          message: message ?? null,
-          uploadedBy: req.user.userId,
-        },
-        select: {
-          id: true,
-          versionNumber: true,
-          sizeBytes: true,
-          mimeType: true,
-          message: true,
-          uploadedAt: true,
-          uploader: { select: { id: true, email: true } },
-        },
+        await tx.asset.update({
+          where: { id: params.id },
+          data: {
+            storageKey: newStorageKey,
+            sizeBytes: BigInt(uploadBuffer!.length),
+            mimeType: uploadMime,
+          },
+        });
+
+        return version;
       });
-
-      await tx.asset.update({
-        where: { id: params.id },
-        data: {
-          storageKey: newStorageKey,
-          sizeBytes: BigInt(uploadBuffer!.length),
-          mimeType: uploadMime,
-        },
-      });
-
-      return version;
-    });
+    } catch (err) {
+      await deleteFromS3(newStorageKey).catch(() => {});
+      throw err;
+    }
 
     return reply.status(201).send({
       id: newVersion.id,

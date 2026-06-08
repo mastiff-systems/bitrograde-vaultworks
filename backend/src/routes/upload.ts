@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { prisma } from '../db/client.js';
-import { uploadToS3 } from '../storage/s3.js';
+import { uploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
@@ -73,30 +73,41 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         const thumbBuffer = await generateThumbnail(buffer);
         if (thumbBuffer) {
           thumbnailKey = `assets/${id}/thumbnail.webp`;
-          await uploadToS3(thumbnailKey, thumbBuffer, 'image/webp');
+          try {
+            await uploadToS3(thumbnailKey, thumbBuffer, 'image/webp');
+          } catch {
+            thumbnailKey = undefined;
+          }
         }
       }
 
-      const asset = await prisma.asset.create({
-        data: {
-          id,
-          originalName: part.filename,
-          mimeType: mime,
-          sizeBytes: BigInt(buffer.length),
-          storageKey,
-          assetType,
-          thumbnailKey,
-        },
-        select: {
-          id: true,
-          originalName: true,
-          mimeType: true,
-          sizeBytes: true,
-          assetType: true,
-          thumbnailKey: true,
-          uploadedAt: true,
-        },
-      });
+      let asset;
+      try {
+        asset = await prisma.asset.create({
+          data: {
+            id,
+            originalName: part.filename,
+            mimeType: mime,
+            sizeBytes: BigInt(buffer.length),
+            storageKey,
+            assetType,
+            thumbnailKey,
+          },
+          select: {
+            id: true,
+            originalName: true,
+            mimeType: true,
+            sizeBytes: true,
+            assetType: true,
+            thumbnailKey: true,
+            uploadedAt: true,
+          },
+        });
+      } catch (err) {
+        await deleteFromS3(storageKey).catch(() => {});
+        if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
+        throw err;
+      }
 
       uploaded.push({
         id: asset.id,

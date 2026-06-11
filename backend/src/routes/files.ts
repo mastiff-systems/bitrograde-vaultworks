@@ -4,6 +4,17 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
+import { verifyLocalToken } from '../auth/tokens.js';
+import { verifyKeycloakToken } from '../auth/keycloak.js';
+
+async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
+  if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
+  try {
+    const provider = process.env.AUTH_PROVIDER ?? 'local';
+    if (provider === 'keycloak') { await verifyKeycloakToken(token); } else { verifyLocalToken(token); }
+    return true;
+  } catch { reply.status(401).send({ error: 'Invalid token' }); return false; }
+}
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
 
@@ -12,6 +23,9 @@ const FilesQuerySchema = z.object({
   tags: z.string().optional(),
   assetType: z.string().optional(),
   mimeType: z.string().optional(),
+  categoryId: z.string().uuid().optional(),
+  subcategoryId: z.string().uuid().optional(),
+  format: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
@@ -26,6 +40,12 @@ type AssetSelect = {
   thumbnailKey: string | null;
   description: string | null;
   uploadedAt: Date;
+  categoryId: string | null;
+  subcategoryId: string | null;
+  license: string | null;
+  resolutionW: number | null;
+  resolutionH: number | null;
+  durationSeconds: number | null;
   tags: { tag: TagInfo }[];
 };
 
@@ -39,6 +59,12 @@ function formatAsset(a: AssetSelect) {
     thumbnail_key: a.thumbnailKey,
     description: a.description,
     uploaded_at: a.uploadedAt,
+    category_id: a.categoryId,
+    subcategory_id: a.subcategoryId,
+    license: a.license,
+    resolution_w: a.resolutionW,
+    resolution_h: a.resolutionH,
+    duration_seconds: a.durationSeconds,
     tags: a.tags.map((at) => at.tag),
   };
 }
@@ -52,6 +78,12 @@ const assetSelect = {
   thumbnailKey: true,
   description: true,
   uploadedAt: true,
+  categoryId: true,
+  subcategoryId: true,
+  license: true,
+  resolutionW: true,
+  resolutionH: true,
+  durationSeconds: true,
   tags: { select: { tag: { select: { id: true, name: true } } } },
 } as const;
 
@@ -78,6 +110,16 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
       if (params.mimeType) {
         extraFilters = Prisma.sql`${extraFilters} AND a.mime_type = ${params.mimeType}`;
+      }
+      if (params.categoryId) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.category_id = ${params.categoryId}::uuid`;
+      }
+      if (params.subcategoryId) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.subcategory_id = ${params.subcategoryId}::uuid`;
+      }
+      if (params.format) {
+        const prefix = `${params.format}/%`;
+        extraFilters = Prisma.sql`${extraFilters} AND a.mime_type LIKE ${prefix}`;
       }
       if (tagNames.length > 0) {
         extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
@@ -143,6 +185,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (params.mimeType) {
       conditions.push({ mimeType: params.mimeType });
     }
+    if (params.categoryId) {
+      conditions.push({ categoryId: params.categoryId });
+    }
+    if (params.subcategoryId) {
+      conditions.push({ subcategoryId: params.subcategoryId });
+    }
+    if (params.format) {
+      conditions.push({ mimeType: { startsWith: `${params.format}/` } });
+    }
     for (const name of tagNames) {
       conditions.push({ tags: { some: { tag: { name } } } });
     }
@@ -169,6 +220,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
   app.get<{ Params: { id: string } }>('/api/files/:id/download', async (req, reply) => {
+    const token = (req.query as Record<string, string>).token;
+    if (!await authenticateToken(token, reply)) return;
+
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -192,6 +246,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Inline stream for previews — no Content-Disposition attachment
   app.get<{ Params: { id: string } }>('/api/files/:id/stream', async (req, reply) => {
+    const token = (req.query as Record<string, string>).token;
+    if (!await authenticateToken(token, reply)) return;
+
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -211,6 +268,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
   app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', async (req, reply) => {
+    const token = (req.query as Record<string, string>).token;
+    if (!await authenticateToken(token, reply)) return;
+
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

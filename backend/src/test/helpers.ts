@@ -15,4 +15,6 @@ export async function cleanDb(): Promise<void> {
   await prisma.tag.deleteMany();
   await prisma.user.deleteMany();
   await prisma.setting.deleteMany();
+  await prisma.subcategory.deleteMany();
+  await prisma.category.deleteMany();
 }

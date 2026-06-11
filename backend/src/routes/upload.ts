@@ -6,6 +6,28 @@ import { prisma } from '../db/client.js';
 import { uploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 
+const UploadMetaSchema = z.object({
+  category_id: z.string().uuid().optional(),
+  subcategory_id: z.string().uuid().optional(),
+  license: z.string().max(255).optional(),
+  resolution_w: z.number().int().positive().optional(),
+  resolution_h: z.number().int().positive().optional(),
+  duration_seconds: z.number().min(0).optional(),
+});
+
+type UploadMeta = z.infer<typeof UploadMetaSchema>;
+
+function coerceMeta(fields: Record<string, string>): UploadMeta {
+  const raw: Record<string, unknown> = {};
+  if (fields.category_id) raw.category_id = fields.category_id;
+  if (fields.subcategory_id) raw.subcategory_id = fields.subcategory_id;
+  if (fields.license) raw.license = fields.license;
+  if (fields.resolution_w) raw.resolution_w = parseInt(fields.resolution_w, 10);
+  if (fields.resolution_h) raw.resolution_h = parseInt(fields.resolution_h, 10);
+  if (fields.duration_seconds) raw.duration_seconds = parseFloat(fields.duration_seconds);
+  return raw as UploadMeta;
+}
+
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a']);
 const MODEL_EXTS = new Set(['.glb', '.gltf', '.obj', '.fbx']);
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v']);
@@ -42,15 +64,27 @@ async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/upload', async (req, reply) => {
-    const parts = req.files();
+    const parts = req.parts();
     const uploaded: object[] = [];
 
+    // Collect non-file fields and buffer file parts in a single pass
+    const fields: Record<string, string> = {};
+    type BufferedFile = { filename: string; mimetype: string; buffer: Buffer };
+    const files: BufferedFile[] = [];
+
     for await (const part of parts) {
+      if (part.type === 'field') {
+        fields[part.fieldname] = part.value as string;
+        continue;
+      }
+
       const filenameResult = FilenameSchema.safeParse(part.filename);
       if (!filenameResult.success) {
-        // Drain stream to avoid memory leaks
         part.file.resume();
-        return reply.status(400).send({ error: 'Invalid filename', fields: { filename: filenameResult.error.issues.map(i => i.message) } });
+        return reply.status(400).send({
+          error: 'Invalid filename',
+          fields: { filename: filenameResult.error.issues.map((i) => i.message) },
+        });
       }
 
       const mimeResult = MimeSchema.safeParse(part.mimetype);
@@ -60,11 +94,44 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       for await (const chunk of part.file) {
         chunks.push(chunk);
       }
-      const buffer = Buffer.concat(chunks);
+      files.push({ filename: part.filename, mimetype: mime, buffer: Buffer.concat(chunks) });
+    }
 
+    if (files.length === 0) {
+      return reply.status(400).send({ error: 'At least one file is required' });
+    }
+
+    // Validate and coerce metadata fields
+    const rawMeta = coerceMeta(fields);
+    const metaResult = UploadMetaSchema.safeParse(rawMeta);
+    if (!metaResult.success) {
+      const fieldErrors: Record<string, string[]> = {};
+      for (const issue of metaResult.error.issues) {
+        const key = issue.path.join('.') || '_';
+        (fieldErrors[key] ??= []).push(issue.message);
+      }
+      return reply.status(400).send({ error: 'Validation failed', fields: fieldErrors });
+    }
+    const meta = metaResult.data;
+
+    // Validate category/subcategory FK references if provided
+    if (meta.category_id) {
+      const cat = await prisma.category.findUnique({ where: { id: meta.category_id }, select: { id: true } });
+      if (!cat) return reply.status(400).send({ error: 'category_id does not exist' });
+    }
+    if (meta.subcategory_id) {
+      const sub = await prisma.subcategory.findUnique({ where: { id: meta.subcategory_id }, select: { id: true, categoryId: true } });
+      if (!sub) return reply.status(400).send({ error: 'subcategory_id does not exist' });
+      if (meta.category_id && sub.categoryId !== meta.category_id) {
+        return reply.status(400).send({ error: 'subcategory_id does not belong to category_id' });
+      }
+    }
+
+    for (const file of files) {
+      const { filename, mimetype: mime, buffer } = file;
       const id = uuidv4();
-      const storageKey = `assets/${id}/${part.filename}`;
-      const assetType = detectAssetType(part.filename, mime);
+      const storageKey = `assets/${id}/${filename}`;
+      const assetType = detectAssetType(filename, mime);
 
       await uploadToS3(storageKey, buffer, mime);
 
@@ -86,12 +153,18 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         asset = await prisma.asset.create({
           data: {
             id,
-            originalName: part.filename,
+            originalName: filename,
             mimeType: mime,
             sizeBytes: BigInt(buffer.length),
             storageKey,
             assetType,
             thumbnailKey,
+            categoryId: meta.category_id,
+            subcategoryId: meta.subcategory_id,
+            license: meta.license,
+            resolutionW: meta.resolution_w,
+            resolutionH: meta.resolution_h,
+            durationSeconds: meta.duration_seconds,
           },
           select: {
             id: true,
@@ -101,6 +174,12 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             assetType: true,
             thumbnailKey: true,
             uploadedAt: true,
+            categoryId: true,
+            subcategoryId: true,
+            license: true,
+            resolutionW: true,
+            resolutionH: true,
+            durationSeconds: true,
           },
         });
       } catch (err) {
@@ -117,21 +196,25 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         asset_type: asset.assetType,
         thumbnail_key: asset.thumbnailKey,
         uploaded_at: asset.uploadedAt,
+        category_id: asset.categoryId,
+        subcategory_id: asset.subcategoryId,
+        license: asset.license,
+        resolution_w: asset.resolutionW,
+        resolution_h: asset.resolutionH,
+        duration_seconds: asset.durationSeconds,
       });
 
       // Fire-and-forget notifications — don't block the upload response
       void (async () => {
         try {
-          // Notify uploader their upload finished
           await createNotification({
             userId: req.user.userId,
             type: 'upload_complete',
             title: 'Upload complete',
-            body: `${part.filename} is ready.`,
+            body: `${filename} is ready.`,
             resourceId: asset.id,
           });
 
-          // Notify all other users about the new asset
           const others = await prisma.user.findMany({
             where: { id: { not: req.user.userId } },
             select: { id: true },
@@ -142,7 +225,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
                 userId: u.id,
                 type: 'new_asset',
                 title: 'New asset uploaded',
-                body: `${part.filename} was added to the library.`,
+                body: `${filename} was added to the library.`,
                 resourceId: asset.id,
               }),
             ),
@@ -151,10 +234,6 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           // Notification failure should not affect upload response
         }
       })();
-    }
-
-    if (uploaded.length === 0) {
-      return reply.status(400).send({ error: 'At least one file is required' });
     }
 
     return reply.status(201).send(uploaded);

@@ -5,16 +5,18 @@ import { Layout } from './components/Layout.js';
 import { AssetBrowser } from './pages/AssetBrowser.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminUsers } from './pages/admin/Users.js';
+import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
 import { useAuth } from './contexts/AuthContext.js';
 import type { Page } from './components/Layout.js';
+
+const ADMIN_PAGES: Page[] = ['admin-settings', 'admin-users', 'admin-taxonomy'];
 
 function AppShell() {
   const { user } = useAuth();
   const [page, setPage] = useState<Page>('dashboard');
 
   const handleNavigate = (p: Page) => {
-    // Guard admin-only pages
-    if ((p === 'admin-settings' || p === 'admin-users') && user?.role !== 'admin') return;
+    if (ADMIN_PAGES.includes(p) && user?.role !== 'admin') return;
     setPage(p);
   };
 
@@ -23,6 +25,7 @@ function AppShell() {
       {page === 'dashboard' && <AssetBrowser />}
       {page === 'admin-settings' && user?.role === 'admin' && <AdminSettings />}
       {page === 'admin-users' && user?.role === 'admin' && <AdminUsers />}
+      {page === 'admin-taxonomy' && user?.role === 'admin' && <TaxonomyManager />}
     </Layout>
   );
 }

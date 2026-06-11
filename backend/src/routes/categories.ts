@@ -44,7 +44,8 @@ function formatCategory(c: {
   slug: string;
   createdAt: Date;
   updatedAt: Date;
-  subcategories: { id: string; name: string; slug: string }[];
+  subcategories: { id: string; name: string; slug: string; _count: { assets: number } }[];
+  _count: { assets: number };
 }) {
   return {
     id: c.id,
@@ -52,7 +53,8 @@ function formatCategory(c: {
     slug: c.slug,
     created_at: c.createdAt,
     updated_at: c.updatedAt,
-    subcategories: c.subcategories,
+    asset_count: c._count.assets,
+    subcategories: c.subcategories.map((s) => ({ ...s, asset_count: s._count.assets })),
   };
 }
 
@@ -63,6 +65,7 @@ function formatSubcategory(s: {
   slug: string;
   createdAt: Date;
   updatedAt: Date;
+  _count: { assets: number };
 }) {
   return {
     id: s.id,
@@ -71,6 +74,7 @@ function formatSubcategory(s: {
     slug: s.slug,
     created_at: s.createdAt,
     updated_at: s.updatedAt,
+    asset_count: s._count.assets,
   };
 }
 
@@ -81,9 +85,10 @@ const categorySelect = {
   createdAt: true,
   updatedAt: true,
   subcategories: {
-    select: { id: true, name: true, slug: true },
+    select: { id: true, name: true, slug: true, _count: { select: { assets: true } } },
     orderBy: { name: 'asc' as const },
   },
+  _count: { select: { assets: true } },
 } as const;
 
 const subcategorySelect = {
@@ -93,6 +98,7 @@ const subcategorySelect = {
   slug: true,
   createdAt: true,
   updatedAt: true,
+  _count: { select: { assets: true } },
 } as const;
 
 export async function categoriesRoutes(app: FastifyInstance): Promise<void> {

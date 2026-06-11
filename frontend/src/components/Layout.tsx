@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext.js';
 import { NotificationBell } from './NotificationBell.js';
 
-type Page = 'dashboard' | 'admin-settings' | 'admin-users';
+type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy';
 
 interface Props {
   page: Page;
@@ -14,6 +14,7 @@ interface Props {
 const navItems: { id: Page; label: string; icon: string; adminOnly?: boolean }[] = [
   { id: 'dashboard', label: 'Assets', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
   { id: 'admin-settings', label: 'Settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z', adminOnly: true },
+  { id: 'admin-taxonomy', label: 'Taxonomy', icon: 'M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z', adminOnly: true },
   { id: 'admin-users', label: 'Users', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', adminOnly: true },
 ];
 

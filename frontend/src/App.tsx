@@ -7,6 +7,7 @@ import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminUsers } from './pages/admin/Users.js';
 import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
 import { useAuth } from './contexts/AuthContext.js';
+import { CategoryProvider } from './contexts/CategoryContext.js';
 import type { Page } from './components/Layout.js';
 
 const ADMIN_PAGES: Page[] = ['admin-settings', 'admin-users', 'admin-taxonomy'];
@@ -38,5 +39,9 @@ export function App() {
   }
 
   if (!token) return <LoginPage />;
-  return <AppShell />;
+  return (
+    <CategoryProvider>
+      <AppShell />
+    </CategoryProvider>
+  );
 }

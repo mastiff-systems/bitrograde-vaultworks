@@ -19,6 +19,7 @@ import { AudioPreview } from '../components/AudioPreview.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
+import { useCategoryContext } from '../contexts/CategoryContext.js';
 
 // --- Helpers ---
 
@@ -173,14 +174,32 @@ function AssetThumbnail({ asset, className }: { asset: Asset; className?: string
 
 // --- Asset Card ---
 
+function LicenseBadge({ license }: { license: string }) {
+  const normalized = license.toLowerCase();
+  let cls = 'bg-surface-4 text-content-secondary';
+  if (normalized.includes('commercial')) cls = 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300';
+  else if (normalized.includes('royalty')) cls = 'bg-blue-500/15 text-blue-700 dark:text-blue-300';
+  else if (normalized.includes('personal')) cls = 'bg-amber-500/15 text-amber-700 dark:text-amber-300';
+  return (
+    <span className={`badge ${cls}`} title={`License: ${license}`}>
+      <svg className="w-2.5 h-2.5 mr-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+      </svg>
+      {license}
+    </span>
+  );
+}
+
 function AssetCard({
   asset,
+  categoryName,
   onTagClick,
   activeTagFilters,
   onClick,
   onDetails,
 }: {
   asset: Asset;
+  categoryName?: string;
   onTagClick: (name: string) => void;
   activeTagFilters: string[];
   onClick: () => void;
@@ -200,8 +219,11 @@ function AssetCard({
       {/* Thumbnail */}
       <div className="aspect-square bg-surface-3 overflow-hidden flex items-center justify-center relative">
         <AssetThumbnail asset={asset} />
-        <div className="absolute top-2 left-2">
+        <div className="absolute top-2 left-2 flex flex-col gap-1">
           <TypeBadge type={asset.asset_type} />
+          {categoryName && (
+            <span className="badge bg-surface-0/80 text-content-secondary backdrop-blur-sm text-[10px]">{categoryName}</span>
+          )}
         </div>
         {/* Context menu trigger */}
         <div
@@ -284,7 +306,11 @@ function AssetCard({
 
         <div className="mt-auto flex items-center justify-between text-xs text-content-muted pt-1">
           <span className="tabular-nums">{formatBytes(asset.size_bytes ?? 0)}</span>
-          <span>{formatDate(asset.uploaded_at)}</span>
+          {asset.license ? (
+            <LicenseBadge license={asset.license} />
+          ) : (
+            <span>{formatDate(asset.uploaded_at)}</span>
+          )}
         </div>
       </div>
     </div>
@@ -751,11 +777,25 @@ const ASSET_TYPES = ['3d', 'audio', 'image', 'other'] as const;
 
 export function AssetBrowser() {
   const initial = getUrlFilters();
-  const [query, setQuery] = useState(initial.q);
+  const {
+    searchQuery,
+    categories,
+    selectedCategoryId,
+    selectedSubcategoryId,
+    setSearchQuery: setGlobalSearch,
+    setSelectedCategoryId: clearCategory,
+    setSelectedSubcategoryId: clearSubcategory,
+  } = useCategoryContext();
   const [debouncedQuery, setDebouncedQuery] = useState(initial.q);
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [sort, setSort] = useState<SortKey>(initial.sort);
+
+  const categoryMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of categories) m[c.id] = c.name;
+    return m;
+  }, [categories]);
 
   const [assets, setAssets] = useState<Asset[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
@@ -769,13 +809,13 @@ export function AssetBrowser() {
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
 
-  // Debounce search
+  // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebouncedQuery(query), 300);
+    debounceRef.current = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [query]);
+  }, [searchQuery]);
 
   // Auto-switch to relevance sort when search becomes active
   useEffect(() => {
@@ -787,6 +827,7 @@ export function AssetBrowser() {
   useEffect(() => {
     pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort });
   }, [debouncedQuery, selectedTypes, selectedTags, sort]);
+
 
   // Load tags
   useEffect(() => {
@@ -810,17 +851,24 @@ export function AssetBrowser() {
 
   const displayed = useMemo(() => {
     let result = assets;
-    // Client-side multi-type filter
     if (selectedTypes.length > 1) {
       result = result.filter((a) => selectedTypes.includes(a.asset_type));
     }
+    if (selectedCategoryId) {
+      result = result.filter((a) => a.category_id === selectedCategoryId);
+    }
+    if (selectedSubcategoryId) {
+      result = result.filter((a) => a.subcategory_id === selectedSubcategoryId);
+    }
     return sortAssets(result, sort);
-  }, [assets, selectedTypes, sort]);
+  }, [assets, selectedTypes, selectedCategoryId, selectedSubcategoryId, sort]);
 
-  const hasFilters = !!(debouncedQuery || selectedTypes.length || selectedTags.length);
+  const hasFilters = !!(debouncedQuery || selectedTypes.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
 
   function clearFilters() {
-    setQuery('');
+    setGlobalSearch('');
+    clearCategory(null);
+    clearSubcategory(null);
     setSelectedTypes([]);
     setSelectedTags([]);
     setSort('newest');
@@ -974,31 +1022,6 @@ export function AssetBrowser() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
-          <div className="relative flex-1 max-w-sm">
-            <svg
-              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-content-muted pointer-events-none"
-              fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
-            <input
-              className="input pl-9 py-2 text-sm"
-              placeholder="Search assets…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {query && (
-              <button
-                onClick={() => setQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-content-muted hover:text-content-primary transition-colors"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-
           <div className="flex items-center gap-2 ml-auto">
             <select
               value={sort}
@@ -1130,6 +1153,7 @@ export function AssetBrowser() {
                 <AssetCard
                   key={asset.id}
                   asset={asset}
+                  categoryName={asset.category_id ? categoryMap[asset.category_id] : undefined}
                   onTagClick={toggleTag}
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}

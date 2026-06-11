@@ -1,0 +1,154 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+[data-theme="dark"] {
+  --surface-0: 8 8 8;
+  --surface-1: 15 15 15;
+  --surface-2: 22 22 22;
+  --surface-3: 30 30 30;
+  --surface-4: 38 38 38;
+
+  --border: 42 42 42;
+  --border-light: 56 56 56;
+
+  --content-primary: 240 240 240;
+  --content-secondary: 160 160 160;
+  --content-muted: 85 85 85;
+
+  --accent: 124 58 237;
+  --accent-hover: 109 40 217;
+  --accent-light: 167 139 250;
+
+  --success: 34 197 94;
+  --warning: 245 158 11;
+  --danger: 239 68 68;
+}
+
+[data-theme="light"] {
+  --surface-0: 249 250 251;
+  --surface-1: 255 255 255;
+  --surface-2: 255 255 255;
+  --surface-3: 243 244 246;
+  --surface-4: 229 231 235;
+
+  --border: 229 231 235;
+  --border-light: 209 213 219;
+
+  --content-primary: 17 24 39;
+  --content-secondary: 75 85 99;
+  --content-muted: 156 163 175;
+
+  --accent: 124 58 237;
+  --accent-hover: 109 40 217;
+  --accent-light: 91 33 182;
+
+  --success: 22 163 74;
+  --warning: 217 119 6;
+  --danger: 220 38 38;
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-0 text-content-primary;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-surface-1; }
+  ::-webkit-scrollbar-thumb { @apply bg-surface-4 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-border-light; }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all duration-150 cursor-pointer border-0 outline-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover active:scale-[0.98];
+  }
+  .btn-secondary {
+    @apply btn bg-surface-3 text-content-secondary hover:bg-surface-4 hover:text-content-primary border border-border;
+  }
+  .btn-danger {
+    @apply btn bg-danger/10 text-danger hover:bg-danger/20 border border-danger/20;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-content-secondary hover:bg-surface-3 hover:text-content-primary;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .input {
+    @apply w-full bg-surface-2 border border-border rounded-lg px-3 py-2.5 text-sm text-content-primary placeholder-content-muted outline-none transition-colors;
+    @apply focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
+
+  .card {
+    @apply bg-surface-2 border border-border rounded-xl;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-3d    { @apply badge bg-violet-500/15  text-violet-700  dark:text-violet-300; }
+  .badge-audio { @apply badge bg-cyan-500/15    text-cyan-700    dark:text-cyan-300; }
+  .badge-image { @apply badge bg-emerald-500/15 text-emerald-700 dark:text-emerald-300; }
+  .badge-other { @apply badge bg-surface-4 text-content-secondary; }
+
+  .label {
+    @apply block text-xs font-medium text-content-secondary mb-1.5;
+  }
+
+  .page-header {
+    @apply flex items-center justify-between mb-8;
+  }
+  .page-title {
+    @apply text-xl font-semibold text-content-primary;
+  }
+  .page-subtitle {
+    @apply text-sm text-content-muted mt-0.5;
+  }
+
+  .table-wrapper {
+    @apply card overflow-hidden;
+  }
+  .table {
+    @apply w-full text-sm;
+  }
+  .table thead tr {
+    @apply border-b border-border;
+  }
+  .table th {
+    @apply px-4 py-3 text-left text-xs font-medium text-content-muted uppercase tracking-wide;
+  }
+  .table td {
+    @apply px-4 py-3 text-content-secondary;
+  }
+  .table tbody tr {
+    @apply border-b border-border/50 hover:bg-surface-3/40 transition-colors;
+  }
+  .table tbody tr:last-child {
+    @apply border-0;
+  }
+
+  .stat-card {
+    @apply card p-5 flex flex-col gap-1;
+  }
+  .stat-label {
+    @apply text-xs font-medium text-content-muted uppercase tracking-wide;
+  }
+  .stat-value {
+    @apply text-2xl font-semibold text-content-primary;
+  }
+}

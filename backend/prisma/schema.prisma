@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String         @unique
+  passwordHash  String         @map("password_hash")
+  role          String         @default("user")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  notifications Notification[]
+  assetVersions AssetVersion[]
+
+  @@map("users")
+}
+
+model Category {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String        @unique
+  slug          String        @unique
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  subcategories Subcategory[]
+  assets        Asset[]
+
+  @@map("categories")
+}
+
+model Subcategory {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId String    @map("category_id") @db.Uuid
+  name       String
+  slug       String
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category   Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  assets     Asset[]
+
+  @@unique([categoryId, slug])
+  @@map("subcategories")
+}
+
+model Asset {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  originalName    String         @map("original_name")
+  mimeType        String?        @map("mime_type")
+  sizeBytes       BigInt?        @map("size_bytes")
+  storageKey      String         @unique @map("storage_key")
+  assetType       String?        @map("asset_type")
+  thumbnailKey    String?        @map("thumbnail_key")
+  description     String?        @map("description")
+  uploadedAt      DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  categoryId      String?        @map("category_id") @db.Uuid
+  subcategoryId   String?        @map("subcategory_id") @db.Uuid
+  license         String?
+  resolutionW     Int?           @map("resolution_w")
+  resolutionH     Int?           @map("resolution_h")
+  durationSeconds Float?         @map("duration_seconds")
+  tags            AssetTag[]
+  notifications   Notification[]
+  versions        AssetVersion[]
+  category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([subcategoryId])
+  @@map("assets")
+}
+
+model Notification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  type       String
+  title      String
+  body       String
+  resourceId String?  @map("resource_id") @db.Uuid
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource Asset? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+model Tag {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String     @unique
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  assets    AssetTag[]
+
+  @@map("tags")
+}
+
+model AssetTag {
+  assetId String @map("asset_id") @db.Uuid
+  tagId   String @map("tag_id") @db.Uuid
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, tagId])
+  @@map("asset_tags")
+}
+
+model AssetVersion {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetId       String   @map("asset_id") @db.Uuid
+  versionNumber Int      @map("version_number")
+  storageKey    String   @map("storage_key")
+  sizeBytes     BigInt?  @map("size_bytes")
+  mimeType      String?  @map("mime_type")
+  message       String?
+  uploadedBy    String?  @map("uploaded_by") @db.Uuid
+  uploadedAt    DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  asset    Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  uploader User? @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, versionNumber])
+  @@index([assetId])
+  @@map("asset_versions")
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("settings")
+}

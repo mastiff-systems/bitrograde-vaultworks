@@ -1,0 +1,41 @@
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} from '@aws-sdk/client-s3';
+import type { Readable } from 'stream';
+import { getS3Config } from '../db/settings.js';
+
+async function getClient(): Promise<{ client: S3Client; bucket: string }> {
+  const cfg = await getS3Config();
+  const client = new S3Client({
+    endpoint: cfg.endpoint,
+    region: cfg.region,
+    credentials: { accessKeyId: cfg.accessKey, secretAccessKey: cfg.secretKey },
+    forcePathStyle: cfg.forcePathStyle,
+  });
+  return { client, bucket: cfg.bucket };
+}
+
+export async function uploadToS3(key: string, body: Buffer, contentType: string): Promise<void> {
+  const { client, bucket } = await getClient();
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+}
+
+export async function deleteFromS3(key: string): Promise<void> {
+  const { client, bucket } = await getClient();
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+export async function getS3ObjectStream(
+  key: string,
+): Promise<{ stream: Readable; contentType: string | undefined; contentLength: number | undefined }> {
+  const { client, bucket } = await getClient();
+  const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  return {
+    stream: resp.Body as Readable,
+    contentType: resp.ContentType,
+    contentLength: resp.ContentLength,
+  };
+}

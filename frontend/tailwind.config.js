@@ -1,34 +1,35 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
     extend: {
       colors: {
         surface: {
-          0: '#080808',
-          1: '#0f0f0f',
-          2: '#161616',
-          3: '#1e1e1e',
-          4: '#262626',
+          0: 'rgb(var(--surface-0) / <alpha-value>)',
+          1: 'rgb(var(--surface-1) / <alpha-value>)',
+          2: 'rgb(var(--surface-2) / <alpha-value>)',
+          3: 'rgb(var(--surface-3) / <alpha-value>)',
+          4: 'rgb(var(--surface-4) / <alpha-value>)',
         },
         border: {
-          DEFAULT: '#2a2a2a',
-          light: '#383838',
+          DEFAULT: 'rgb(var(--border) / <alpha-value>)',
+          light:   'rgb(var(--border-light) / <alpha-value>)',
         },
         content: {
-          primary: '#f0f0f0',
-          secondary: '#a0a0a0',
-          muted: '#555555',
+          primary:   'rgb(var(--content-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--content-secondary) / <alpha-value>)',
+          muted:     'rgb(var(--content-muted) / <alpha-value>)',
         },
         accent: {
-          DEFAULT: '#7c3aed',
-          hover: '#6d28d9',
-          light: '#a78bfa',
-          subtle: 'rgba(124,58,237,0.12)',
+          DEFAULT: 'rgb(var(--accent) / <alpha-value>)',
+          hover:   'rgb(var(--accent-hover) / <alpha-value>)',
+          light:   'rgb(var(--accent-light) / <alpha-value>)',
+          subtle:  'rgb(var(--accent) / 0.12)',
         },
-        success: '#22c55e',
-        warning: '#f59e0b',
-        danger: '#ef4444',
+        success: 'rgb(var(--success) / <alpha-value>)',
+        warning: 'rgb(var(--warning) / <alpha-value>)',
+        danger:  'rgb(var(--danger)  / <alpha-value>)',
       },
       fontFamily: {
         sans: ['"Inter"', 'system-ui', 'sans-serif'],

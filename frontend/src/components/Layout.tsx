@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext.js';
 import { NotificationBell } from './NotificationBell.js';
+import { ThemeToggle } from './ThemeToggle.js';
 
 type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy';
 
@@ -84,6 +85,7 @@ export function Layout({ page, onNavigate, children }: Props) {
               <div className="text-[10px] text-content-muted capitalize">{user?.role}</div>
             </div>
             <NotificationBell onNavigateDashboard={() => onNavigate('dashboard')} />
+            <ThemeToggle />
             <button
               onClick={logout}
               title="Sign out"

@@ -19,20 +19,56 @@ model User {
   @@map("users")
 }
 
-model Asset {
-  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  originalName  String         @map("original_name")
-  mimeType      String?        @map("mime_type")
-  sizeBytes     BigInt?        @map("size_bytes")
-  storageKey    String         @unique @map("storage_key")
-  assetType     String?        @map("asset_type")
-  thumbnailKey  String?        @map("thumbnail_key")
-  description   String?        @map("description")
-  uploadedAt    DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  tags          AssetTag[]
-  notifications Notification[]
-  versions      AssetVersion[]
+model Category {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String        @unique
+  slug          String        @unique
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  subcategories Subcategory[]
+  assets        Asset[]
 
+  @@map("categories")
+}
+
+model Subcategory {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId String    @map("category_id") @db.Uuid
+  name       String
+  slug       String
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category   Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  assets     Asset[]
+
+  @@unique([categoryId, slug])
+  @@map("subcategories")
+}
+
+model Asset {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  originalName    String         @map("original_name")
+  mimeType        String?        @map("mime_type")
+  sizeBytes       BigInt?        @map("size_bytes")
+  storageKey      String         @unique @map("storage_key")
+  assetType       String?        @map("asset_type")
+  thumbnailKey    String?        @map("thumbnail_key")
+  description     String?        @map("description")
+  uploadedAt      DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  categoryId      String?        @map("category_id") @db.Uuid
+  subcategoryId   String?        @map("subcategory_id") @db.Uuid
+  license         String?
+  resolutionW     Int?           @map("resolution_w")
+  resolutionH     Int?           @map("resolution_h")
+  durationSeconds Float?         @map("duration_seconds")
+  tags            AssetTag[]
+  notifications   Notification[]
+  versions        AssetVersion[]
+  category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([subcategoryId])
   @@map("assets")
 }
 

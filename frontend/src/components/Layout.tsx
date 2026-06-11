@@ -237,7 +237,7 @@ export function Layout({ page, onNavigate, children }: Props) {
             {subcategories.map((sub) => (
               <button
                 key={sub.id}
-                onClick={() => setSelectedSubcategoryId(sub.id)}
+                onClick={() => setSelectedSubcategoryId(selectedSubcategoryId === sub.id ? null : sub.id)}
                 className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-all border whitespace-nowrap ${
                   selectedSubcategoryId === sub.id
                     ? 'bg-accent text-white border-accent'

@@ -64,6 +64,9 @@ export interface ListFilesParams {
   tags?: string[];
   assetType?: string;
   mimeType?: string;
+  categoryId?: string;
+  subcategoryId?: string;
+  format?: string;
   limit?: number;
 }
 
@@ -72,6 +75,9 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.q) p.q = params.q;
   if (params?.assetType) p.assetType = params.assetType;
   if (params?.mimeType) p.mimeType = params.mimeType;
+  if (params?.categoryId) p.categoryId = params.categoryId;
+  if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
+  if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
   if (params?.tags?.length) p.tags = params.tags.join(',');
   const { data } = await api.get<Asset[]>('/api/files', { params: p });

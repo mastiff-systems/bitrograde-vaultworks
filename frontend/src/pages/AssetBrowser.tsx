@@ -74,6 +74,8 @@ function getUrlFilters() {
     types: p.getAll('type'),
     tags: p.getAll('tag'),
     sort: (p.get('sort') ?? 'newest') as SortKey,
+    category: p.get('category') ?? null,
+    subcategory: p.get('subcategory') ?? null,
   };
 }
 
@@ -83,6 +85,8 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   filters.types.forEach((t) => p.append('type', t));
   filters.tags.forEach((t) => p.append('tag', t));
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
+  if (filters.category) p.set('category', filters.category);
+  if (filters.subcategory) p.set('subcategory', filters.subcategory);
   const search = p.toString();
   history.replaceState(null, '', search ? `?${search}` : window.location.pathname);
 }
@@ -783,8 +787,8 @@ export function AssetBrowser() {
     selectedCategoryId,
     selectedSubcategoryId,
     setSearchQuery: setGlobalSearch,
-    setSelectedCategoryId: clearCategory,
-    setSelectedSubcategoryId: clearSubcategory,
+    setSelectedCategoryId,
+    setSelectedSubcategoryId,
   } = useCategoryContext();
   const [debouncedQuery, setDebouncedQuery] = useState(initial.q);
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
@@ -794,6 +798,14 @@ export function AssetBrowser() {
   const categoryMap = useMemo(() => {
     const m: Record<string, string> = {};
     for (const c of categories) m[c.id] = c.name;
+    return m;
+  }, [categories]);
+
+  const subcategoryMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of categories) {
+      for (const s of c.subcategories) m[s.id] = s.name;
+    }
     return m;
   }, [categories]);
 
@@ -817,6 +829,24 @@ export function AssetBrowser() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQuery]);
 
+  // Restore category/subcategory from URL once categories are loaded
+  const urlRestoredRef = useRef(false);
+  useEffect(() => {
+    if (urlRestoredRef.current || categories.length === 0) return;
+    const { category: catId, subcategory: subId } = initial;
+    if (catId) {
+      const cat = categories.find((c) => c.id === catId);
+      if (cat) {
+        setSelectedCategoryId(catId);
+        if (subId) {
+          const sub = cat.subcategories.find((s) => s.id === subId);
+          if (sub) setSelectedSubcategoryId(subId);
+        }
+      }
+    }
+    urlRestoredRef.current = true;
+  }, [categories]);
+
   // Auto-switch to relevance sort when search becomes active
   useEffect(() => {
     if (debouncedQuery && sort === 'newest') setSort('relevance');
@@ -825,8 +855,8 @@ export function AssetBrowser() {
 
   // Sync URL
   useEffect(() => {
-    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort });
-  }, [debouncedQuery, selectedTypes, selectedTags, sort]);
+    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
+  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
 
 
   // Load tags
@@ -843,11 +873,13 @@ export function AssetBrowser() {
       // Pass single type to API; multi-type handled client-side below
       assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
+      categoryId: selectedCategoryId ?? undefined,
+      subcategoryId: selectedSubcategoryId ?? undefined,
     })
       .then(setAssets)
       .catch(() => setError('Failed to load assets.'))
       .finally(() => setLoading(false));
-  }, [debouncedQuery, selectedTypes.join(','), selectedTags.join(',')]);
+  }, [debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -867,8 +899,8 @@ export function AssetBrowser() {
 
   function clearFilters() {
     setGlobalSearch('');
-    clearCategory(null);
-    clearSubcategory(null);
+    setSelectedCategoryId(null);
+    setSelectedSubcategoryId(null);
     setSelectedTypes([]);
     setSelectedTags([]);
     setSort('newest');
@@ -1057,6 +1089,28 @@ export function AssetBrowser() {
             <span className="text-xs text-content-muted">
               {loading ? '…' : `${displayed.length} ${displayed.length === 1 ? 'asset' : 'assets'}`}
             </span>
+            {selectedCategoryId && (
+              <button
+                onClick={() => setSelectedCategoryId(null)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/15 text-accent-light hover:bg-accent/25 transition-colors"
+              >
+                {categoryMap[selectedCategoryId] ?? 'Category'}
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            {selectedSubcategoryId && (
+              <button
+                onClick={() => setSelectedSubcategoryId(null)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent-light hover:bg-accent/20 transition-colors"
+              >
+                {subcategoryMap[selectedSubcategoryId] ?? 'Subcategory'}
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
             {selectedTypes.map((t) => (
               <button
                 key={t}

@@ -34,6 +34,12 @@ export interface Asset {
   description: string | null;
   uploaded_at: string;
   tags: { id: string; name: string }[];
+  category_id?: string | null;
+  subcategory_id?: string | null;
+  license?: string | null;
+  resolution_w?: number | null;
+  resolution_h?: number | null;
+  duration_seconds?: number | null;
 }
 
 export interface AssetVersion {
@@ -96,6 +102,38 @@ export async function uploadFiles(
   return data;
 }
 
+export async function uploadWithMetadata(
+  file: File,
+  meta: {
+    categoryId?: string | null;
+    subcategoryId?: string | null;
+    license?: string | null;
+    description?: string;
+    tags?: string[];
+    resolutionW?: number | null;
+    resolutionH?: number | null;
+    durationSeconds?: number | null;
+  },
+  onProgress?: (pct: number) => void,
+): Promise<Asset> {
+  const form = new FormData();
+  form.append('files', file, file.name);
+  if (meta.categoryId) form.append('category_id', meta.categoryId);
+  if (meta.subcategoryId) form.append('subcategory_id', meta.subcategoryId);
+  if (meta.license) form.append('license', meta.license);
+  if (meta.description?.trim()) form.append('description', meta.description.trim());
+  if (meta.tags && meta.tags.length > 0) form.append('tags', JSON.stringify(meta.tags));
+  if (meta.resolutionW != null) form.append('resolution_w', String(meta.resolutionW));
+  if (meta.resolutionH != null) form.append('resolution_h', String(meta.resolutionH));
+  if (meta.durationSeconds != null) form.append('duration_seconds', String(meta.durationSeconds));
+  const { data } = await api.post<Asset[]>('/api/upload', form, {
+    onUploadProgress: (e) => {
+      if (e.total && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    },
+  });
+  return data[0];
+}
+
 export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
@@ -122,18 +160,23 @@ export async function uploadVersion(
   return data;
 }
 
+function withToken(path: string): string {
+  const token = localStorage.getItem(TOKEN_KEY);
+  return token ? `${path}?token=${encodeURIComponent(token)}` : path;
+}
+
 export function versionDownloadUrl(assetId: string, versionId: string): string {
-  return `/api/files/${assetId}/versions/${versionId}/download`;
+  return withToken(`/api/files/${assetId}/versions/${versionId}/download`);
 }
 
 export function downloadUrl(id: string): string {
-  return `/api/files/${id}/download`;
+  return withToken(`/api/files/${id}/download`);
 }
 
 export function streamUrl(id: string): string {
-  return `/api/files/${id}/stream`;
+  return withToken(`/api/files/${id}/stream`);
 }
 
 export function thumbnailUrl(id: string): string {
-  return `/api/files/${id}/thumbnail`;
+  return withToken(`/api/files/${id}/thumbnail`);
 }

@@ -10,6 +10,8 @@ const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
   subcategory_id: z.string().uuid().optional(),
   license: z.string().max(255).optional(),
+  description: z.string().max(2000).optional(),
+  tags: z.array(z.string().max(100)).max(20).optional(),
   resolution_w: z.number().int().positive().optional(),
   resolution_h: z.number().int().positive().optional(),
   duration_seconds: z.number().min(0).optional(),
@@ -22,6 +24,10 @@ function coerceMeta(fields: Record<string, string>): UploadMeta {
   if (fields.category_id) raw.category_id = fields.category_id;
   if (fields.subcategory_id) raw.subcategory_id = fields.subcategory_id;
   if (fields.license) raw.license = fields.license;
+  if (fields.description) raw.description = fields.description;
+  if (fields.tags) {
+    try { raw.tags = JSON.parse(fields.tags); } catch { /* ignore invalid JSON */ }
+  }
   if (fields.resolution_w) raw.resolution_w = parseInt(fields.resolution_w, 10);
   if (fields.resolution_h) raw.resolution_h = parseInt(fields.resolution_h, 10);
   if (fields.duration_seconds) raw.duration_seconds = parseFloat(fields.duration_seconds);
@@ -149,6 +155,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       }
 
       let asset;
+      let tagRecords: Array<{ id: string; name: string }> = [];
       try {
         asset = await prisma.asset.create({
           data: {
@@ -159,6 +166,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             storageKey,
             assetType,
             thumbnailKey,
+            description: meta.description,
             categoryId: meta.category_id,
             subcategoryId: meta.subcategory_id,
             license: meta.license,
@@ -174,6 +182,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             assetType: true,
             thumbnailKey: true,
             uploadedAt: true,
+            description: true,
             categoryId: true,
             subcategoryId: true,
             license: true,
@@ -182,6 +191,20 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             durationSeconds: true,
           },
         });
+
+        if (meta.tags && meta.tags.length > 0) {
+          const tagNames = [...new Set(meta.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+          if (tagNames.length > 0) {
+            await prisma.$transaction(async (tx) => {
+              for (const name of tagNames) {
+                await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+              }
+              const tags = await tx.tag.findMany({ where: { name: { in: tagNames } }, select: { id: true, name: true } });
+              await tx.assetTag.createMany({ data: tags.map((t) => ({ assetId: id, tagId: t.id })) });
+              tagRecords = [...tags];
+            });
+          }
+        }
       } catch (err) {
         await deleteFromS3(storageKey).catch(() => {});
         if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
@@ -196,6 +219,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         asset_type: asset.assetType,
         thumbnail_key: asset.thumbnailKey,
         uploaded_at: asset.uploadedAt,
+        description: asset.description,
+        tags: tagRecords,
         category_id: asset.categoryId,
         subcategory_id: asset.subcategoryId,
         license: asset.license,

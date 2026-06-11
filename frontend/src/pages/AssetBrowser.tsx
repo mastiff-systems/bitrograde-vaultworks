@@ -18,6 +18,7 @@ import {
 import { AudioPreview } from '../components/AudioPreview.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
+import { UploadWizard } from '../components/UploadWizard/index.js';
 
 // --- Helpers ---
 
@@ -763,6 +764,7 @@ export function AssetBrowser() {
 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [showWizard, setShowWizard] = useState(false);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
@@ -859,6 +861,11 @@ export function AssetBrowser() {
     noClick: true,
     noKeyboard: true,
   });
+
+  function handleWizardComplete(asset: Asset) {
+    setAssets((prev) => [asset, ...prev]);
+    listTags().then(setAllTags).catch(() => {});
+  }
 
   function handleAssetUpdate(updated: Asset) {
     if (!updated.id) {
@@ -1003,7 +1010,7 @@ export function AssetBrowser() {
               ))}
             </select>
 
-            <button onClick={open} disabled={uploading} className="btn-primary py-2">
+            <button onClick={() => setShowWizard(true)} disabled={uploading} className="btn-primary py-2">
               {uploading ? (
                 <>
                   <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -1077,7 +1084,7 @@ export function AssetBrowser() {
           {!loading && assets.length === 0 && !hasFilters && (
             <div
               className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-border rounded-2xl cursor-pointer hover:border-accent/40 transition-colors"
-              onClick={open}
+              onClick={() => setShowWizard(true)}
             >
               <div className="w-16 h-16 rounded-2xl bg-surface-3 flex items-center justify-center mb-5">
                 <svg className="w-8 h-8 text-content-muted" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -1089,7 +1096,7 @@ export function AssetBrowser() {
                 Drop files here or click Upload to add your first assets. Supports 3D models, audio, images, and more.
               </p>
               <button
-                onClick={(e) => { e.stopPropagation(); open(); }}
+                onClick={(e) => { e.stopPropagation(); setShowWizard(true); }}
                 className="btn-primary mt-5"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1133,6 +1140,13 @@ export function AssetBrowser() {
           )}
         </div>
       </div>
+
+      {/* Upload wizard */}
+      <UploadWizard
+        open={showWizard}
+        onClose={() => setShowWizard(false)}
+        onComplete={handleWizardComplete}
+      />
 
       {/* Detail modal */}
       {detailAsset && (

@@ -51,7 +51,7 @@ describe('GET /api/tags', () => {
 
   it('returns tags sorted by name with asset counts', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
     const tag = await prisma.tag.create({ data: { name: 'background' } });
     await prisma.tag.create({ data: { name: 'animated' } });
@@ -149,7 +149,7 @@ describe('DELETE /api/tags/:id', () => {
 
   it('cascades deletion — removes asset associations', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
     const tag = await prisma.tag.create({ data: { name: 'cascade-test' } });
     await prisma.assetTag.create({ data: { assetId: asset.id, tagId: tag.id } });
@@ -168,7 +168,7 @@ describe('DELETE /api/tags/:id', () => {
 describe('PUT /api/files/:id/tags', () => {
   it('sets tags on an asset and auto-creates new tags', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
 
     const res = await request(app.server)
@@ -187,7 +187,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('replaces existing tags on second call', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'texture' },
+      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'image' },
     });
 
     await request(app.server)
@@ -207,7 +207,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('clears tags when passed empty array', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'texture' },
+      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'image' },
     });
     await request(app.server)
       .put(`/api/files/${asset.id}/tags`)
@@ -225,7 +225,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('normalizes tag names to lowercase', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'texture' },
+      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'image' },
     });
 
     const res = await request(app.server)
@@ -249,7 +249,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('returns 401 without auth', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'x.png', storageKey: 'assets/5/x.png', assetType: 'texture' },
+      data: { originalName: 'x.png', storageKey: 'assets/5/x.png', assetType: 'image' },
     });
     const res = await request(app.server)
       .put(`/api/files/${asset.id}/tags`)
@@ -265,10 +265,10 @@ describe('GET /api/files filtering', () => {
   beforeEach(async () => {
     const assets = await prisma.asset.createMany({
       data: [
-        { originalName: 'hero.png', storageKey: 'assets/a/hero.png', assetType: 'texture', mimeType: 'image/png' },
+        { originalName: 'hero.png', storageKey: 'assets/a/hero.png', assetType: 'image', mimeType: 'image/png' },
         { originalName: 'enemy.png', storageKey: 'assets/b/enemy.png', assetType: 'sprite', mimeType: 'image/png' },
         { originalName: 'bgm.mp3', storageKey: 'assets/c/bgm.mp3', assetType: 'audio', mimeType: 'audio/mpeg' },
-        { originalName: 'idle.gltf', storageKey: 'assets/d/idle.gltf', assetType: '3d_model', mimeType: 'model/gltf+json' },
+        { originalName: 'idle.gltf', storageKey: 'assets/d/idle.gltf', assetType: '3d', mimeType: 'model/gltf+json' },
       ],
     });
 
@@ -343,7 +343,7 @@ describe('GET /api/files filtering', () => {
 
   it('response includes tags array on each asset', async () => {
     const res = await request(app.server)
-      .get('/api/files?assetType=texture')
+      .get('/api/files?assetType=image')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);

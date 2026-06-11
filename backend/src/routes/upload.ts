@@ -49,11 +49,11 @@ function detectAssetType(filename: string, mime: string): string {
   const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
   if (mime.startsWith('audio/') || AUDIO_EXTS.has(ext)) return 'audio';
   if (mime.startsWith('video/') || VIDEO_EXTS.has(ext)) return 'video';
-  if (mime.startsWith('model/') || MODEL_EXTS.has(ext)) return '3d_model';
+  if (mime.startsWith('model/') || MODEL_EXTS.has(ext)) return '3d';
   if (mime.startsWith('font/') || FONT_EXTS.has(ext)) return 'font';
   if (mime === 'application/pdf' || DOC_EXTS.has(ext)) return 'document';
   if (SCRIPT_EXTS.has(ext)) return 'script';
-  if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'texture';
+  if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
   return 'other';
 }
 
@@ -142,7 +142,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       await uploadToS3(storageKey, buffer, mime);
 
       let thumbnailKey: string | undefined;
-      if (assetType === 'texture' || assetType === 'sprite') {
+      if (assetType === 'image' || assetType === 'sprite') {
         const thumbBuffer = await generateThumbnail(buffer);
         if (thumbBuffer) {
           thumbnailKey = `assets/${id}/thumbnail.webp`;

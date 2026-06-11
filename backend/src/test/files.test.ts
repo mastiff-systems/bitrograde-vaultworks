@@ -47,7 +47,7 @@ describe('GET /api/files', () => {
     await prisma.asset.createMany({
       data: [
         { originalName: 'first.txt', storageKey: 'assets/1/first.txt', assetType: 'other' },
-        { originalName: 'second.png', storageKey: 'assets/2/second.png', assetType: 'texture' },
+        { originalName: 'second.png', storageKey: 'assets/2/second.png', assetType: 'image' },
       ],
     });
 
@@ -74,7 +74,7 @@ describe('GET /api/files/:id', () => {
         mimeType: 'image/png',
         sizeBytes: 1024n,
         storageKey: 'assets/test/test.png',
-        assetType: 'texture',
+        assetType: 'image',
       },
     });
 
@@ -85,7 +85,7 @@ describe('GET /api/files/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(asset.id);
     expect(res.body.original_name).toBe('test.png');
-    expect(res.body.asset_type).toBe('texture');
+    expect(res.body.asset_type).toBe('image');
   });
 
   it('returns 404 for unknown id', async () => {
@@ -119,7 +119,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       data: {
         originalName: 'background_tile.png',
         storageKey: 'assets/s/background_tile.png',
-        assetType: 'texture',
+        assetType: 'image',
         mimeType: 'image/png',
         description: 'dungeon floor tile',
       },
@@ -207,13 +207,13 @@ describe('GET /api/files?q= (fuzzy search)', () => {
   });
 
   it('combined with assetType filter narrows results', async () => {
-    // 'hero' matches hero_idle.png (sprite) and could match others; filter to texture
+    // 'background' matches background_tile.png (image); filter to image
     const res = await request(app.server)
-      .get('/api/files?q=background&assetType=texture')
+      .get('/api/files?q=background&assetType=image')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.every((a: { asset_type: string }) => a.asset_type === 'texture')).toBe(true);
+    expect(res.body.every((a: { asset_type: string }) => a.asset_type === 'image')).toBe(true);
     expect(res.body.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
   });
 
@@ -282,7 +282,7 @@ describe('DELETE /api/files/:id', () => {
         originalName: 'img.png',
         storageKey: 'assets/img/img.png',
         thumbnailKey: 'assets/img/thumbnail.webp',
-        assetType: 'texture',
+        assetType: 'image',
       },
     });
 
@@ -308,5 +308,23 @@ describe('DELETE /api/files/:id', () => {
 
     const res = await request(app.server).delete(`/api/files/${asset.id}`);
     expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/files query validation', () => {
+  it('returns 400 when categoryId is not a valid UUID', async () => {
+    const res = await request(app.server)
+      .get('/api/files?categoryId=not-a-uuid')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when limit is out of range', async () => {
+    const res = await request(app.server)
+      .get('/api/files?limit=0')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
   });
 });

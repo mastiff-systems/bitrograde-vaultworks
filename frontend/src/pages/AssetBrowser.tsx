@@ -88,7 +88,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
   const search = p.toString();
-  history.replaceState(null, '', search ? `?${search}` : window.location.pathname);
+  history.pushState(null, '', search ? `?${search}` : window.location.pathname);
 }
 
 // --- Types ---
@@ -829,6 +829,26 @@ export function AssetBrowser() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQuery]);
 
+  // Track popstate restores to avoid pushing a duplicate history entry
+  const isRestoringFromHistory = useRef(false);
+
+  // Restore filter state on browser back/forward
+  useEffect(() => {
+    function handlePopState() {
+      const filters = getUrlFilters();
+      isRestoringFromHistory.current = true;
+      setGlobalSearch(filters.q);
+      setDebouncedQuery(filters.q);
+      setSelectedTypes(filters.types);
+      setSelectedTags(filters.tags);
+      setSort(filters.sort);
+      setSelectedCategoryId(filters.category);
+      setSelectedSubcategoryId(filters.subcategory);
+    }
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   // Restore category/subcategory from URL once categories are loaded
   const urlRestoredRef = useRef(false);
   useEffect(() => {
@@ -853,8 +873,12 @@ export function AssetBrowser() {
     if (!debouncedQuery && sort === 'relevance') setSort('newest');
   }, [debouncedQuery]);
 
-  // Sync URL
+  // Sync URL (skip during popstate restores to avoid creating a duplicate forward entry)
   useEffect(() => {
+    if (isRestoringFromHistory.current) {
+      isRestoringFromHistory.current = false;
+      return;
+    }
     pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
   }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
 

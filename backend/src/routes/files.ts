@@ -90,7 +90,8 @@ const assetSelect = {
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/files', async (req, reply) => {
     const query = FilesQuerySchema.safeParse(req.query);
-    const params = query.success ? query.data : {};
+    if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
+    const params = query.data;
 
     const limit = params.limit ?? 50;
     const tagNames = params.tags

@@ -38,7 +38,7 @@ beforeEach(async () => {
 describe('GET /api/files/:id/versions', () => {
   it('returns empty array when no versions exist', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
 
     const res = await request(app.server)
@@ -51,7 +51,7 @@ describe('GET /api/files/:id/versions', () => {
 
   it('returns versions in ascending order', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
     const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
 
@@ -82,7 +82,7 @@ describe('GET /api/files/:id/versions', () => {
 
   it('returns 401 without auth', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'x.png', storageKey: 'assets/2/x.png', assetType: 'texture' },
+      data: { originalName: 'x.png', storageKey: 'assets/2/x.png', assetType: 'image' },
     });
     const res = await request(app.server).get(`/api/files/${asset.id}/versions`);
     expect(res.status).toBe(401);
@@ -97,7 +97,7 @@ describe('POST /api/files/:id/versions', () => {
       data: {
         originalName: 'hero.png',
         storageKey: 'assets/1/hero.png',
-        assetType: 'texture',
+        assetType: 'image',
         mimeType: 'image/png',
         sizeBytes: 1024n,
       },
@@ -122,7 +122,7 @@ describe('POST /api/files/:id/versions', () => {
 
   it('increments version number on subsequent upload', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
     const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
 
@@ -147,7 +147,7 @@ describe('POST /api/files/:id/versions', () => {
 
   it('stores the optional commit message', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
 
     const res = await request(app.server)
@@ -168,7 +168,7 @@ describe('POST /api/files/:id/versions', () => {
       data: {
         originalName: 'hero.png',
         storageKey: 'assets/1/hero.png',
-        assetType: 'texture',
+        assetType: 'image',
         sizeBytes: 500n,
       },
     });
@@ -188,7 +188,7 @@ describe('POST /api/files/:id/versions', () => {
 
   it('returns 4xx without a file', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'x.png', storageKey: 'assets/2/x.png', assetType: 'texture' },
+      data: { originalName: 'x.png', storageKey: 'assets/2/x.png', assetType: 'image' },
     });
 
     // Without multipart content-type Fastify returns 406; with multipart but no file we get 400
@@ -212,7 +212,7 @@ describe('POST /api/files/:id/versions', () => {
 
   it('returns 401 without auth', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'x.png', storageKey: 'assets/3/x.png', assetType: 'texture' },
+      data: { originalName: 'x.png', storageKey: 'assets/3/x.png', assetType: 'image' },
     });
     const res = await request(app.server)
       .post(`/api/files/${asset.id}/versions`)
@@ -226,7 +226,7 @@ describe('POST /api/files/:id/versions', () => {
 describe('GET /api/files/:id/versions/:versionId/download', () => {
   it('streams the versioned file', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'texture' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
     });
     const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
 
@@ -242,17 +242,17 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
 
     const res = await request(app.server)
       .get(`/api/files/${asset.id}/versions/${version.id}/download`)
-      .set('Authorization', `Bearer ${token}`);
+      .query({ token });
 
     expect(res.status).toBe(200);
   });
 
   it('returns 404 for version belonging to different asset', async () => {
     const a1 = await prisma.asset.create({
-      data: { originalName: 'a.png', storageKey: 'assets/a/a.png', assetType: 'texture' },
+      data: { originalName: 'a.png', storageKey: 'assets/a/a.png', assetType: 'image' },
     });
     const a2 = await prisma.asset.create({
-      data: { originalName: 'b.png', storageKey: 'assets/b/b.png', assetType: 'texture' },
+      data: { originalName: 'b.png', storageKey: 'assets/b/b.png', assetType: 'image' },
     });
     const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
 
@@ -268,14 +268,14 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
     // Request version of a1 but under a2's URL
     const res = await request(app.server)
       .get(`/api/files/${a2.id}/versions/${version.id}/download`)
-      .set('Authorization', `Bearer ${token}`);
+      .query({ token });
 
     expect(res.status).toBe(404);
   });
 
   it('returns 401 without auth', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'x.png', storageKey: 'assets/x/x.png', assetType: 'texture' },
+      data: { originalName: 'x.png', storageKey: 'assets/x/x.png', assetType: 'image' },
     });
     const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
     const version = await prisma.assetVersion.create({

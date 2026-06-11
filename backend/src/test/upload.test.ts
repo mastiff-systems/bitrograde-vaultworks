@@ -93,7 +93,7 @@ describe('POST /api/upload', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body[0].asset_type).toBe('3d_model');
+    expect(res.body[0].asset_type).toBe('3d');
   });
 
   it('generates thumbnail for image uploads', async () => {
@@ -106,7 +106,7 @@ describe('POST /api/upload', () => {
       });
 
     expect(res.status).toBe(201);
-    expect(res.body[0].asset_type).toBe('texture');
+    expect(res.body[0].asset_type).toBe('image');
     expect(res.body[0].thumbnail_key).toBeTruthy();
   });
 

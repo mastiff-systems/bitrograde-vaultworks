@@ -801,6 +801,115 @@ function AssetDetailModal({
   );
 }
 
+// --- Asset List Row (list view) ---
+
+function AssetListRow({
+  asset,
+  categoryName,
+  onTagClick,
+  activeTagFilters,
+  onClick,
+  onDetails,
+}: {
+  asset: Asset;
+  categoryName?: string;
+  onTagClick: (name: string) => void;
+  activeTagFilters: string[];
+  onClick: () => void;
+  onDetails: () => void;
+}) {
+  const ext = asset.original_name.includes('.') ? asset.original_name.split('.').pop()!.toLowerCase() : null;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2 cursor-pointer transition-colors group outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+    >
+      {/* Thumbnail / icon */}
+      <div className="w-10 h-10 rounded-lg bg-surface-3 flex-shrink-0 overflow-hidden flex items-center justify-center">
+        {asset.asset_type === 'image' && asset.thumbnail_key ? (
+          <img src={`/api/files/${asset.id}/thumbnail`} alt="" className="w-full h-full object-cover" loading="lazy" />
+        ) : (
+          <AssetIcon type={asset.asset_type} className="w-5 h-5" />
+        )}
+      </div>
+
+      {/* Name + ext badge */}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-content-primary truncate" title={asset.original_name}>
+          {asset.original_name}
+        </p>
+        <div className="flex items-center gap-2 mt-0.5">
+          {ext && (
+            <span className="text-[10px] font-mono text-content-muted bg-surface-3 px-1.5 py-0.5 rounded uppercase">{ext}</span>
+          )}
+          {categoryName && (
+            <span className="text-[10px] text-content-muted">{categoryName}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Tags */}
+      <div className="hidden md:flex items-center gap-1 flex-shrink-0 max-w-[160px]" onClick={(e) => e.stopPropagation()}>
+        {asset.tags?.slice(0, 2).map((tag) => {
+          const p = tagPalette(tag.name);
+          const active = activeTagFilters.includes(tag.name);
+          return (
+            <button
+              key={tag.id}
+              onClick={() => onTagClick(tag.name)}
+              className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${p.bg} ${p.text} ${active ? 'ring-1 ring-offset-0' : 'hover:opacity-80'} truncate max-w-[72px]`}
+            >
+              {tag.name}
+            </button>
+          );
+        })}
+        {(asset.tags?.length ?? 0) > 2 && (
+          <span className="text-[10px] text-content-muted">+{(asset.tags?.length ?? 0) - 2}</span>
+        )}
+      </div>
+
+      {/* Size */}
+      <span className="hidden sm:block text-xs text-content-muted tabular-nums flex-shrink-0 w-16 text-right">
+        {formatBytes(asset.size_bytes ?? 0)}
+      </span>
+
+      {/* Date */}
+      <span className="hidden lg:block text-xs text-content-muted flex-shrink-0 w-24 text-right">
+        {formatDate(asset.uploaded_at)}
+      </span>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onClick}
+          className="btn-ghost btn-sm p-1.5"
+          aria-label="Preview"
+          title="Preview"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+        <button
+          onClick={onDetails}
+          className="btn-ghost btn-sm p-1.5"
+          aria-label="Details"
+          title="Details"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // --- Main AssetBrowser ---
 
 export function AssetBrowser() {
@@ -818,6 +927,7 @@ export function AssetBrowser() {
   const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sort, setSort] = useState<SortKey>(initial.sort);
 
   const categoryMap = useMemo(() => {
@@ -1138,6 +1248,30 @@ export function AssetBrowser() {
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
           <div className="flex items-center gap-2 ml-auto">
+            {/* View toggle */}
+            <div className="flex items-center border border-border rounded-lg overflow-hidden">
+              <button
+                onClick={() => setViewMode('grid')}
+                aria-label="Card view"
+                title="Card view"
+                className={`p-1.5 transition-colors ${viewMode === 'grid' ? 'bg-surface-3 text-content-primary' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                aria-label="List view"
+                title="List view"
+                className={`p-1.5 transition-colors ${viewMode === 'list' ? 'bg-surface-3 text-content-primary' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+              </button>
+            </div>
+
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value as SortKey)}
@@ -1283,11 +1417,36 @@ export function AssetBrowser() {
             </div>
           )}
 
-          {/* Asset grid */}
-          {!loading && displayed.length > 0 && (
+          {/* Asset grid / list */}
+          {!loading && displayed.length > 0 && viewMode === 'grid' && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {displayed.map((asset) => (
                 <AssetCard
+                  key={asset.id}
+                  asset={asset}
+                  categoryName={asset.category_id ? categoryMap[asset.category_id] : undefined}
+                  onTagClick={toggleTag}
+                  activeTagFilters={selectedTags}
+                  onClick={() => setPreviewAsset(asset)}
+                  onDetails={() => setDetailAsset(asset)}
+                />
+              ))}
+            </div>
+          )}
+
+          {!loading && displayed.length > 0 && viewMode === 'list' && (
+            <div className="card overflow-hidden">
+              {/* List header */}
+              <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface-1 text-[10px] font-semibold uppercase tracking-widest text-content-muted">
+                <div className="w-10 flex-shrink-0" />
+                <div className="flex-1">Name</div>
+                <div className="hidden md:block w-40">Tags</div>
+                <div className="hidden sm:block w-16 text-right">Size</div>
+                <div className="hidden lg:block w-24 text-right">Date</div>
+                <div className="w-16" />
+              </div>
+              {displayed.map((asset) => (
+                <AssetListRow
                   key={asset.id}
                   asset={asset}
                   categoryName={asset.category_id ? categoryMap[asset.category_id] : undefined}

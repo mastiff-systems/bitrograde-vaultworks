@@ -51,7 +51,6 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
               <p className="text-[10px] text-content-muted capitalize">{user?.role}</p>
             </div>
 
-            {/* Profile — all users */}
             <button
               onClick={() => { setOpen(false); onNavigate('profile'); }}
               className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
@@ -66,7 +65,6 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
               Profile
             </button>
 
-            {/* Admin — admins only */}
             {isAdmin && (
               <button
                 onClick={() => { setOpen(false); onNavigate('admin'); }}
@@ -84,7 +82,6 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
             )}
 
             <div className="border-t border-border/50 mt-1 pt-1">
-              {/* Theme toggle as text */}
               <button
                 onClick={toggleTheme}
                 className="w-full text-left px-3 py-2 text-sm text-content-secondary hover:text-content-primary hover:bg-surface-3 transition-colors flex items-center gap-2"
@@ -127,12 +124,14 @@ export function Layout({ page, onNavigate, children }: Props) {
 
       {/* ── Top Navigation ── */}
       <header className="flex-shrink-0 bg-surface-1 border-b border-border">
-        <div className="flex items-center gap-2 px-4 h-14">
 
-          {/* Logo */}
+        {/* Main bar: Logo | centered search | Controls */}
+        <div className="relative flex items-center px-4 h-14">
+
+          {/* Logo — left */}
           <button
             onClick={() => { onNavigate('dashboard'); setSelectedCategoryId(null); }}
-            className="flex items-center gap-2 flex-shrink-0 mr-6 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
+            className="flex items-center gap-2 flex-shrink-0 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
           >
             <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
@@ -142,78 +141,80 @@ export function Layout({ page, onNavigate, children }: Props) {
             <span className="text-sm font-semibold text-content-primary hidden sm:block leading-none">Vaultworks</span>
           </button>
 
-          {/* Category tabs — dashboard only */}
+          {/* Centered search — dashboard only, absolute in header */}
           {page === 'dashboard' && (
-            <nav
-              className="flex items-center gap-0.5 overflow-x-auto flex-1 min-w-0 py-1"
-              aria-label="Asset categories"
-              style={{ scrollbarWidth: 'none' }}
-            >
-              <button
-                onClick={() => setSelectedCategoryId(null)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                  selectedCategoryId === null
-                    ? 'bg-accent text-white'
-                    : 'text-content-secondary hover:bg-surface-3 hover:text-content-primary'
-                }`}
-              >
-                All
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategoryId(cat.id)}
-                  className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
-                    selectedCategoryId === cat.id
-                      ? 'bg-accent text-white'
-                      : 'text-content-secondary hover:bg-surface-3 hover:text-content-primary'
-                  }`}
+            <div className="absolute left-1/2 -translate-x-1/2 w-48 sm:w-64 lg:w-96 pointer-events-none">
+              <div className="relative pointer-events-auto">
+                <svg
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
+                  fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"
                 >
-                  {cat.name}
-                </button>
-              ))}
-            </nav>
-          )}
-
-          {/* Spacer on non-dashboard pages */}
-          {page !== 'dashboard' && <div className="flex-1" />}
-
-          {/* Global search — dashboard only */}
-          {page === 'dashboard' && (
-            <div className="relative flex-shrink-0 w-44 sm:w-56 lg:w-72">
-              <svg
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
-                fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-              </svg>
-              <input
-                className="input pl-8 py-1.5 text-sm h-8"
-                placeholder="Search assets…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                aria-label="Search assets"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  aria-label="Clear search"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-content-muted hover:text-content-primary transition-colors"
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                </svg>
+                <input
+                  className="input pl-8 py-1.5 text-sm h-8 w-full"
+                  placeholder="Search assets…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label="Search assets"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Clear search"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-content-muted hover:text-content-primary transition-colors"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
+          {/* Spacer — pushes controls to the right */}
+          <div className="flex-1" />
+
           {/* Right controls */}
-          <div className="flex items-center gap-1 flex-shrink-0 ml-1">
+          <div className="flex items-center gap-1 flex-shrink-0">
             <NotificationBell onNavigateDashboard={() => onNavigate('dashboard')} />
             <ProfileDropdown page={page} onNavigate={onNavigate} />
           </div>
         </div>
+
+        {/* Category tabs row — dashboard only */}
+        {page === 'dashboard' && (
+          <nav
+            className="flex items-center gap-0.5 px-4 pb-2 overflow-x-auto bg-surface-1"
+            aria-label="Asset categories"
+            style={{ scrollbarWidth: 'none' }}
+          >
+            <button
+              onClick={() => setSelectedCategoryId(null)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                selectedCategoryId === null
+                  ? 'bg-accent text-white'
+                  : 'text-content-secondary hover:bg-surface-3 hover:text-content-primary'
+              }`}
+            >
+              All
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategoryId(cat.id)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                  selectedCategoryId === cat.id
+                    ? 'bg-accent text-white'
+                    : 'text-content-secondary hover:bg-surface-3 hover:text-content-primary'
+                }`}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </nav>
+        )}
       </header>
 
       {/* ── Subcategory chip bar ── */}

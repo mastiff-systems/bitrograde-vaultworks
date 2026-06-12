@@ -67,11 +67,17 @@ function tagPalette(name: string) {
 
 // --- URL state ---
 
+function getExtension(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  if (dot < 1) return 'unknown';
+  return filename.slice(dot + 1).toLowerCase();
+}
+
 function getUrlFilters() {
   const p = new URLSearchParams(window.location.search);
   return {
     q: p.get('q') ?? '',
-    types: p.getAll('type'),
+    exts: p.getAll('ext'),
     tags: p.getAll('tag'),
     sort: (p.get('sort') ?? 'newest') as SortKey,
     category: p.get('category') ?? null,
@@ -82,7 +88,7 @@ function getUrlFilters() {
 function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   const p = new URLSearchParams();
   if (filters.q) p.set('q', filters.q);
-  filters.types.forEach((t) => p.append('type', t));
+  filters.exts.forEach((e) => p.append('ext', e));
   filters.tags.forEach((t) => p.append('tag', t));
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
   if (filters.category) p.set('category', filters.category);
@@ -104,6 +110,26 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'smallest', label: 'Smallest' },
   { value: 'relevance', label: 'Best match' },
 ];
+
+const EXT_DOT_CLS: Record<string, string> = {
+  obj: 'bg-violet-400',
+  fbx: 'bg-violet-500',
+  gltf: 'bg-violet-300',
+  glb: 'bg-purple-400',
+  mp3: 'bg-cyan-400',
+  wav: 'bg-cyan-500',
+  ogg: 'bg-cyan-300',
+  flac: 'bg-sky-400',
+  png: 'bg-emerald-400',
+  jpg: 'bg-emerald-500',
+  jpeg: 'bg-emerald-500',
+  gif: 'bg-green-400',
+  webp: 'bg-teal-400',
+  svg: 'bg-lime-400',
+  pdf: 'bg-red-400',
+  zip: 'bg-amber-400',
+  unknown: 'bg-content-muted',
+};
 
 function sortAssets(assets: Asset[], sort: SortKey): Asset[] {
   if (sort === 'relevance') return [...assets];
@@ -777,8 +803,6 @@ function AssetDetailModal({
 
 // --- Main AssetBrowser ---
 
-const ASSET_TYPES = ['3d', 'audio', 'image', 'other'] as const;
-
 export function AssetBrowser() {
   const initial = getUrlFilters();
   const {
@@ -791,8 +815,9 @@ export function AssetBrowser() {
     setSelectedSubcategoryId,
   } = useCategoryContext();
   const [debouncedQuery, setDebouncedQuery] = useState(initial.q);
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
+  const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sort, setSort] = useState<SortKey>(initial.sort);
 
   const categoryMap = useMemo(() => {
@@ -839,7 +864,7 @@ export function AssetBrowser() {
       isRestoringFromHistory.current = true;
       setGlobalSearch(filters.q);
       setDebouncedQuery(filters.q);
-      setSelectedTypes(filters.types);
+      setSelectedExts(filters.exts);
       setSelectedTags(filters.tags);
       setSort(filters.sort);
       setSelectedCategoryId(filters.category);
@@ -879,8 +904,8 @@ export function AssetBrowser() {
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
-  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
+    pushUrlFilters({ q: debouncedQuery, exts: selectedExts, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
+  }, [debouncedQuery, selectedExts, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
 
 
   // Load tags
@@ -888,14 +913,24 @@ export function AssetBrowser() {
     listTags().then(setAllTags).catch(() => {});
   }, []);
 
+  // Available file extensions computed from loaded assets (dynamic per taxonomy context)
+  const availableExts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of assets) {
+      const ext = getExtension(a.original_name);
+      counts[ext] = (counts[ext] ?? 0) + 1;
+    }
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([ext, count]) => ({ ext, count }));
+  }, [assets]);
+
   // Load assets on filter change
   useEffect(() => {
     setLoading(true);
     setError(null);
     listFiles({
       q: debouncedQuery || undefined,
-      // Pass single type to API; multi-type handled client-side below
-      assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       categoryId: selectedCategoryId ?? undefined,
       subcategoryId: selectedSubcategoryId ?? undefined,
@@ -903,12 +938,12 @@ export function AssetBrowser() {
       .then(setAssets)
       .catch(() => setError('Failed to load assets.'))
       .finally(() => setLoading(false));
-  }, [debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
+  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
 
   const displayed = useMemo(() => {
     let result = assets;
-    if (selectedTypes.length > 1) {
-      result = result.filter((a) => selectedTypes.includes(a.asset_type));
+    if (selectedExts.length > 0) {
+      result = result.filter((a) => selectedExts.includes(getExtension(a.original_name)));
     }
     if (selectedCategoryId) {
       result = result.filter((a) => a.category_id === selectedCategoryId);
@@ -917,22 +952,22 @@ export function AssetBrowser() {
       result = result.filter((a) => a.subcategory_id === selectedSubcategoryId);
     }
     return sortAssets(result, sort);
-  }, [assets, selectedTypes, selectedCategoryId, selectedSubcategoryId, sort]);
+  }, [assets, selectedExts, selectedCategoryId, selectedSubcategoryId, sort]);
 
-  const hasFilters = !!(debouncedQuery || selectedTypes.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
+  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
 
   function clearFilters() {
     setGlobalSearch('');
     setSelectedCategoryId(null);
     setSelectedSubcategoryId(null);
-    setSelectedTypes([]);
+    setSelectedExts([]);
     setSelectedTags([]);
     setSort('newest');
   }
 
-  function toggleType(type: string) {
-    setSelectedTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
+  function toggleExt(ext: string) {
+    setSelectedExts((prev) =>
+      prev.includes(ext) ? prev.filter((e) => e !== ext) : [...prev, ext],
     );
   }
 
@@ -1001,75 +1036,99 @@ export function AssetBrowser() {
       )}
 
       {/* Filter sidebar */}
-      <aside className="w-60 flex-shrink-0 border-r border-border overflow-y-auto flex flex-col bg-surface-1">
-        <div className="px-4 py-3.5 border-b border-border flex items-center justify-between">
-          <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="text-xs text-accent-light hover:text-accent transition-colors"
-            >
-              Clear all
-            </button>
+      <aside className={`flex-shrink-0 border-r border-border flex flex-col bg-surface-1 transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-10'}`}>
+        {/* Sidebar header with collapse toggle */}
+        <div className={`px-2 py-3.5 border-b border-border flex items-center ${sidebarOpen ? 'justify-between px-4' : 'justify-center'}`}>
+          {sidebarOpen && (
+            <>
+              <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
+              {hasFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="text-xs text-accent-light hover:text-accent transition-colors"
+                >
+                  Clear all
+                </button>
+              )}
+            </>
           )}
+          <button
+            onClick={() => setSidebarOpen((o) => !o)}
+            aria-label={sidebarOpen ? 'Collapse filters' : 'Expand filters'}
+            className={`flex-shrink-0 p-1 rounded text-content-muted hover:text-content-primary hover:bg-surface-3 transition-colors ${sidebarOpen ? '' : 'mx-auto'}`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              {sidebarOpen
+                ? <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                : <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              }
+            </svg>
+          </button>
         </div>
 
-        {/* Type filter */}
-        <div className="px-4 py-3 border-b border-border/50">
-          <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-            Asset type
-          </div>
-          {ASSET_TYPES.map((type) => (
-            <label
-              key={type}
-              className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
-            >
-              <input
-                type="checkbox"
-                checked={selectedTypes.includes(type)}
-                onChange={() => toggleType(type)}
-                className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
-              />
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${TYPE_DOT_CLS[type]}`} />
-              <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1">
-                {TYPE_LABELS[type]}
-              </span>
-            </label>
-          ))}
-        </div>
-
-        {/* Tags filter */}
-        {allTags.length > 0 && (
-          <div className="px-4 py-3">
-            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-              Tags
-            </div>
-            <div className="space-y-0.5 max-h-72 overflow-y-auto">
-              {allTags.map((tag) => {
-                const p = tagPalette(tag.name);
-                return (
+        {sidebarOpen && (
+          <div className="overflow-y-auto flex-1">
+            {/* File type filter — dynamic from loaded assets */}
+            {availableExts.length > 0 && (
+              <div className="px-4 py-3 border-b border-border/50">
+                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+                  File type
+                </div>
+                {availableExts.map(({ ext, count }) => (
                   <label
-                    key={tag.id}
+                    key={ext}
                     className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
                   >
                     <input
                       type="checkbox"
-                      checked={selectedTags.includes(tag.name)}
-                      onChange={() => toggleTag(tag.name)}
-                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                      checked={selectedExts.includes(ext)}
+                      onChange={() => toggleExt(ext)}
+                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
                     />
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
-                    >
-                      {tag.name}
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
+                    <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
+                      .{ext}
                     </span>
-                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
-                      {tag.asset_count}
-                    </span>
+                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
                   </label>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+
+            {/* Tags filter */}
+            {allTags.length > 0 && (
+              <div className="px-4 py-3">
+                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+                  Tags
+                </div>
+                <div className="space-y-0.5 max-h-72 overflow-y-auto">
+                  {allTags.map((tag) => {
+                    const p = tagPalette(tag.name);
+                    return (
+                      <label
+                        key={tag.id}
+                        className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag.name)}
+                          onChange={() => toggleTag(tag.name)}
+                          className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                        />
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
+                        >
+                          {tag.name}
+                        </span>
+                        <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                          {tag.asset_count}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -1135,13 +1194,13 @@ export function AssetBrowser() {
                 </svg>
               </button>
             )}
-            {selectedTypes.map((t) => (
+            {selectedExts.map((ext) => (
               <button
-                key={t}
-                onClick={() => toggleType(t)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-surface-3 text-content-secondary hover:bg-surface-4 transition-colors"
+                key={ext}
+                onClick={() => toggleExt(ext)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-surface-3 text-content-secondary hover:bg-surface-4 transition-colors font-mono"
               >
-                {TYPE_LABELS[t]}
+                .{ext}
                 <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>

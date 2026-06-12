@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext.js';
+import { useTheme } from '../contexts/ThemeContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { NotificationBell } from './NotificationBell.js';
-import { ThemeToggle } from './ThemeToggle.js';
 
-type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy';
+type Page = 'dashboard' | 'admin' | 'profile';
 
 interface Props {
   page: Page;
@@ -14,6 +14,7 @@ interface Props {
 
 function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const isAdmin = user?.role === 'admin';
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -44,57 +45,60 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1.5 z-40 w-48 card py-1 shadow-xl">
+          <div className="absolute right-0 top-full mt-1.5 z-40 w-52 card py-1 shadow-xl">
             <div className="px-3 py-2 border-b border-border/50 mb-1">
               <p className="text-xs font-medium text-content-primary truncate">{user?.email}</p>
               <p className="text-[10px] text-content-muted capitalize">{user?.role}</p>
             </div>
 
+            {/* Profile — all users */}
+            <button
+              onClick={() => { setOpen(false); onNavigate('profile'); }}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                page === 'profile'
+                  ? 'text-accent bg-accent/5'
+                  : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+              </svg>
+              Profile
+            </button>
+
+            {/* Admin — admins only */}
             {isAdmin && (
-              <>
-                <button
-                  onClick={() => { setOpen(false); onNavigate('admin-settings'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-settings'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Settings
-                </button>
-                <button
-                  onClick={() => { setOpen(false); onNavigate('admin-taxonomy'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-taxonomy'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
-                  </svg>
-                  Taxonomy
-                </button>
-                <button
-                  onClick={() => { setOpen(false); onNavigate('admin-users'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-users'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                  </svg>
-                  Users
-                </button>
-              </>
+              <button
+                onClick={() => { setOpen(false); onNavigate('admin'); }}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                  page === 'admin'
+                    ? 'text-accent bg-accent/5'
+                    : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
+                }`}
+              >
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+                </svg>
+                Admin
+              </button>
             )}
 
-            <div className="border-t border-border/50 mt-1">
+            <div className="border-t border-border/50 mt-1 pt-1">
+              {/* Theme toggle as text */}
+              <button
+                onClick={toggleTheme}
+                className="w-full text-left px-3 py-2 text-sm text-content-secondary hover:text-content-primary hover:bg-surface-3 transition-colors flex items-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  {theme === 'dark' ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                  )}
+                </svg>
+                {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+              </button>
+
               <button
                 onClick={() => { setOpen(false); logout(); }}
                 className="w-full text-left px-3 py-2 text-sm text-content-secondary hover:text-danger hover:bg-surface-3 transition-colors flex items-center gap-2"
@@ -128,7 +132,7 @@ export function Layout({ page, onNavigate, children }: Props) {
           {/* Logo */}
           <button
             onClick={() => { onNavigate('dashboard'); setSelectedCategoryId(null); }}
-            className="flex items-center gap-2 flex-shrink-0 mr-1 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
+            className="flex items-center gap-2 flex-shrink-0 mr-6 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
           >
             <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
@@ -207,7 +211,6 @@ export function Layout({ page, onNavigate, children }: Props) {
           {/* Right controls */}
           <div className="flex items-center gap-1 flex-shrink-0 ml-1">
             <NotificationBell onNavigateDashboard={() => onNavigate('dashboard')} />
-            <ThemeToggle />
             <ProfileDropdown page={page} onNavigate={onNavigate} />
           </div>
         </div>

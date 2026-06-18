@@ -143,7 +143,7 @@ export function Layout({ page, onNavigate, children }: Props) {
 
           {/* Centered search — dashboard only, absolute in header */}
           {page === 'dashboard' && (
-            <div className="absolute left-1/2 -translate-x-1/2 w-48 sm:w-64 lg:w-96 pointer-events-none">
+            <div className="absolute left-1/2 -translate-x-1/2 w-56 sm:w-80 lg:w-[480px] pointer-events-none">
               <div className="relative pointer-events-auto">
                 <svg
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
@@ -186,7 +186,7 @@ export function Layout({ page, onNavigate, children }: Props) {
         {/* Category tabs row — dashboard only */}
         {page === 'dashboard' && (
           <nav
-            className="flex items-center gap-0.5 px-4 pb-2 overflow-x-auto bg-surface-1"
+            className="flex items-center justify-center gap-0.5 px-4 pb-2 overflow-x-auto bg-surface-1"
             aria-label="Asset categories"
             style={{ scrollbarWidth: 'none' }}
           >

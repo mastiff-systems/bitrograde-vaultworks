@@ -7,6 +7,7 @@ import { AdminPanel } from './pages/admin/AdminPanel.js';
 import { ProfilePage } from './pages/Profile.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
+import { UploadProvider } from './contexts/UploadContext.js';
 import type { Page } from './components/Layout.js';
 
 function AppShell() {
@@ -37,7 +38,9 @@ export function App() {
   if (!token) return <LoginPage />;
   return (
     <CategoryProvider>
-      <AppShell />
+      <UploadProvider>
+        <AppShell />
+      </UploadProvider>
     </CategoryProvider>
   );
 }

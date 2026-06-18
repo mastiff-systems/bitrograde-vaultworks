@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useAuth } from '../contexts/AuthContext.js';
 import { useTheme } from '../contexts/ThemeContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
+import { useUpload } from '../contexts/UploadContext.js';
 import { NotificationBell } from './NotificationBell.js';
 
 type Page = 'dashboard' | 'admin' | 'profile';
@@ -115,6 +116,7 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
 
 export function Layout({ page, onNavigate, children }: Props) {
   const { categories, selectedCategoryId, selectedSubcategoryId, searchQuery, setSelectedCategoryId, setSelectedSubcategoryId, setSearchQuery } = useCategoryContext();
+  const upload = useUpload();
 
   const selectedCategory = categories.find((c) => c.id === selectedCategoryId);
   const subcategories = selectedCategory?.subcategories ?? [];
@@ -141,10 +143,11 @@ export function Layout({ page, onNavigate, children }: Props) {
             <span className="text-sm font-semibold text-content-primary hidden sm:block leading-none">Vaultworks</span>
           </button>
 
-          {/* Centered search — dashboard only, absolute in header */}
+          {/* Centered search + upload — dashboard only, absolute in header */}
           {page === 'dashboard' && (
-            <div className="absolute left-1/2 -translate-x-1/2 w-56 sm:w-80 lg:w-[480px] pointer-events-none">
-              <div className="relative pointer-events-auto">
+            <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 w-56 sm:w-[400px] lg:w-[580px] pointer-events-none">
+              {/* Search */}
+              <div className="relative flex-1 pointer-events-auto">
                 <svg
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
                   fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"
@@ -170,6 +173,27 @@ export function Layout({ page, onNavigate, children }: Props) {
                   </button>
                 )}
               </div>
+
+              {/* Upload button */}
+              <button
+                onClick={upload.openWizard}
+                disabled={upload.uploading}
+                className="btn-primary flex-shrink-0 pointer-events-auto h-8 text-sm"
+              >
+                {upload.uploading ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    {upload.progress}%
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                    </svg>
+                    Upload
+                  </>
+                )}
+              </button>
             </div>
           )}
 

@@ -20,6 +20,7 @@ import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
+import { useUpload } from '../contexts/UploadContext.js';
 
 // --- Helpers ---
 
@@ -928,6 +929,8 @@ export function AssetBrowser() {
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+
+  const upload = useUpload();
   const [sort, setSort] = useState<SortKey>(initial.sort);
 
   const categoryMap = useMemo(() => {
@@ -948,10 +951,6 @@ export function AssetBrowser() {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [showWizard, setShowWizard] = useState(false);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
@@ -1090,20 +1089,19 @@ export function AssetBrowser() {
   // Upload drop
   const onDrop = useCallback(async (files: File[]) => {
     if (!files.length) return;
-    setUploading(true);
-    setUploadProgress(0);
+    upload.setUploading(true);
+    upload.setProgress(0);
     try {
-      const added = await uploadFiles(files, setUploadProgress);
+      const added = await uploadFiles(files, upload.setProgress);
       setAssets((prev) => [...added, ...prev]);
-      // Refresh tags in case new tags were implied
       listTags().then(setAllTags).catch(() => {});
     } catch {
       setError('Upload failed. Please try again.');
     } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      upload.setUploading(false);
+      upload.setProgress(0);
     }
-  }, []);
+  }, [upload]);
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
@@ -1114,6 +1112,7 @@ export function AssetBrowser() {
   function handleWizardComplete(asset: Asset) {
     setAssets((prev) => [asset, ...prev]);
     listTags().then(setAllTags).catch(() => {});
+    upload.closeWizard();
   }
 
   function handleAssetUpdate(updated: Asset) {
@@ -1281,22 +1280,6 @@ export function AssetBrowser() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
-
-            <button onClick={() => setShowWizard(true)} disabled={uploading} className="btn-primary py-2">
-              {uploading ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  {uploadProgress}%
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                  </svg>
-                  Upload
-                </>
-              )}
-            </button>
           </div>
         </div>
 
@@ -1378,7 +1361,7 @@ export function AssetBrowser() {
           {!loading && assets.length === 0 && !hasFilters && (
             <div
               className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-border rounded-2xl cursor-pointer hover:border-accent/40 transition-colors"
-              onClick={() => setShowWizard(true)}
+              onClick={upload.openWizard}
             >
               <div className="w-16 h-16 rounded-2xl bg-surface-3 flex items-center justify-center mb-5">
                 <svg className="w-8 h-8 text-content-muted" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -1390,7 +1373,7 @@ export function AssetBrowser() {
                 Drop files here or click Upload to add your first assets. Supports 3D models, audio, images, and more.
               </p>
               <button
-                onClick={(e) => { e.stopPropagation(); setShowWizard(true); }}
+                onClick={(e) => { e.stopPropagation(); upload.openWizard(); }}
                 className="btn-primary mt-5"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1463,8 +1446,8 @@ export function AssetBrowser() {
 
       {/* Upload wizard */}
       <UploadWizard
-        open={showWizard}
-        onClose={() => setShowWizard(false)}
+        open={upload.showWizard}
+        onClose={upload.closeWizard}
         onComplete={handleWizardComplete}
       />
 

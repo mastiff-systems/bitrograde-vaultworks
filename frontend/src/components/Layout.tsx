@@ -210,7 +210,7 @@ export function Layout({ page, onNavigate, children }: Props) {
         {/* Category tabs row — dashboard only */}
         {page === 'dashboard' && (
           <nav
-            className="flex items-center justify-center gap-0.5 px-4 pb-2 overflow-x-auto bg-surface-1"
+            className="flex items-center gap-0.5 px-4 pb-2 overflow-x-auto bg-surface-1"
             aria-label="Asset categories"
             style={{ scrollbarWidth: 'none' }}
           >

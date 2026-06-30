@@ -3,9 +3,10 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
-import { parseParams } from '../lib/validate.js';
+import { parseParams, parseBody } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
+import { authenticate } from '../auth/middleware.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -40,6 +41,7 @@ type AssetSelect = {
   thumbnailKey: string | null;
   description: string | null;
   uploadedAt: Date;
+  updatedAt: Date;
   categoryId: string | null;
   subcategoryId: string | null;
   license: string | null;
@@ -59,6 +61,7 @@ function formatAsset(a: AssetSelect) {
     thumbnail_key: a.thumbnailKey,
     description: a.description,
     uploaded_at: a.uploadedAt,
+    updated_at: a.updatedAt,
     category_id: a.categoryId,
     subcategory_id: a.subcategoryId,
     license: a.license,
@@ -78,6 +81,7 @@ const assetSelect = {
   thumbnailKey: true,
   description: true,
   uploadedAt: true,
+  updatedAt: true,
   categoryId: true,
   subcategoryId: true,
   license: true,
@@ -288,6 +292,66 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.send(stream);
   });
+
+  const UpdateFileSchema = z.object({
+    name: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    categoryId: z.string().uuid().nullable().optional(),
+    subcategoryId: z.string().uuid().nullable().optional(),
+    tags: z.array(z.string().min(1).max(100)).optional(),
+  });
+
+  app.patch<{ Params: { id: string } }>(
+    '/api/files/:id',
+    { preHandler: [authenticate] },
+    async (req, reply) => {
+      const params = parseParams(UuidParams, req.params, reply);
+      if (!params) return;
+
+      const body = parseBody(UpdateFileSchema, req.body, reply);
+      if (!body) return;
+
+      const existing = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true } });
+      if (!existing) return reply.status(404).send({ error: 'Not found' });
+
+      const { tags, ...fields } = body;
+
+      const updateData: Prisma.AssetUpdateInput = {};
+      if (fields.name !== undefined) updateData.originalName = fields.name;
+      if (fields.description !== undefined) updateData.description = fields.description;
+      if (fields.categoryId !== undefined) {
+        updateData.category = fields.categoryId ? { connect: { id: fields.categoryId } } : { disconnect: true };
+      }
+      if (fields.subcategoryId !== undefined) {
+        updateData.subcategory = fields.subcategoryId ? { connect: { id: fields.subcategoryId } } : { disconnect: true };
+      }
+
+      if (tags !== undefined) {
+        await prisma.$transaction(async (tx) => {
+          const tagNames = [...new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+          for (const name of tagNames) {
+            await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+          }
+          const tagRecords = tagNames.length
+            ? await tx.tag.findMany({ where: { name: { in: tagNames } }, select: { id: true } })
+            : [];
+          await tx.assetTag.deleteMany({ where: { assetId: params.id } });
+          if (tagRecords.length > 0) {
+            await tx.assetTag.createMany({
+              data: tagRecords.map((t) => ({ assetId: params.id, tagId: t.id })),
+            });
+          }
+          await tx.asset.update({ where: { id: params.id }, data: updateData });
+        });
+      } else {
+        await prisma.asset.update({ where: { id: params.id }, data: updateData });
+      }
+
+      const updated = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
+      if (!updated) return reply.status(404).send({ error: 'Not found' });
+      return reply.send(formatAsset(updated));
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);

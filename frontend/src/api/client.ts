@@ -140,6 +140,19 @@ export async function uploadWithMetadata(
   return data[0];
 }
 
+export interface UpdateFilePayload {
+  name?: string;
+  description?: string | null;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
+  tags?: string[];
+}
+
+export async function updateFile(id: string, payload: UpdateFilePayload): Promise<Asset> {
+  const { data } = await api.patch<Asset>(`/api/files/${id}`, payload);
+  return data;
+}
+
 export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }

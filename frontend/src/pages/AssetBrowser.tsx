@@ -6,6 +6,7 @@ import {
   uploadFiles,
   deleteFile,
   updateAssetTags,
+  updateFile,
   listVersions,
   uploadVersion,
   downloadUrl,
@@ -528,12 +529,74 @@ function AssetDetailModal({
   onTagClick: (name: string) => void;
   onUpdate: (updated: Asset) => void;
 }) {
+  const { categories } = useCategoryContext();
   const [editingTags, setEditingTags] = useState(false);
   const [pendingTags, setPendingTags] = useState<string[]>(asset.tags?.map((t) => t.name) ?? []);
   const [tagInput, setTagInput] = useState('');
   const [savingTags, setSavingTags] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
+
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: asset.original_name,
+    description: asset.description ?? '',
+    categoryId: asset.category_id ?? '',
+    subcategoryId: asset.subcategory_id ?? '',
+    tags: asset.tags?.map((t) => t.name) ?? [],
+  });
+  const [editTagInput, setEditTagInput] = useState('');
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const subcategoriesForEdit = categories.find((c) => c.id === editForm.categoryId)?.subcategories ?? [];
+
+  function startEdit() {
+    setEditForm({
+      name: asset.original_name,
+      description: asset.description ?? '',
+      categoryId: asset.category_id ?? '',
+      subcategoryId: asset.subcategory_id ?? '',
+      tags: asset.tags?.map((t) => t.name) ?? [],
+    });
+    setEditTagInput('');
+    setSaveError(null);
+    setEditingMeta(true);
+  }
+
+  function addEditTag() {
+    const name = editTagInput.trim().toLowerCase();
+    if (name && !editForm.tags.includes(name)) {
+      setEditForm((f) => ({ ...f, tags: [...f.tags, name] }));
+    }
+    setEditTagInput('');
+  }
+
+  function removeEditTag(name: string) {
+    setEditForm((f) => ({ ...f, tags: f.tags.filter((t) => t !== name) }));
+  }
+
+  async function handleSaveMeta() {
+    if (!editForm.name.trim()) { setSaveError('Name is required'); return; }
+    setSavingMeta(true);
+    setSaveError(null);
+    try {
+      const updated = await updateFile(asset.id, {
+        name: editForm.name.trim(),
+        description: editForm.description.trim() || null,
+        categoryId: editForm.categoryId || null,
+        subcategoryId: editForm.subcategoryId || null,
+        tags: editForm.tags,
+      });
+      onUpdate(updated);
+      setEditingMeta(false);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      setSaveError(msg ?? 'Save failed. Please try again.');
+    } finally {
+      setSavingMeta(false);
+    }
+  }
 
   useEffect(() => {
     if (!editingTags) setPendingTags(asset.tags?.map((t) => t.name) ?? []);
@@ -609,17 +672,148 @@ function AssetDetailModal({
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {!editingMeta && (
+              <button
+                onClick={startEdit}
+                className="btn-ghost btn-sm text-xs text-content-muted hover:text-accent"
+                title="Edit metadata"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                </svg>
+                Edit
+              </button>
+            )}
+            <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Body */}
         <div className="overflow-y-auto flex-1 px-5 py-5 space-y-5">
+          {/* Edit form */}
+          {editingMeta && (
+            <div className="space-y-4">
+              <div>
+                <label className="label mb-1 block">Name <span className="text-danger">*</span></label>
+                <input
+                  className="input w-full"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Asset name"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="label mb-1 block">Description</label>
+                <textarea
+                  className="input w-full resize-none"
+                  rows={3}
+                  value={editForm.description}
+                  onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="Optional description…"
+                />
+              </div>
+              <div>
+                <label className="label mb-1 block">Category</label>
+                <select
+                  className="input w-full"
+                  value={editForm.categoryId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, categoryId: e.target.value, subcategoryId: '' }))}
+                >
+                  <option value="">— None —</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              {subcategoriesForEdit.length > 0 && (
+                <div>
+                  <label className="label mb-1 block">Subcategory</label>
+                  <select
+                    className="input w-full"
+                    value={editForm.subcategoryId}
+                    onChange={(e) => setEditForm((f) => ({ ...f, subcategoryId: e.target.value }))}
+                  >
+                    <option value="">— None —</option>
+                    {subcategoriesForEdit.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="label mb-1 block">Tags</label>
+                <div className="flex flex-wrap gap-1.5 mb-2 min-h-6">
+                  {editForm.tags.map((name) => {
+                    const p = tagPalette(name);
+                    return (
+                      <span
+                        key={name}
+                        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${p.bg} ${p.text}`}
+                      >
+                        {name}
+                        <button
+                          onClick={() => removeEditTag(name)}
+                          className="opacity-60 hover:opacity-100 ml-0.5"
+                          aria-label={`Remove tag ${name}`}
+                        >
+                          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    className="input py-1.5 text-xs flex-1"
+                    placeholder="Type a tag and press Enter…"
+                    value={editTagInput}
+                    onChange={(e) => setEditTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); addEditTag(); }
+                    }}
+                  />
+                  <button onClick={addEditTag} className="btn-secondary btn-sm text-xs">Add</button>
+                </div>
+              </div>
+              {saveError && (
+                <p className="text-xs text-danger">{saveError}</p>
+              )}
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  onClick={() => { setEditingMeta(false); setSaveError(null); }}
+                  className="btn-ghost btn-sm text-xs"
+                  disabled={savingMeta}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveMeta}
+                  className="btn-primary btn-sm text-xs"
+                  disabled={savingMeta}
+                >
+                  {savingMeta ? (
+                    <>
+                      <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save changes'
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Preview */}
-          {asset.asset_type === 'image' && asset.thumbnail_key && (
+          {!editingMeta && asset.asset_type === 'image' && asset.thumbnail_key && (
             <div className="rounded-xl overflow-hidden bg-surface-3 flex items-center justify-center">
               <img
                 src={thumbnailUrl(asset.id)}
@@ -628,18 +822,19 @@ function AssetDetailModal({
               />
             </div>
           )}
-          {asset.asset_type === 'audio' && (
+          {!editingMeta && asset.asset_type === 'audio' && (
             <div className="card p-4 bg-surface-1">
               <AudioPreview assetId={asset.id} />
             </div>
           )}
-          {asset.asset_type === '3d' && (
+          {!editingMeta && asset.asset_type === '3d' && (
             <div className="card overflow-hidden bg-surface-1" style={{ height: '180px' }}>
               <Preview3D assetId={asset.id} filename={asset.original_name} />
             </div>
           )}
 
           {/* Metadata */}
+          {!editingMeta && (
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <div>
               <div className="label">Uploaded</div>
@@ -654,8 +849,9 @@ function AssetDetailModal({
               <div className="text-content-primary font-mono text-xs">{asset.mime_type ?? '—'}</div>
             </div>
           </div>
+          )}
 
-          {asset.description && (
+          {!editingMeta && asset.description && (
             <div>
               <div className="label">Description</div>
               <p className="text-sm text-content-secondary leading-relaxed">{asset.description}</p>
@@ -663,7 +859,7 @@ function AssetDetailModal({
           )}
 
           {/* Tags */}
-          <div>
+          {!editingMeta && <div>
             <div className="flex items-center justify-between mb-2.5">
               <span className="label mb-0">Tags</span>
               {!editingTags && (
@@ -761,13 +957,15 @@ function AssetDetailModal({
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Version history */}
+          {!editingMeta && (
           <div>
             <div className="label mb-2.5">Version history</div>
             <VersionHistory assetId={asset.id} />
           </div>
+          )}
         </div>
 
         {/* Footer */}

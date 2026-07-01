@@ -396,15 +396,6 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!params) return;
 
     try {
-      // Log before delete so the asset FK still exists when the audit INSERT runs.
-      logAudit({
-        prisma,
-        userId:   req.user?.userId ?? null,
-        assetId:  params.id,
-        action:   'DELETE',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
-      });
-
       const asset = await prisma.asset.delete({
         where: { id: params.id },
         select: { storageKey: true, thumbnailKey: true },
@@ -417,6 +408,16 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+
+    // assetId is null here because the asset no longer exists (ON DELETE SET NULL would
+    // have nulled it anyway). Store the original ID in metadata for audit trail lookup.
+    logAudit({
+      prisma,
+      userId:   req.user?.userId ?? null,
+      assetId:  null,
+      action:   'DELETE',
+      metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: params.id },
+    });
 
     return reply.status(204).send();
   });

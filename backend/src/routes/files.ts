@@ -396,6 +396,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!params) return;
 
     try {
+      // Log before delete so the asset FK still exists when the audit INSERT runs.
+      logAudit({
+        prisma,
+        userId:   req.user?.userId ?? null,
+        assetId:  params.id,
+        action:   'DELETE',
+        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+      });
+
       const asset = await prisma.asset.delete({
         where: { id: params.id },
         select: { storageKey: true, thumbnailKey: true },
@@ -408,14 +417,6 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
-
-    logAudit({
-      prisma,
-      userId:   req.user?.userId ?? null,
-      assetId:  params.id,
-      action:   'DELETE',
-      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
-    });
 
     return reply.status(204).send();
   });

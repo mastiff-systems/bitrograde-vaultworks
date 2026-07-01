@@ -152,6 +152,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
+      include: {
+        user:  { select: { email: true } },
+        asset: { select: { originalName: true } },
+      },
     });
 
     const hasMore = rows.length > limit;

@@ -15,6 +15,7 @@ model User {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   notifications Notification[]
   assetVersions AssetVersion[]
+  assets        Asset[]
 
   @@map("users")
 }
@@ -56,6 +57,7 @@ model Asset {
   description     String?        @map("description")
   uploadedAt      DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  uploadedBy      String?        @map("uploaded_by") @db.Uuid
   categoryId      String?        @map("category_id") @db.Uuid
   subcategoryId   String?        @map("subcategory_id") @db.Uuid
   license         String?
@@ -65,11 +67,13 @@ model Asset {
   tags            AssetTag[]
   notifications   Notification[]
   versions        AssetVersion[]
+  uploader        User?          @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
 
   @@index([categoryId])
   @@index([subcategoryId])
+  @@index([uploadedBy])
   @@map("assets")
 }
 

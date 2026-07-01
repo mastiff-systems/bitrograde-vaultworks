@@ -311,8 +311,13 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       const body = parseBody(UpdateFileSchema, req.body, reply);
       if (!body) return;
 
-      const existing = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true } });
+      const existing = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true, uploadedBy: true } });
       if (!existing) return reply.status(404).send({ error: 'Not found' });
+
+      const { userId, role } = req.user;
+      if (role !== 'admin' && existing.uploadedBy !== userId) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
 
       const { tags, ...fields } = body;
 

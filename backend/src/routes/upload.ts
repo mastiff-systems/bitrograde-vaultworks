@@ -173,6 +173,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             resolutionW: meta.resolution_w,
             resolutionH: meta.resolution_h,
             durationSeconds: meta.duration_seconds,
+            uploadedBy: req.user?.userId ?? null,
           },
           select: {
             id: true,

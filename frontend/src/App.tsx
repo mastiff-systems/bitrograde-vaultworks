@@ -13,16 +13,22 @@ import type { Page } from './components/Layout.js';
 function AppShell() {
   const { user } = useAuth();
   const [page, setPage] = useState<Page>('dashboard');
+  const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
 
   const handleNavigate = (p: Page) => {
     if (p === 'admin' && user?.role !== 'admin') return;
     setPage(p);
   };
 
+  const handleNavigateToAsset = (assetId: string) => {
+    setPendingAssetId(assetId);
+    setPage('dashboard');
+  };
+
   return (
     <Layout page={page} onNavigate={handleNavigate}>
-      {page === 'dashboard' && <AssetBrowser />}
-      {page === 'admin' && user?.role === 'admin' && <AdminPanel />}
+      {page === 'dashboard' && <AssetBrowser initialDetailAssetId={pendingAssetId} />}
+      {page === 'admin' && user?.role === 'admin' && <AdminPanel onNavigateToAsset={handleNavigateToAsset} />}
       {page === 'profile' && <ProfilePage />}
     </Layout>
   );

@@ -7,6 +7,7 @@ import {
   deleteFile,
   updateAssetTags,
   updateFile,
+  getAssetById,
   listVersions,
   uploadVersion,
   downloadUrl,
@@ -1111,7 +1112,7 @@ function AssetListRow({
 
 // --- Main AssetBrowser ---
 
-export function AssetBrowser() {
+export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: string | null } = {}) {
   const initial = getUrlFilters();
   const {
     searchQuery,
@@ -1152,6 +1153,11 @@ export function AssetBrowser() {
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+
+  useEffect(() => {
+    if (!initialDetailAssetId) return;
+    getAssetById(initialDetailAssetId).then(setDetailAsset).catch(() => {});
+  }, [initialDetailAssetId]);
 
   // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);

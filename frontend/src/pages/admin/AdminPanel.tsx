@@ -2,16 +2,18 @@ import { useState } from 'react';
 import { AdminSettings } from './Settings.js';
 import { AdminUsers } from './Users.js';
 import { TaxonomyManager } from './TaxonomyManager.js';
+import { AuditLogs } from './AuditLogs.js';
 
-type AdminTab = 'settings' | 'taxonomy' | 'users';
+type AdminTab = 'settings' | 'taxonomy' | 'users' | 'audit-logs';
 
 const TABS: { id: AdminTab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
   { id: 'taxonomy', label: 'Taxonomy' },
   { id: 'users', label: 'Users' },
+  { id: 'audit-logs', label: 'Audit Logs' },
 ];
 
-export function AdminPanel() {
+export function AdminPanel({ onNavigateToAsset }: { onNavigateToAsset?: (assetId: string) => void } = {}) {
   const [tab, setTab] = useState<AdminTab>('settings');
 
   return (
@@ -41,6 +43,7 @@ export function AdminPanel() {
         {tab === 'settings' && <AdminSettings />}
         {tab === 'taxonomy' && <TaxonomyManager />}
         {tab === 'users' && <AdminUsers />}
+        {tab === 'audit-logs' && <AuditLogs onNavigateToAsset={onNavigateToAsset} />}
       </div>
     </div>
   );

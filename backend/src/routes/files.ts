@@ -7,13 +7,19 @@ import { parseParams, parseBody } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { authenticate } from '../auth/middleware.js';
+import { logAudit } from '../lib/audit.js';
 
-async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
+async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
   try {
     const provider = process.env.AUTH_PROVIDER ?? 'local';
-    if (provider === 'keycloak') { await verifyKeycloakToken(token); } else { verifyLocalToken(token); }
-    return true;
+    if (provider === 'keycloak') {
+      await verifyKeycloakToken(token);
+      return null; // keycloak path doesn't return userId easily
+    } else {
+      const payload = verifyLocalToken(token);
+      return payload.userId;
+    }
   } catch { reply.status(401).send({ error: 'Invalid token' }); return false; }
 }
 
@@ -220,13 +226,23 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
     if (!asset) return reply.status(404).send({ error: 'Not found' });
+
+    logAudit({
+      prisma,
+      userId:   req.user?.userId ?? null,
+      assetId:  params.id,
+      action:   'VIEW',
+      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+    });
+
     return reply.send(formatAsset(asset));
   });
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
   app.get<{ Params: { id: string } }>('/api/files/:id/download', async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    const authResult = await authenticateToken(token, reply);
+    if (authResult === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -246,13 +262,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     reply.header('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
     if (contentLength) reply.header('Content-Length', contentLength);
 
+    logAudit({
+      prisma,
+      userId:   authResult,
+      assetId:  params.id,
+      action:   'DOWNLOAD',
+      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+    });
+
     return reply.send(stream);
   });
 
   // Inline stream for previews — no Content-Disposition attachment
   app.get<{ Params: { id: string } }>('/api/files/:id/stream', async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    if (await authenticateToken(token, reply) === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -274,7 +298,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
   app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    if (await authenticateToken(token, reply) === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -354,6 +378,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
       const updated = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
       if (!updated) return reply.status(404).send({ error: 'Not found' });
+
+      logAudit({
+        prisma,
+        userId:   req.user.userId,
+        assetId:  params.id,
+        action:   'UPDATE',
+        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+      });
+
       return reply.send(formatAsset(updated));
     },
   );
@@ -375,6 +408,17 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+
+    // assetId is null here because the asset no longer exists (ON DELETE SET NULL would
+    // have nulled it anyway). Store the original ID in metadata for audit trail lookup.
+    logAudit({
+      prisma,
+      userId:   req.user?.userId ?? null,
+      assetId:  null,
+      action:   'DELETE',
+      metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: params.id },
+    });
+
     return reply.status(204).send();
   });
 }

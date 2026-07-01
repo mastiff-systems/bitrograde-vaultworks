@@ -148,6 +148,11 @@ export interface UpdateFilePayload {
   tags?: string[];
 }
 
+export async function getAssetById(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
+}
+
 export async function updateFile(id: string, payload: UpdateFilePayload): Promise<Asset> {
   const { data } = await api.patch<Asset>(`/api/files/${id}`, payload);
   return data;

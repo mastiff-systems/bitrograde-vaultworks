@@ -46,3 +46,40 @@ export async function updateUserRole(id: string, role: 'admin' | 'user'): Promis
   const { data } = await api.patch<AdminUser>(`/api/admin/users/${id}/role`, { role });
   return data;
 }
+
+export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE';
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string | null;
+  assetId: string | null;
+  action: AuditAction;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  user: { email: string } | null;
+  asset: { originalName: string } | null;
+}
+
+export interface AuditLogsFilters {
+  action?: AuditAction;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface AuditLogsResponse {
+  data: AuditLogEntry[];
+  nextCursor: string | null;
+}
+
+export async function fetchAuditLogs(filters: AuditLogsFilters = {}): Promise<AuditLogsResponse> {
+  const params = new URLSearchParams();
+  if (filters.action) params.set('action', filters.action);
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  if (filters.cursor) params.set('cursor', filters.cursor);
+  params.set('limit', String(filters.limit ?? 50));
+  const { data } = await api.get<AuditLogsResponse>(`/api/admin/audit-logs?${params.toString()}`);
+  return data;
+}

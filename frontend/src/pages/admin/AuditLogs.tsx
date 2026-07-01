@@ -19,7 +19,7 @@ function formatDateTime(d: string): string {
   });
 }
 
-export function AuditLogs() {
+export function AuditLogs({ onNavigateToAsset }: { onNavigateToAsset?: (assetId: string) => void } = {}) {
   const [rows, setRows]           = useState<AuditLogEntry[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
@@ -165,9 +165,12 @@ export function AuditLogs() {
                       </td>
                       <td className="text-sm">
                         {row.asset ? (
-                          <span className="text-accent-light font-medium">
+                          <button
+                            onClick={() => row.assetId && onNavigateToAsset?.(row.assetId)}
+                            className="text-accent-light font-medium hover:underline text-left"
+                          >
                             {row.asset.originalName}
-                          </span>
+                          </button>
                         ) : (
                           <span className="text-content-muted italic">deleted asset</span>
                         )}

@@ -13,7 +13,7 @@ const TABS: { id: AdminTab; label: string }[] = [
   { id: 'audit-logs', label: 'Audit Logs' },
 ];
 
-export function AdminPanel() {
+export function AdminPanel({ onNavigateToAsset }: { onNavigateToAsset?: (assetId: string) => void } = {}) {
   const [tab, setTab] = useState<AdminTab>('settings');
 
   return (
@@ -43,7 +43,7 @@ export function AdminPanel() {
         {tab === 'settings' && <AdminSettings />}
         {tab === 'taxonomy' && <TaxonomyManager />}
         {tab === 'users' && <AdminUsers />}
-        {tab === 'audit-logs' && <AuditLogs />}
+        {tab === 'audit-logs' && <AuditLogs onNavigateToAsset={onNavigateToAsset} />}
       </div>
     </div>
   );

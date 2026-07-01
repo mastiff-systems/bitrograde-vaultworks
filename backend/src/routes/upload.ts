@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
+import { logAudit } from '../lib/audit.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
@@ -211,6 +212,14 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
         throw err;
       }
+
+      logAudit({
+        prisma,
+        userId:   req.user?.userId ?? null,
+        assetId:  asset.id,
+        action:   'UPLOAD',
+        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+      });
 
       uploaded.push({
         id: asset.id,

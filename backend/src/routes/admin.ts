@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+import { Prisma, AuditAction } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getAllSettings, upsertSettings } from '../db/settings.js';
 import { requireAdmin } from '../auth/middleware.js';
@@ -105,5 +105,62 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
+  });
+
+  const AuditLogsQuerySchema = z.object({
+    assetId:  z.string().uuid().optional(),
+    userId:   z.string().uuid().optional(),
+    action:   z.enum(['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE']).optional(),
+    from:     z.string().datetime().optional(),
+    to:       z.string().datetime().optional(),
+    limit:    z.coerce.number().int().min(1).max(200).default(50),
+    cursor:   z.string().optional(),
+  });
+
+  // GET /api/admin/audit-logs
+  app.get('/api/admin/audit-logs', opts, async (req, reply) => {
+    const parsed = AuditLogsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid query parameters', details: parsed.error.flatten() });
+    }
+    const { assetId, userId, action, from, to, limit, cursor } = parsed.data;
+
+    const where: Prisma.AuditLogWhereInput = {};
+    if (assetId) where.assetId = assetId;
+    if (userId)  where.userId  = userId;
+    if (action)  where.action  = action as AuditAction;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to)   where.createdAt.lte = new Date(to);
+    }
+
+    // Keyset cursor: base64-encoded JSON { createdAt: string, id: string }
+    if (cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8')) as { createdAt: string; id: string };
+        where.OR = [
+          { createdAt: { lt: new Date(decoded.createdAt) } },
+          { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } },
+        ];
+      } catch {
+        return reply.status(400).send({ error: 'Invalid cursor' });
+      }
+    }
+
+    const rows = await prisma.auditLog.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+
+    const hasMore = rows.length > limit;
+    const data = hasMore ? rows.slice(0, limit) : rows;
+    const last = data[data.length - 1];
+    const nextCursor = hasMore && last
+      ? Buffer.from(JSON.stringify({ createdAt: last.createdAt.toISOString(), id: last.id })).toString('base64')
+      : null;
+
+    return reply.send({ data, nextCursor });
   });
 }

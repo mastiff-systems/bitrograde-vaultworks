@@ -16,6 +16,7 @@ model User {
   notifications Notification[]
   assetVersions AssetVersion[]
   assets        Asset[]
+  auditLogs     AuditLog[]
 
   @@map("users")
 }
@@ -67,6 +68,7 @@ model Asset {
   tags            AssetTag[]
   notifications   Notification[]
   versions        AssetVersion[]
+  auditLogs       AuditLog[]
   uploader        User?          @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
@@ -139,4 +141,34 @@ model Setting {
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   @@map("settings")
+}
+
+enum AuditAction {
+  UPLOAD
+  DOWNLOAD
+  VIEW
+  UPDATE
+  DELETE
+
+  @@map("audit_action")
+}
+
+model AuditLog {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String?     @map("user_id") @db.Uuid
+  assetId   String?     @map("asset_id") @db.Uuid
+  action    AuditAction
+  metadata  Json        @default("{}")
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  asset Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@index([assetId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt(sort: Desc)])
+  @@index([assetId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("audit_logs")
 }

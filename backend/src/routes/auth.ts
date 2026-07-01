@@ -20,7 +20,14 @@ const LoginSchema = z.object({
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   if ((process.env.AUTH_PROVIDER ?? 'local') !== 'local') return;
 
-  app.post('/api/auth/register', async (req, reply) => {
+  app.post('/api/auth/register', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 5,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(RegisterSchema, req.body, reply);
     if (!body) return;
 
@@ -46,7 +53,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post('/api/auth/login', async (req, reply) => {
+  app.post('/api/auth/login', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(LoginSchema, req.body, reply);
     if (!body) return;
 

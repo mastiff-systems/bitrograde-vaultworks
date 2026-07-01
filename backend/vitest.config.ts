@@ -9,6 +9,7 @@ export default defineConfig({
     pool: 'forks',
     testTimeout: 30000,
     env: {
+      NODE_ENV: 'test',
       DATABASE_URL: 'postgresql://vaultworks:vaultworks@localhost:5433/vaultworks_test',
       JWT_SECRET: 'test-jwt-secret-for-vitest-at-least-32-chars-long',
       AUTH_PROVIDER: 'local',

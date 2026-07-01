@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { uploadRoutes } from './routes/upload.js';
@@ -18,8 +20,24 @@ const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false });
 
+  // Security headers on every response — registered first so all replies are covered
+  await app.register(helmet, {
+    contentSecurityPolicy: process.env.HELMET_CSP ? undefined : false,
+  });
+
+  // Rate limiting available opt-in per route via config.rateLimit
+  await app.register(rateLimit, { global: false });
+
+  const corsOrigin = process.env.CORS_ORIGIN;
+  if (process.env.NODE_ENV === 'production' && !corsOrigin) {
+    throw new Error(
+      'CORS_ORIGIN env var must be set in production (NODE_ENV=production). ' +
+      'Example: CORS_ORIGIN=https://vaultworks.example.com',
+    );
+  }
+
   await app.register(cors, {
-    origin: process.env.CORS_ORIGIN ?? '*',
+    origin: corsOrigin ?? '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 

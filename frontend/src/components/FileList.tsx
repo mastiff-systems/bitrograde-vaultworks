@@ -7,6 +7,9 @@ import { AudioPreview } from './AudioPreview.js';
 interface Props {
   assets: Asset[];
   onDeleted: (id: string) => void;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -19,9 +22,19 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
-export function FileList({ assets, onDeleted }: Props) {
+export function FileList({ assets, onDeleted, selectionMode, selectedIds, onToggleSelect }: Props) {
   const [previewing, setPreviewing] = useState<Asset | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+
+  const allSelected = assets.length > 0 && assets.every((a) => selectedIds?.has(a.id));
+
+  function toggleAll() {
+    if (allSelected) {
+      assets.forEach((a) => selectedIds?.has(a.id) && onToggleSelect?.(a.id));
+    } else {
+      assets.forEach((a) => !selectedIds?.has(a.id) && onToggleSelect?.(a.id));
+    }
+  }
 
   const handleDelete = async (asset: Asset) => {
     if (!confirm(`Delete "${asset.original_name}"?`)) return;
@@ -45,6 +58,17 @@ export function FileList({ assets, onDeleted }: Props) {
       <table style={{ width: '100%', borderCollapse: 'collapse', color: '#ddd' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid #333' }}>
+            {selectionMode && (
+              <th style={th}>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  style={{ cursor: 'pointer' }}
+                  aria-label="Select all"
+                />
+              </th>
+            )}
             <th style={th}>Name</th>
             <th style={th}>Type</th>
             <th style={th}>Size</th>
@@ -54,7 +78,23 @@ export function FileList({ assets, onDeleted }: Props) {
         </thead>
         <tbody>
           {assets.map((a) => (
-            <tr key={a.id} style={{ borderBottom: '1px solid #222' }}>
+            <tr
+              key={a.id}
+              style={{
+                borderBottom: '1px solid #222',
+                background: selectedIds?.has(a.id) ? 'rgba(99,102,241,0.08)' : undefined,
+              }}
+            >
+              {selectionMode && (
+                <td style={td}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds?.has(a.id) ?? false}
+                    onChange={() => onToggleSelect?.(a.id)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </td>
+              )}
               <td style={td}>{a.original_name}</td>
               <td style={td}>
                 <span style={{ ...badge, background: typeColor(a.asset_type) }}>

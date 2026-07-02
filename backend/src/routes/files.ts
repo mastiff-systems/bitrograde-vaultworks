@@ -8,6 +8,8 @@ import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { authenticate } from '../auth/middleware.js';
 import { logAudit } from '../lib/audit.js';
+import { ZipArchive } from 'archiver';
+import { PassThrough } from 'stream';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -390,6 +392,104 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(formatAsset(updated));
     },
   );
+
+  const BulkIdsSchema = z.object({
+    ids: z.array(z.string().uuid()).min(1).max(100),
+  });
+
+  app.post('/api/files/bulk-delete', { preHandler: [authenticate] }, async (req, reply) => {
+    const body = parseBody(BulkIdsSchema, req.body, reply);
+    if (!body) return;
+
+    const { userId, role } = req.user;
+
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: body.ids } },
+      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
+    });
+
+    // Check that every requested ID exists and is owned by caller (admin bypasses)
+    if (role !== 'admin') {
+      for (const asset of assets) {
+        if (asset.uploadedBy !== userId) {
+          return reply.status(403).send({ error: 'Forbidden: you do not own all requested assets' });
+        }
+      }
+    }
+
+    const deleted: string[] = [];
+    const errors: { id: string; error: string }[] = [];
+
+    for (const asset of assets) {
+      try {
+        await prisma.asset.delete({ where: { id: asset.id } });
+        await deleteFromS3(asset.storageKey);
+        if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey).catch(() => {});
+
+        logAudit({
+          prisma,
+          userId,
+          assetId: null,
+          action: 'DELETE',
+          metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
+        });
+
+        deleted.push(asset.id);
+      } catch (err) {
+        errors.push({ id: asset.id, error: err instanceof Error ? err.message : 'Unknown error' });
+      }
+    }
+
+    // IDs that weren't found at all
+    for (const id of body.ids) {
+      if (!assets.find((a) => a.id === id)) {
+        errors.push({ id, error: 'Not found' });
+      }
+    }
+
+    return reply.send({ deleted, errors });
+  });
+
+  app.post('/api/files/bulk-download', { preHandler: [authenticate] }, async (req, reply) => {
+    const body = parseBody(BulkIdsSchema, req.body, reply);
+    if (!body) return;
+
+    const { userId, role } = req.user;
+
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: body.ids } },
+      select: { id: true, storageKey: true, originalName: true, uploadedBy: true },
+    });
+
+    if (role !== 'admin') {
+      for (const asset of assets) {
+        if (asset.uploadedBy !== userId) {
+          return reply.status(403).send({ error: 'Forbidden: you do not own all requested assets' });
+        }
+      }
+    }
+
+    reply.header('Content-Type', 'application/zip');
+    reply.header('Content-Disposition', 'attachment; filename=assets.zip');
+
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    const passThrough = new PassThrough();
+    archive.pipe(passThrough);
+
+    // Deduplicate filenames within the archive
+    const nameCounts = new Map<string, number>();
+    for (const asset of assets) {
+      const { stream } = await getS3ObjectStream(asset.storageKey);
+      const count = nameCounts.get(asset.originalName) ?? 0;
+      nameCounts.set(asset.originalName, count + 1);
+      const archiveName = count === 0 ? asset.originalName : `${asset.originalName}_${count}`;
+      archive.append(stream, { name: archiveName });
+    }
+
+    archive.finalize();
+
+    return reply.send(passThrough);
+  });
 
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);

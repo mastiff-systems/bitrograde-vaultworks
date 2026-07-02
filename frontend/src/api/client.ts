@@ -162,6 +162,28 @@ export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
 
+export interface BulkDeleteResult {
+  deleted: string[];
+  errors: { id: string; error: string }[];
+}
+
+export async function bulkDelete(ids: string[]): Promise<BulkDeleteResult> {
+  const { data } = await api.post<BulkDeleteResult>('/api/files/bulk-delete', { ids });
+  return data;
+}
+
+export async function bulkDownload(ids: string[]): Promise<void> {
+  const resp = await api.post('/api/files/bulk-download', { ids }, { responseType: 'blob' });
+  const url = URL.createObjectURL(resp.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'assets.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export async function listVersions(assetId: string): Promise<AssetVersion[]> {
   const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);
   return data;

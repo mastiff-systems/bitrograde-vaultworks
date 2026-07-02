@@ -13,6 +13,8 @@ import {
   downloadUrl,
   thumbnailUrl,
   versionDownloadUrl,
+  bulkDelete,
+  bulkDownload,
   type Asset,
   type AssetVersion,
   type Tag,
@@ -230,6 +232,9 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -237,28 +242,55 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const palette = (name: string) => tagPalette(name);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  function handleCardClick() {
+    if (selectionMode) {
+      onToggleSelect?.(asset.id);
+    } else {
+      onClick();
+    }
+  }
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className="card flex flex-col overflow-hidden cursor-pointer hover:border-border-light transition-all hover:shadow-lg hover:shadow-black/20 group outline-none focus-visible:ring-2 focus-visible:ring-accent/50 relative"
+      onClick={handleCardClick}
+      onKeyDown={(e) => e.key === 'Enter' && handleCardClick()}
+      className={`card flex flex-col overflow-hidden cursor-pointer hover:border-border-light transition-all hover:shadow-lg hover:shadow-black/20 group outline-none focus-visible:ring-2 focus-visible:ring-accent/50 relative ${selected ? 'ring-2 ring-accent border-accent' : ''}`}
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-surface-3 overflow-hidden flex items-center justify-center relative">
         <AssetThumbnail asset={asset} />
         <div className="absolute top-2 left-2 flex flex-col gap-1">
-          <TypeBadge type={asset.asset_type} />
-          {categoryName && (
+          {!selectionMode && <TypeBadge type={asset.asset_type} />}
+          {!selectionMode && categoryName && (
             <span className="badge bg-surface-0/80 text-content-secondary backdrop-blur-sm text-[10px]">{categoryName}</span>
           )}
         </div>
-        {/* Context menu trigger */}
+        {/* Checkbox overlay in selection mode */}
+        {selectionMode && (
+          <div
+            className="absolute inset-0 flex items-start justify-start p-2"
+            onClick={(e) => { e.stopPropagation(); onToggleSelect?.(asset.id); }}
+          >
+            <input
+              type="checkbox"
+              checked={selected ?? false}
+              onChange={() => onToggleSelect?.(asset.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="w-5 h-5 rounded cursor-pointer accent-violet-500"
+            />
+          </div>
+        )}
+        {/* Context menu trigger (hidden in selection mode) */}
+        {!selectionMode && (
         <div
           className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={(e) => e.stopPropagation()}
@@ -303,6 +335,7 @@ function AssetCard({
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* Card body */}
@@ -1010,6 +1043,9 @@ function AssetListRow({
   activeTagFilters,
   onClick,
   onDetails,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -1017,17 +1053,38 @@ function AssetListRow({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const ext = asset.original_name.includes('.') ? asset.original_name.split('.').pop()!.toLowerCase() : null;
+
+  function handleRowClick() {
+    if (selectionMode) {
+      onToggleSelect?.(asset.id);
+    } else {
+      onClick();
+    }
+  }
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2 cursor-pointer transition-colors group outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+      onClick={handleRowClick}
+      onKeyDown={(e) => e.key === 'Enter' && handleRowClick()}
+      className={`flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2 cursor-pointer transition-colors group outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${selected ? 'bg-accent/5' : ''}`}
     >
+      {/* Checkbox in selection mode */}
+      {selectionMode && (
+        <input
+          type="checkbox"
+          checked={selected ?? false}
+          onChange={() => onToggleSelect?.(asset.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+        />
+      )}
       {/* Thumbnail / icon */}
       <div className="w-10 h-10 rounded-lg bg-surface-3 flex-shrink-0 overflow-hidden flex items-center justify-center">
         {asset.asset_type === 'image' && asset.thumbnail_key ? (
@@ -1153,6 +1210,63 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+
+  // Selection state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionPending, setBulkActionPending] = useState(false);
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === displayed.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(displayed.map((a) => a.id)));
+    }
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function handleBulkDownload() {
+    if (selectedIds.size === 0) return;
+    setBulkActionPending(true);
+    try {
+      await bulkDownload(Array.from(selectedIds));
+    } catch {
+      setError('Download failed. Please try again.');
+    } finally {
+      setBulkActionPending(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    setBulkActionPending(true);
+    try {
+      const result = await bulkDelete(Array.from(selectedIds));
+      setAssets((prev) => prev.filter((a) => !result.deleted.includes(a.id)));
+      listTags().then(setAllTags).catch(() => {});
+      exitSelectionMode();
+      if (result.errors.length > 0) {
+        setError(`${result.deleted.length} deleted; ${result.errors.length} failed.`);
+      }
+    } catch {
+      setError('Bulk delete failed. Please try again.');
+    } finally {
+      setBulkActionPending(false);
+    }
+  }
 
   useEffect(() => {
     if (!initialDetailAssetId) return;
@@ -1451,6 +1565,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
           <div className="flex items-center gap-2 ml-auto">
+            {/* Select toggle */}
+            <button
+              onClick={() => { if (selectionMode) { exitSelectionMode(); } else { setSelectionMode(true); } }}
+              className={`btn-sm text-xs px-3 py-1.5 rounded-lg border transition-colors ${selectionMode ? 'bg-accent/15 text-accent-light border-accent/30 hover:bg-accent/25' : 'border-border text-content-muted hover:text-content-primary hover:bg-surface-3'}`}
+            >
+              {selectionMode ? 'Cancel' : 'Select'}
+            </button>
             {/* View toggle */}
             <div className="flex items-center border border-border rounded-lg overflow-hidden">
               <button
@@ -1616,6 +1737,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
             </div>
@@ -1625,6 +1749,15 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             <div className="card overflow-hidden">
               {/* List header */}
               <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface-1 text-[10px] font-semibold uppercase tracking-widest text-content-muted">
+                {selectionMode && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.size === displayed.length && displayed.length > 0}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                    aria-label="Select all"
+                  />
+                )}
                 <div className="w-10 flex-shrink-0" />
                 <div className="flex-1">Name</div>
                 <div className="hidden md:block w-40">Tags</div>
@@ -1641,6 +1774,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
             </div>
@@ -1676,6 +1812,40 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             setPreviewAsset(null);
           }}
         />
+      )}
+
+      {/* Floating bulk action bar */}
+      {selectionMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-2xl bg-surface-1 border border-border shadow-2xl shadow-black/40">
+          <span className="text-sm font-medium text-content-primary whitespace-nowrap">
+            {selectedIds.size} {selectedIds.size === 1 ? 'asset' : 'assets'} selected
+          </span>
+          <div className="w-px h-5 bg-border flex-shrink-0" />
+          <button
+            onClick={handleBulkDownload}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            {bulkActionPending ? (
+              <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            )}
+            Download ZIP
+          </button>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkActionPending}
+            className="btn-sm text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-danger/15 text-danger hover:bg-danger/25 transition-colors border border-danger/20"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            Delete
+          </button>
+        </div>
       )}
     </div>
   );

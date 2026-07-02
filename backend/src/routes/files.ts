@@ -9,7 +9,6 @@ import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { authenticate } from '../auth/middleware.js';
 import { logAudit } from '../lib/audit.js';
 import { ZipArchive } from 'archiver';
-import { PassThrough } from 'stream';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -402,49 +401,49 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!body) return;
 
     const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
 
     const assets = await prisma.asset.findMany({
-      where: { id: { in: body.ids } },
+      where: { id: { in: ids } },
       select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
     });
 
-    // Check that every requested ID exists and is owned by caller (admin bypasses)
-    if (role !== 'admin') {
-      for (const asset of assets) {
-        if (asset.uploadedBy !== userId) {
-          return reply.status(403).send({ error: 'Forbidden: you do not own all requested assets' });
-        }
-      }
+    const deleted: string[] = [];
+    const errors: { id: string; reason: string }[] = [];
+
+    const authorizedAssets: typeof assets = [];
+    for (const id of ids) {
+      const asset = assets.find((a) => a.id === id);
+      if (!asset) { errors.push({ id, reason: 'Not found' }); continue; }
+      if (role !== 'admin' && asset.uploadedBy !== userId) { errors.push({ id, reason: 'Unauthorized' }); continue; }
+      authorizedAssets.push(asset);
     }
 
-    const deleted: string[] = [];
-    const errors: { id: string; error: string }[] = [];
-
-    for (const asset of assets) {
+    for (const asset of authorizedAssets) {
       try {
         await prisma.asset.delete({ where: { id: asset.id } });
+      } catch (err) {
+        errors.push({ id: asset.id, reason: err instanceof Error ? err.message : 'Unknown error' });
+        continue;
+      }
+
+      // S3 delete: log warning on failure but still count asset as deleted (DB already gone)
+      try {
         await deleteFromS3(asset.storageKey);
         if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey).catch(() => {});
-
-        logAudit({
-          prisma,
-          userId,
-          assetId: null,
-          action: 'DELETE',
-          metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
-        });
-
-        deleted.push(asset.id);
       } catch (err) {
-        errors.push({ id: asset.id, error: err instanceof Error ? err.message : 'Unknown error' });
+        req.log.warn({ assetId: asset.id, err }, 'S3 delete failed after DB delete — orphaned object');
       }
-    }
 
-    // IDs that weren't found at all
-    for (const id of body.ids) {
-      if (!assets.find((a) => a.id === id)) {
-        errors.push({ id, error: 'Not found' });
-      }
+      logAudit({
+        prisma,
+        userId,
+        assetId: null,
+        action: 'DELETE',
+        metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
+      });
+
+      deleted.push(asset.id);
     }
 
     return reply.send({ deleted, errors });
@@ -455,9 +454,10 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!body) return;
 
     const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
 
     const assets = await prisma.asset.findMany({
-      where: { id: { in: body.ids } },
+      where: { id: { in: ids } },
       select: { id: true, storageKey: true, originalName: true, uploadedBy: true },
     });
 
@@ -469,39 +469,53 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    reply.header('Content-Type', 'application/zip');
-    reply.header('Content-Disposition', 'attachment; filename=assets.zip');
+    reply.hijack();
+    reply.raw.setHeader('Content-Type', 'application/zip');
+    reply.raw.setHeader('Content-Disposition', 'attachment; filename=assets.zip');
 
     const archive = new ZipArchive({ zlib: { level: 6 } });
-    const passThrough = new PassThrough();
-    archive.pipe(passThrough);
+    archive.pipe(reply.raw);
+    archive.on('error', (err) => reply.raw.destroy(err));
 
-    // Deduplicate filenames within the archive
     const nameCounts = new Map<string, number>();
     for (const asset of assets) {
       const { stream } = await getS3ObjectStream(asset.storageKey);
       const count = nameCounts.get(asset.originalName) ?? 0;
       nameCounts.set(asset.originalName, count + 1);
-      const archiveName = count === 0 ? asset.originalName : `${asset.originalName}_${count}`;
+      let archiveName: string;
+      if (count === 0) {
+        archiveName = asset.originalName;
+      } else {
+        const dotIdx = asset.originalName.lastIndexOf('.');
+        archiveName = dotIdx === -1
+          ? `${asset.originalName} (${count})`
+          : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
+      }
       archive.append(stream, { name: archiveName });
     }
 
     archive.finalize();
-
-    return reply.send(passThrough);
   });
 
-  app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/files/:id', { preHandler: [authenticate] }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    const { userId, role } = req.user;
+
+    const existing = await prisma.asset.findUnique({
+      where: { id: params.id },
+      select: { storageKey: true, thumbnailKey: true, uploadedBy: true },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Not found' });
+    if (role !== 'admin' && existing.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
     try {
-      const asset = await prisma.asset.delete({
-        where: { id: params.id },
-        select: { storageKey: true, thumbnailKey: true },
-      });
-      await deleteFromS3(asset.storageKey);
-      if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey);
+      await prisma.asset.delete({ where: { id: params.id } });
+      await deleteFromS3(existing.storageKey);
+      if (existing.thumbnailKey) await deleteFromS3(existing.thumbnailKey);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         return reply.status(404).send({ error: 'Not found' });
@@ -509,11 +523,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       throw err;
     }
 
-    // assetId is null here because the asset no longer exists (ON DELETE SET NULL would
-    // have nulled it anyway). Store the original ID in metadata for audit trail lookup.
     logAudit({
       prisma,
-      userId:   req.user?.userId ?? null,
+      userId,
       assetId:  null,
       action:   'DELETE',
       metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: params.id },

@@ -164,7 +164,7 @@ export async function deleteFile(id: string): Promise<void> {
 
 export interface BulkDeleteResult {
   deleted: string[];
-  errors: { id: string; error: string }[];
+  errors: { id: string; reason: string }[];
 }
 
 export async function bulkDelete(ids: string[]): Promise<BulkDeleteResult> {

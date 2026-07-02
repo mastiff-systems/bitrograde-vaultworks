@@ -492,6 +492,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
       }
       archive.append(stream, { name: archiveName });
+
+      logAudit({
+        prisma,
+        userId,
+        assetId: asset.id,
+        action: 'DOWNLOAD',
+        metadata: { ip: req.ip, userAgent: req.headers['user-agent'], bulk: true },
+      });
     }
 
     archive.finalize();

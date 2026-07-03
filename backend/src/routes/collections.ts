@@ -218,12 +218,21 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid asset IDs', invalidIds: missingIds });
     }
 
-    await prisma.collectionAsset.createMany({
-      data: body.assetIds.map((assetId) => ({ collectionId: params.id, assetId })),
-      skipDuplicates: true,
+    const existingEntries = await prisma.collectionAsset.findMany({
+      where: { collectionId: params.id, assetId: { in: body.assetIds } },
+      select: { assetId: true },
     });
+    const existingAssetIds = new Set(existingEntries.map((e) => e.assetId));
+    const newIds = body.assetIds.filter((id) => !existingAssetIds.has(id));
 
-    return reply.status(200).send({ added: body.assetIds.length });
+    if (newIds.length > 0) {
+      await prisma.collectionAsset.createMany({
+        data: newIds.map((assetId) => ({ collectionId: params.id, assetId })),
+        skipDuplicates: true,
+      });
+    }
+
+    return reply.status(200).send({ added: newIds.length });
   });
 
   // DELETE /api/collections/:id/assets/:assetId — remove asset from collection (owner-only)

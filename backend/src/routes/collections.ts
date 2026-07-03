@@ -79,16 +79,24 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  // GET /api/collections/:id — get collection with full asset list
-  app.get<{ Params: { id: string } }>('/api/collections/:id', { preHandler: [authenticate] }, async (req, reply) => {
+  // GET /api/collections/:id — get collection with full asset list (paginated)
+  app.get<{ Params: { id: string }; Querystring: { limit?: string; offset?: string } }>(
+    '/api/collections/:id',
+    { preHandler: [authenticate] },
+    async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
+
+    const limit = Math.min(parseInt(req.query.limit ?? '50', 10) || 50, 200);
+    const offset = parseInt(req.query.offset ?? '0', 10) || 0;
 
     const collection = await prisma.collection.findUnique({
       where: { id: params.id },
       include: {
         assets: {
           orderBy: { addedAt: 'asc' },
+          skip: offset,
+          take: limit,
           include: {
             asset: {
               select: {
@@ -123,6 +131,8 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
       name: collection.name,
       description: collection.description,
       asset_count: collection._count.assets,
+      limit,
+      offset,
       created_at: collection.createdAt,
       updated_at: collection.updatedAt,
       assets: collection.assets.map(({ asset, addedAt }) => ({
@@ -198,15 +208,20 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     if (!existing) return reply.status(404).send({ error: 'Not found' });
     if (existing.createdBy !== req.user.userId) return reply.status(403).send({ error: 'Forbidden' });
 
-    await prisma.$transaction(
-      body.assetIds.map((assetId) =>
-        prisma.collectionAsset.upsert({
-          where: { collectionId_assetId: { collectionId: params.id, assetId } },
-          create: { collectionId: params.id, assetId },
-          update: {},
-        }),
-      ),
-    );
+    const foundAssets = await prisma.asset.findMany({
+      where: { id: { in: body.assetIds } },
+      select: { id: true },
+    });
+    const foundIds = new Set(foundAssets.map((a) => a.id));
+    const missingIds = body.assetIds.filter((id) => !foundIds.has(id));
+    if (missingIds.length > 0) {
+      return reply.status(400).send({ error: 'Invalid asset IDs', invalidIds: missingIds });
+    }
+
+    await prisma.collectionAsset.createMany({
+      data: body.assetIds.map((assetId) => ({ collectionId: params.id, assetId })),
+      skipDuplicates: true,
+    });
 
     return reply.status(200).send({ added: body.assetIds.length });
   });

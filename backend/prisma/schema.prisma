@@ -197,5 +197,7 @@ model CollectionAsset {
   asset        Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@id([collectionId, assetId])
+  @@index([collectionId])
+  @@index([assetId])
   @@map("collection_assets")
 }

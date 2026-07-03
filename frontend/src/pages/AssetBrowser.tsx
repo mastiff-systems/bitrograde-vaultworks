@@ -19,6 +19,12 @@ import {
   type AssetVersion,
   type Tag,
 } from '../api/client.js';
+import {
+  listCollections,
+  createCollection,
+  addAssetsToCollection,
+  type Collection,
+} from '../api/collections.js';
 import { AudioPreview } from '../components/AudioPreview.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
@@ -232,6 +238,7 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
+  onAddToCollection,
   selectionMode,
   selected,
   onToggleSelect,
@@ -242,6 +249,7 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  onAddToCollection?: () => void;
   selectionMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
@@ -330,6 +338,17 @@ function AssetCard({
                     </svg>
                     Details
                   </button>
+                  {onAddToCollection && (
+                    <button
+                      className="w-full text-left px-3 py-2 text-sm text-content-secondary hover:text-content-primary hover:bg-surface-3 transition-colors flex items-center gap-2"
+                      onClick={() => { setMenuOpen(false); onAddToCollection(); }}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v8.25A2.25 2.25 0 004.5 16.5h15a2.25 2.25 0 002.25-2.25V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                      </svg>
+                      Add to Collection
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -1167,6 +1186,124 @@ function AssetListRow({
   );
 }
 
+// --- Add to Collection Inline Modal ---
+
+function AddToCollectionInlineModal({
+  assetId,
+  collections,
+  onClose,
+  onCollectionCreated,
+}: {
+  assetId: string;
+  collections: Collection[];
+  onClose: () => void;
+  onCollectionCreated: (c: Collection) => void;
+}) {
+  const [adding, setAdding] = useState<string | null>(null);
+  const [done, setDone] = useState<Set<string>>(new Set());
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  async function handleAdd(collectionId: string) {
+    setAdding(collectionId);
+    try {
+      await addAssetsToCollection(collectionId, [assetId]);
+      setDone((prev) => new Set([...prev, collectionId]));
+    } catch {
+      // silently ignore duplicate / network error
+    } finally {
+      setAdding(null);
+    }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    setCreating(true);
+    try {
+      const c = await createCollection(newName.trim());
+      onCollectionCreated(c);
+      await handleAdd(c.id);
+      setNewName('');
+      setShowCreate(false);
+    } catch {
+      // ignore
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="card w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold text-content-primary">Add to Collection</h2>
+          <button onClick={onClose} className="btn-ghost btn-sm">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-5 py-3 max-h-56 overflow-y-auto">
+          {collections.length === 0 && !showCreate ? (
+            <p className="text-sm text-content-muted text-center py-3">No collections yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {collections.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => handleAdd(c.id)}
+                  disabled={adding === c.id || done.has(c.id)}
+                  className="w-full text-left flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-surface-3 transition-colors disabled:opacity-50"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-content-primary truncate">{c.name}</p>
+                    <p className="text-xs text-content-muted">{c.asset_count} assets</p>
+                  </div>
+                  {done.has(c.id) ? (
+                    <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : adding === c.id ? (
+                    <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 pb-4 pt-2 border-t border-border">
+          {showCreate ? (
+            <form onSubmit={handleCreate} className="flex gap-2">
+              <input
+                className="input py-1.5 text-xs flex-1"
+                placeholder="Collection name…"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                autoFocus
+              />
+              <button type="submit" disabled={creating || !newName.trim()} className="btn-primary btn-sm text-xs">
+                {creating ? <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : 'Create'}
+              </button>
+              <button type="button" onClick={() => setShowCreate(false)} className="btn-ghost btn-sm text-xs">Cancel</button>
+            </form>
+          ) : (
+            <button onClick={() => setShowCreate(true)} className="btn-secondary btn-sm text-xs w-full">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              New Collection
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Main AssetBrowser ---
 
 export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: string | null } = {}) {
@@ -1215,6 +1352,24 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionPending, setBulkActionPending] = useState(false);
+
+  // Add to Collection state
+  const [addToCollectionAssetId, setAddToCollectionAssetId] = useState<string | null>(null);
+  const [collectionsForModal, setCollectionsForModal] = useState<Collection[]>([]);
+  const [collectionsLoaded, setCollectionsLoaded] = useState(false);
+
+  async function openAddToCollection(assetId: string) {
+    setAddToCollectionAssetId(assetId);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
 
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
@@ -1737,6 +1892,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
+                  onAddToCollection={() => openAddToCollection(asset.id)}
                   selectionMode={selectionMode}
                   selected={selectedIds.has(asset.id)}
                   onToggleSelect={toggleSelect}
@@ -1811,6 +1967,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             setDetailAsset(previewAsset);
             setPreviewAsset(null);
           }}
+        />
+      )}
+
+      {/* Add to Collection modal */}
+      {addToCollectionAssetId && (
+        <AddToCollectionInlineModal
+          assetId={addToCollectionAssetId}
+          collections={collectionsForModal}
+          onClose={() => setAddToCollectionAssetId(null)}
+          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
         />
       )}
 

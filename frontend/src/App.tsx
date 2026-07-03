@@ -5,6 +5,7 @@ import { Layout } from './components/Layout.js';
 import { AssetBrowser } from './pages/AssetBrowser.js';
 import { AdminPanel } from './pages/admin/AdminPanel.js';
 import { ProfilePage } from './pages/Profile.js';
+import { Collections } from './pages/Collections.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
 import { UploadProvider } from './contexts/UploadContext.js';
@@ -30,6 +31,7 @@ function AppShell() {
       {page === 'dashboard' && <AssetBrowser initialDetailAssetId={pendingAssetId} />}
       {page === 'admin' && user?.role === 'admin' && <AdminPanel onNavigateToAsset={handleNavigateToAsset} />}
       {page === 'profile' && <ProfilePage />}
+      {page === 'collections' && <Collections />}
     </Layout>
   );
 }

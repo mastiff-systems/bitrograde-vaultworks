@@ -17,6 +17,7 @@ model User {
   assetVersions AssetVersion[]
   assets        Asset[]
   auditLogs     AuditLog[]
+  collections   Collection[]
 
   @@map("users")
 }
@@ -69,6 +70,7 @@ model Asset {
   notifications   Notification[]
   versions        AssetVersion[]
   auditLogs       AuditLog[]
+  collections     CollectionAsset[]
   uploader        User?          @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
@@ -171,4 +173,29 @@ model AuditLog {
   @@index([assetId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model Collection {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  description String?
+  createdBy   String            @map("created_by") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user        User              @relation(fields: [createdBy], references: [id])
+  assets      CollectionAsset[]
+
+  @@index([createdBy])
+  @@map("collections")
+}
+
+model CollectionAsset {
+  collectionId String     @map("collection_id") @db.Uuid
+  assetId      String     @map("asset_id") @db.Uuid
+  addedAt      DateTime   @default(now()) @map("added_at") @db.Timestamptz(6)
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  asset        Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, assetId])
+  @@map("collection_assets")
 }

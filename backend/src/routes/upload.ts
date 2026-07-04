@@ -70,7 +70,14 @@ async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
 }
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/upload', async (req, reply) => {
+  app.post('/api/upload', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const parts = req.parts();
     const uploaded: object[] = [];
 

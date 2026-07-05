@@ -320,7 +320,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   const UpdateFileSchema = z.object({
     name: z.string().min(1).optional(),
-    description: z.string().nullable().optional(),
+    description: z.string().max(2000).nullable().optional(),
     categoryId: z.string().uuid().nullable().optional(),
     subcategoryId: z.string().uuid().nullable().optional(),
     tags: z.array(z.string().min(1).max(100)).optional(),

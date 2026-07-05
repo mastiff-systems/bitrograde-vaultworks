@@ -72,8 +72,13 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     const body = parseBody(SetTagsBody, req.body, reply);
     if (!body) return;
 
-    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true } });
+    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true, uploadedBy: true } });
     if (!asset) return reply.status(404).send({ error: 'Asset not found' });
+
+    const { userId, role } = req.user;
+    if (role !== 'admin' && asset.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     const tagNames = [...new Set(body.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
 

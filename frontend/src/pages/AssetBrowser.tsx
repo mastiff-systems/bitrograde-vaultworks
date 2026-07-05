@@ -601,6 +601,7 @@ function AssetDetailModal({
   const [editTagInput, setEditTagInput] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveFieldErrors, setSaveFieldErrors] = useState<Record<string, string[]>>({});
 
   const subcategoriesForEdit = categories.find((c) => c.id === editForm.categoryId)?.subcategories ?? [];
 
@@ -614,6 +615,7 @@ function AssetDetailModal({
     });
     setEditTagInput('');
     setSaveError(null);
+    setSaveFieldErrors({});
     setEditingMeta(true);
   }
 
@@ -633,6 +635,7 @@ function AssetDetailModal({
     if (!editForm.name.trim()) { setSaveError('Name is required'); return; }
     setSavingMeta(true);
     setSaveError(null);
+    setSaveFieldErrors({});
     try {
       const updated = await updateFile(asset.id, {
         name: editForm.name.trim(),
@@ -644,8 +647,13 @@ function AssetDetailModal({
       onUpdate(updated);
       setEditingMeta(false);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setSaveError(msg ?? 'Save failed. Please try again.');
+      const data = (err as { response?: { data?: { error?: string; fields?: Record<string, string[]> } } })?.response?.data;
+      const fieldErrs = data?.fields;
+      if (fieldErrs && Object.keys(fieldErrs).length > 0) {
+        setSaveFieldErrors(fieldErrs);
+      } else {
+        setSaveError(data?.error ?? 'Save failed. Please try again.');
+      }
     } finally {
       setSavingMeta(false);
     }
@@ -760,6 +768,9 @@ function AssetDetailModal({
                   placeholder="Asset name"
                   autoFocus
                 />
+                {saveFieldErrors.name?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
               </div>
               <div>
                 <label className="label mb-1 block">Description</label>
@@ -770,6 +781,9 @@ function AssetDetailModal({
                   onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                   placeholder="Optional description…"
                 />
+                {saveFieldErrors.description?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
               </div>
               <div>
                 <label className="label mb-1 block">Category</label>
@@ -835,13 +849,16 @@ function AssetDetailModal({
                   />
                   <button onClick={addEditTag} className="btn-secondary btn-sm text-xs">Add</button>
                 </div>
+                {saveFieldErrors.tags?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
               </div>
               {saveError && (
                 <p className="text-xs text-danger">{saveError}</p>
               )}
               <div className="flex gap-2 justify-end pt-1">
                 <button
-                  onClick={() => { setEditingMeta(false); setSaveError(null); }}
+                  onClick={() => { setEditingMeta(false); setSaveError(null); setSaveFieldErrors({}); }}
                   className="btn-ghost btn-sm text-xs"
                   disabled={savingMeta}
                 >

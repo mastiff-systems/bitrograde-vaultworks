@@ -212,4 +212,59 @@ describe('DELETE /api/files/:id/share', () => {
     const res = await request(app.server).delete(`/api/files/${asset.id}/share`);
     expect(res.status).toBe(401);
   });
+
+  it('revoked link is no longer accessible via GET /api/share/:token', async () => {
+    const asset = await createAsset();
+    const shareRes = await request(app.server)
+      .post(`/api/files/${asset.id}/share`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+    const { token: shareToken } = shareRes.body;
+
+    await request(app.server)
+      .delete(`/api/files/${asset.id}/share`)
+      .set('Authorization', `Bearer ${token}`);
+
+    const res = await request(app.server).get(`/api/share/${shareToken}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Audit log', () => {
+  it('records SHARE action after POST /api/files/:id/share', async () => {
+    const asset = await createAsset();
+    await request(app.server)
+      .post(`/api/files/${asset.id}/share`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    // logAudit is fire-and-forget; yield to the event loop so the write completes
+    await new Promise((r) => setTimeout(r, 50));
+
+    const entry = await prisma.auditLog.findFirst({
+      where: { assetId: asset.id, action: 'SHARE' },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry?.action).toBe('SHARE');
+  });
+
+  it('records REVOKE_SHARE action after DELETE /api/files/:id/share', async () => {
+    const asset = await createAsset();
+    await request(app.server)
+      .post(`/api/files/${asset.id}/share`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    await request(app.server)
+      .delete(`/api/files/${asset.id}/share`)
+      .set('Authorization', `Bearer ${token}`);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const entry = await prisma.auditLog.findFirst({
+      where: { assetId: asset.id, action: 'REVOKE_SHARE' },
+    });
+    expect(entry).not.toBeNull();
+    expect(entry?.action).toBe('REVOKE_SHARE');
+  });
 });

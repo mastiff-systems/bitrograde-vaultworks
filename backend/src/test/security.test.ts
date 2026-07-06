@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import type { FastifyInstance } from 'fastify';
 import { createApp } from '../app.js';
 import { buildApp, cleanDb } from './helpers.js';
+
+vi.mock('../storage/s3.js', () => ({
+  uploadToS3: vi.fn().mockResolvedValue(undefined),
+  deleteFromS3: vi.fn().mockResolvedValue(undefined),
+  getS3ObjectStream: vi.fn().mockResolvedValue({
+    stream: Buffer.from(''),
+    contentType: 'application/octet-stream',
+    contentLength: 0,
+  }),
+}));
 
 /**
  * Build an app with rate limiting active. The normal test env disables rate
@@ -112,6 +122,47 @@ describe('Rate limit: POST /api/auth/register (max 5 / minute)', () => {
       .send({ email: 'ratelimit5@example.com', password: 'password123' });
 
     expect(res.status).toBe(429);
+  });
+});
+
+// ─── Rate limit – upload ───────────────────────────────────────────────────────
+
+describe('Rate limit: POST /api/upload (max 20 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-upload@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 with retry-after header on the 21st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 20; i++) {
+      const r = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('test'), { filename: 'test.txt', contentType: 'text/plain' });
+      lastUnderLimitStatus = r.status;
+    }
+    // Requests under the limit must not be rate-limited
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .post('/api/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('files', Buffer.from('test'), { filename: 'test.txt', contentType: 'text/plain' });
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
   });
 });
 

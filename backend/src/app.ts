@@ -12,11 +12,14 @@ import { notificationsRoutes } from './routes/notifications.js';
 import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { collectionsRoutes } from './routes/collections.js';
+import { shareRoutes } from './routes/share.js';
 import { authenticate } from './auth/middleware.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
 const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login', '/api/notifications/stream'];
 const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/download$/;
+// Public share download route — unauthenticated by design
+const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
 
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false });
@@ -48,7 +51,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
 
   app.addHook('preHandler', async (req, reply) => {
     const path = req.url.split('?')[0];
-    if (!path.startsWith('/api/') || AUTH_SKIP.includes(path) || ASSET_MEDIA_RE.test(path)) return;
+    if (!path.startsWith('/api/') || AUTH_SKIP.includes(path) || ASSET_MEDIA_RE.test(path) || SHARE_TOKEN_RE.test(path)) return;
     await authenticate(req, reply);
   });
 
@@ -61,6 +64,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(versionsRoutes);
   await app.register(categoriesRoutes);
   await app.register(collectionsRoutes);
+  await app.register(shareRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

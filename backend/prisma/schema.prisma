@@ -18,6 +18,7 @@ model User {
   assets        Asset[]
   auditLogs     AuditLog[]
   collections   Collection[]
+  shareLinks    ShareLink[]
 
   @@map("users")
 }
@@ -71,6 +72,7 @@ model Asset {
   versions        AssetVersion[]
   auditLogs       AuditLog[]
   collections     CollectionAsset[]
+  shareLinks      ShareLink[]
   uploader        User?          @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
@@ -151,6 +153,8 @@ enum AuditAction {
   VIEW
   UPDATE
   DELETE
+  SHARE
+  REVOKE_SHARE
 
   @@map("audit_action")
 }
@@ -200,4 +204,18 @@ model CollectionAsset {
   @@index([collectionId])
   @@index([assetId])
   @@map("collection_assets")
+}
+
+model ShareLink {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  token           String    @unique
+  assetId         String    @map("asset_id") @db.Uuid
+  asset           Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdByUserId String?   @map("created_by_user_id") @db.Uuid
+  createdBy       User?     @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([assetId])
+  @@map("share_links")
 }

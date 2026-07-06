@@ -18,6 +18,10 @@ import {
   type Asset,
   type AssetVersion,
   type Tag,
+  createShareLink,
+  getShareLinks,
+  revokeShareLinks,
+  type ShareLink,
 } from '../api/client.js';
 import {
   listCollections,
@@ -569,6 +573,122 @@ function VersionHistory({ assetId }: { assetId: string }) {
   );
 }
 
+// --- Share Modal ---
+
+function ShareModal({ assetId, onClose }: { assetId: string; onClose: () => void }) {
+  const [links, setLinks] = useState<ShareLink[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getShareLinks(assetId)
+      .then(setLinks)
+      .catch(() => setError('Failed to load share links.'))
+      .finally(() => setLoading(false));
+  }, [assetId]);
+
+  async function handleCreate() {
+    setCreating(true);
+    setError(null);
+    try {
+      const link = await createShareLink(assetId, 30);
+      setLinks([{ id: '', token: link.token, url: link.url, expiresAt: link.expiresAt, createdAt: new Date().toISOString(), createdByUserId: null }]);
+    } catch {
+      setError('Failed to create share link.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleRevoke() {
+    setRevoking(true);
+    setError(null);
+    try {
+      await revokeShareLinks(assetId);
+      setLinks([]);
+    } catch {
+      setError('Failed to revoke share link.');
+    } finally {
+      setRevoking(false);
+    }
+  }
+
+  async function handleCopy(url: string) {
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const activeLink = links[0] ?? null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div
+        className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-md mx-4 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-content">Share Asset</h2>
+          <button onClick={onClose} className="text-content-muted hover:text-content" aria-label="Close">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-6">
+            <div className="w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : activeLink ? (
+          <div className="space-y-3">
+            <p className="text-xs text-content-muted">Anyone with this link can download the asset.</p>
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={activeLink.url}
+                className="flex-1 text-xs bg-surface-raised border border-border rounded px-2.5 py-1.5 text-content font-mono truncate"
+              />
+              <button
+                onClick={() => handleCopy(activeLink.url)}
+                className="btn-secondary btn-sm shrink-0"
+              >
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            {activeLink.expiresAt && (
+              <p className="text-xs text-content-muted">
+                Expires {new Date(activeLink.expiresAt).toLocaleDateString()}
+              </p>
+            )}
+            <button
+              onClick={handleRevoke}
+              disabled={revoking}
+              className="btn-ghost btn-sm text-xs text-danger hover:text-danger w-full mt-1"
+            >
+              {revoking ? 'Revoking…' : 'Revoke link'}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-content-muted">
+              Generate a link to share this asset with external reviewers. Links expire in 30 days.
+            </p>
+            <button onClick={handleCreate} disabled={creating} className="btn-primary btn-sm w-full">
+              {creating ? 'Generating…' : 'Generate share link'}
+            </button>
+          </div>
+        )}
+
+        {error && <p className="mt-3 text-xs text-danger">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 // --- Asset Detail Modal ---
 
 function AssetDetailModal({
@@ -588,6 +708,7 @@ function AssetDetailModal({
   const [tagInput, setTagInput] = useState('');
   const [savingTags, setSavingTags] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
 
   const [editingMeta, setEditingMeta] = useState(false);
@@ -1047,7 +1168,14 @@ function AssetDetailModal({
               </svg>
               Download
             </a>
+            <button onClick={() => setSharingOpen(true)} className="btn-secondary btn-sm">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 1 0 0 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186 9.566-5.314m-9.566 7.5 9.566 5.314m0 0a2.25 2.25 0 1 0 3.935 2.186 2.25 2.25 0 0 0-3.935-2.186zm0-12.814a2.25 2.25 0 1 0 3.933-2.185 2.25 2.25 0 0 0-3.933 2.185z" />
+              </svg>
+              Share
+            </button>
           </div>
+          {sharingOpen && <ShareModal assetId={asset.id} onClose={() => setSharingOpen(false)} />}
           <button
             onClick={handleDelete}
             disabled={deleting}

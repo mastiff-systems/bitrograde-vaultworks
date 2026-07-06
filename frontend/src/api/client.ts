@@ -184,6 +184,32 @@ export async function bulkDownload(ids: string[]): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+export interface ShareLink {
+  id: string;
+  token: string;
+  url: string;
+  expiresAt: string | null;
+  createdAt: string;
+  createdByUserId: string | null;
+}
+
+export async function createShareLink(
+  assetId: string,
+  expiresInDays?: number,
+): Promise<{ token: string; url: string; expiresAt: string | null }> {
+  const { data } = await api.post(`/api/files/${assetId}/share`, expiresInDays != null ? { expiresInDays } : {});
+  return data;
+}
+
+export async function getShareLinks(assetId: string): Promise<ShareLink[]> {
+  const { data } = await api.get<ShareLink[]>(`/api/files/${assetId}/share`);
+  return data;
+}
+
+export async function revokeShareLinks(assetId: string): Promise<void> {
+  await api.delete(`/api/files/${assetId}/share`);
+}
+
 export async function listVersions(assetId: string): Promise<AssetVersion[]> {
   const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);
   return data;
@@ -226,3 +252,4 @@ export function streamUrl(id: string): string {
 export function thumbnailUrl(id: string): string {
   return withToken(`/api/files/${id}/thumbnail`);
 }
+

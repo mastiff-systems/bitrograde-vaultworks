@@ -240,7 +240,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
-  app.get<{ Params: { id: string } }>('/api/files/:id/download', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/download', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 30,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
     const authResult = await authenticateToken(token, reply);
     if (authResult === false) return;
@@ -396,7 +403,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     ids: z.array(z.string().uuid()).min(1).max(100),
   });
 
-  app.post('/api/files/bulk-delete', { preHandler: [authenticate] }, async (req, reply) => {
+  app.post('/api/files/bulk-delete', {
+    preHandler: [authenticate],
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(BulkIdsSchema, req.body, reply);
     if (!body) return;
 
@@ -449,7 +464,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ deleted, errors });
   });
 
-  app.post('/api/files/bulk-download', { preHandler: [authenticate] }, async (req, reply) => {
+  app.post('/api/files/bulk-download', {
+    preHandler: [authenticate],
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(BulkIdsSchema, req.body, reply);
     if (!body) return;
 

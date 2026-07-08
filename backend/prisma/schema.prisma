@@ -152,6 +152,7 @@ enum AuditAction {
   DOWNLOAD
   VIEW
   UPDATE
+  UPDATE_METADATA
   DELETE
   SHARE
   REVOKE_SHARE
@@ -164,7 +165,9 @@ model AuditLog {
   userId    String?     @map("user_id") @db.Uuid
   assetId   String?     @map("asset_id") @db.Uuid
   action    AuditAction
-  metadata  Json        @default("{}")
+  assetName String?     @map("asset_name")
+  ipAddress String?     @map("ip_address")
+  details   Json        @default("{}") @map("details")
   createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)

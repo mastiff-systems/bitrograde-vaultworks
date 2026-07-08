@@ -222,10 +222,12 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
 
       logAudit({
         prisma,
-        userId:   req.user?.userId ?? null,
-        assetId:  asset.id,
-        action:   'UPLOAD',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+        userId:    req.user?.userId ?? null,
+        assetId:   asset.id,
+        assetName: filename,
+        ipAddress: req.ip,
+        action:    'UPLOAD',
+        metadata:  { userAgent: req.headers['user-agent'] },
       });
 
       uploaded.push({

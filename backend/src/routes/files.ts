@@ -230,10 +230,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     logAudit({
       prisma,
-      userId:   req.user?.userId ?? null,
-      assetId:  params.id,
-      action:   'VIEW',
-      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+      userId:    req.user?.userId ?? null,
+      assetId:   params.id,
+      assetName: asset.originalName,
+      ipAddress: req.ip,
+      action:    'VIEW',
+      metadata:  { userAgent: req.headers['user-agent'] },
     });
 
     return reply.send(formatAsset(asset));
@@ -272,10 +274,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     logAudit({
       prisma,
-      userId:   authResult,
-      assetId:  params.id,
-      action:   'DOWNLOAD',
-      metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+      userId:    authResult,
+      assetId:   params.id,
+      assetName: asset.originalName,
+      ipAddress: req.ip,
+      action:    'DOWNLOAD',
+      metadata:  { userAgent: req.headers['user-agent'] },
     });
 
     return reply.send(stream);
@@ -389,10 +393,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
       logAudit({
         prisma,
-        userId:   req.user.userId,
-        assetId:  params.id,
-        action:   'UPDATE',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+        userId:    req.user.userId,
+        assetId:   params.id,
+        assetName: updated.originalName,
+        ipAddress: req.ip,
+        action:    'UPDATE_METADATA',
+        metadata:  { userAgent: req.headers['user-agent'] },
       });
 
       return reply.send(formatAsset(updated));
@@ -420,7 +426,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const assets = await prisma.asset.findMany({
       where: { id: { in: ids } },
-      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
+      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
     });
 
     const deleted: string[] = [];
@@ -453,9 +459,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       logAudit({
         prisma,
         userId,
-        assetId: null,
-        action: 'DELETE',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
+        assetId:   null,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    'DELETE',
+        metadata:  { userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
       });
 
       deleted.push(asset.id);
@@ -519,9 +527,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       logAudit({
         prisma,
         userId,
-        assetId: asset.id,
-        action: 'DOWNLOAD',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'], bulk: true },
+        assetId:   asset.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    'DOWNLOAD',
+        metadata:  { userAgent: req.headers['user-agent'], bulk: true },
       });
     }
 
@@ -536,7 +546,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const existing = await prisma.asset.findUnique({
       where: { id: params.id },
-      select: { storageKey: true, thumbnailKey: true, uploadedBy: true },
+      select: { storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
     });
     if (!existing) return reply.status(404).send({ error: 'Not found' });
     if (role !== 'admin' && existing.uploadedBy !== userId) {
@@ -557,9 +567,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     logAudit({
       prisma,
       userId,
-      assetId:  null,
-      action:   'DELETE',
-      metadata: { ip: req.ip, userAgent: req.headers['user-agent'], deletedAssetId: params.id },
+      assetId:   null,
+      assetName: existing.originalName,
+      ipAddress: req.ip,
+      action:    'DELETE',
+      metadata:  { userAgent: req.headers['user-agent'], deletedAssetId: params.id },
     });
 
     return reply.status(204).send();

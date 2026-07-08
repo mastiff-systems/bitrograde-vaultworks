@@ -1,12 +1,14 @@
 import type { PrismaClient } from '@prisma/client'
 import { Prisma } from '@prisma/client'
 
-export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE' | 'SHARE' | 'REVOKE_SHARE'
+export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'UPDATE_METADATA' | 'DELETE' | 'SHARE' | 'REVOKE_SHARE'
 
 export interface AuditParams {
   prisma: PrismaClient
   userId: string | null
   assetId?: string | null
+  assetName?: string | null
+  ipAddress?: string | null
   action: AuditAction
   metadata?: Record<string, unknown>
 }
@@ -19,10 +21,12 @@ export function logAudit(params: AuditParams): void {
   params.prisma.auditLog
     .create({
       data: {
-        userId:   params.userId,
-        assetId:  params.assetId ?? null,
-        action:   params.action,
-        metadata: (params.metadata ?? {}) as Prisma.InputJsonValue,
+        userId:    params.userId,
+        assetId:   params.assetId ?? null,
+        assetName: params.assetName ?? null,
+        ipAddress: params.ipAddress ?? null,
+        action:    params.action,
+        details:   (params.metadata ?? {}) as Prisma.InputJsonValue,
       },
     })
     .catch((err) => {

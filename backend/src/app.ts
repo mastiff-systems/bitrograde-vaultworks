@@ -13,6 +13,7 @@ import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { collectionsRoutes } from './routes/collections.js';
 import { shareRoutes } from './routes/share.js';
+import { auditRoutes } from './routes/audit.js';
 import { authenticate } from './auth/middleware.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
@@ -65,6 +66,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(categoriesRoutes);
   await app.register(collectionsRoutes);
   await app.register(shareRoutes);
+  await app.register(auditRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

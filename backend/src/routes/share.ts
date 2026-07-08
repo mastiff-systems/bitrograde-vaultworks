@@ -28,7 +28,7 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
 
       const asset = await prisma.asset.findUnique({
         where: { id: params.id },
-        select: { id: true },
+        select: { id: true, originalName: true },
       });
       if (!asset) return reply.status(404).send({ error: 'Not found' });
 
@@ -56,9 +56,11 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
       logAudit({
         prisma,
         userId,
-        assetId: params.id,
-        action: 'SHARE',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'], expiresInDays },
+        assetId:   params.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    'SHARE',
+        metadata:  { userAgent: req.headers['user-agent'], expiresInDays },
       });
 
       return reply.status(201).send({ token, url, expiresAt: expiresAt.toISOString() });
@@ -140,7 +142,7 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
 
       const asset = await prisma.asset.findUnique({
         where: { id: params.id },
-        select: { id: true },
+        select: { id: true, originalName: true },
       });
       if (!asset) return reply.status(404).send({ error: 'Not found' });
 
@@ -155,9 +157,11 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
       logAudit({
         prisma,
         userId,
-        assetId: params.id,
-        action: 'REVOKE_SHARE',
-        metadata: { ip: req.ip, userAgent: req.headers['user-agent'] },
+        assetId:   params.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    'REVOKE_SHARE',
+        metadata:  { userAgent: req.headers['user-agent'] },
       });
 
       return reply.status(204).send();

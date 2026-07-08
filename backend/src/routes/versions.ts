@@ -188,18 +188,13 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
 
       const version = await prisma.assetVersion.findFirst({
         where: { id: params.versionId, assetId: params.id },
-        select: { storageKey: true, mimeType: true, versionNumber: true },
+        select: { storageKey: true, mimeType: true, versionNumber: true, asset: { select: { originalName: true } } },
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });
 
       const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
 
-      // Extract the original filename from the storage key.
-      // Version keys: "assets/{id}/versions/{13-digit-timestamp}_{filename}"
-      // Snapshot keys (v1): "assets/{id}/{filename}"
-      const basename = version.storageKey.split('/').pop() ?? 'file';
-      const originalFilename = basename.replace(/^\d{13}_/, '');
-      const filename = encodeURIComponent(originalFilename);
+      const filename = encodeURIComponent(`v${version.versionNumber}_${version.asset.originalName}`);
 
       reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
       reply.header(

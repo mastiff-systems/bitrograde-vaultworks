@@ -245,7 +245,7 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
       .query({ token });
 
     expect(res.status).toBe(200);
-    expect(res.headers['content-disposition']).toContain('v1.png');
+    expect(res.headers['content-disposition']).toContain('v1_hero.png');
   });
 
   it('serves correct filename for v2+ version with timestamp-prefixed storage key', async () => {
@@ -312,5 +312,29 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
       `/api/files/${asset.id}/versions/${version.id}/download`,
     );
     expect(res.status).toBe(401);
+  });
+
+  it('Content-Disposition includes version number prefix and original name with extension', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: '5-teeth-cogwheel.svg', storageKey: 'assets/cog/5-teeth-cogwheel.svg', assetType: 'image' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 2,
+        storageKey: 'assets/cog/versions/1720000000000_5-teeth-cogwheel.svg',
+        mimeType: 'image/svg+xml',
+        uploadedBy: user!.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files/${asset.id}/versions/${version.id}/download`)
+      .query({ token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toMatch(/v2_5-teeth-cogwheel\.svg/);
   });
 });

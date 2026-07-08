@@ -245,6 +245,32 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
       .query({ token });
 
     expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('v1.png');
+  });
+
+  it('serves correct filename for v2+ version with timestamp-prefixed storage key', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: 'cogwheel.stl', storageKey: 'assets/x/cogwheel.stl', assetType: '3d' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 2,
+        storageKey: 'assets/x/versions/1720000000000_cogwheel.stl',
+        mimeType: 'model/stl',
+        uploadedBy: user!.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files/${asset.id}/versions/${version.id}/download`)
+      .query({ token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('cogwheel.stl');
+    expect(res.headers['content-disposition']).not.toContain('1720000000000');
   });
 
   it('returns 404 for version belonging to different asset', async () => {

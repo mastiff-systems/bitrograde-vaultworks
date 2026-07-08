@@ -194,10 +194,17 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
 
       const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
 
+      // Extract the original filename from the storage key.
+      // Version keys: "assets/{id}/versions/{13-digit-timestamp}_{filename}"
+      // Snapshot keys (v1): "assets/{id}/{filename}"
+      const basename = version.storageKey.split('/').pop() ?? 'file';
+      const originalFilename = basename.replace(/^\d{13}_/, '');
+      const filename = encodeURIComponent(originalFilename);
+
       reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
       reply.header(
         'Content-Disposition',
-        `attachment; filename*=UTF-8''v${version.versionNumber}_file`,
+        `attachment; filename*=UTF-8''${filename}`,
       );
       if (contentLength) reply.header('Content-Length', contentLength);
 

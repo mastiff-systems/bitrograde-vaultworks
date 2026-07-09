@@ -298,8 +298,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('bgm.mp3');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('bgm.mp3');
   });
 
   it('filters by mimeType', async () => {
@@ -308,7 +308,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.data).toHaveLength(2);
   });
 
   it('filters by single tag', async () => {
@@ -317,8 +317,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero.png');
   });
 
   it('filters by multiple tags (AND logic)', async () => {
@@ -328,8 +328,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero.png');
   });
 
   it('returns empty array when no asset matches all tags', async () => {
@@ -338,7 +338,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(0);
+    expect(res.body.data).toHaveLength(0);
   });
 
   it('response includes tags array on each asset', async () => {
@@ -347,7 +347,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body[0].tags).toBeDefined();
-    expect(Array.isArray(res.body[0].tags)).toBe(true);
+    expect(res.body.data[0].tags).toBeDefined();
+    expect(Array.isArray(res.body.data[0].tags)).toBe(true);
   });
 });

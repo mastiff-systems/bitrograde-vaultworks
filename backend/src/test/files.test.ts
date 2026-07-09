@@ -40,7 +40,7 @@ describe('GET /api/files', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body).toMatchObject({ data: [], total: 0, page: 1, limit: 50, totalPages: 0 });
   });
 
   it('returns list of assets ordered by upload date', async () => {
@@ -56,8 +56,10 @@ describe('GET /api/files', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0]).toMatchObject({ original_name: expect.any(String) });
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data[0]).toMatchObject({ original_name: expect.any(String) });
+    expect(res.body.total).toBe(2);
+    expect(res.body.page).toBe(1);
   });
 
   it('returns 401 without auth', async () => {
@@ -154,8 +156,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('dragon_sprite.png');
   });
 
   it('partial match (substring) finds the asset', async () => {
@@ -164,7 +166,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
   });
 
   it('fuzzy match with typo finds the asset via trigram similarity', async () => {
@@ -174,7 +176,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
   });
 
   it('matches via tag name', async () => {
@@ -183,8 +185,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('dragon_sprite.png');
   });
 
   it('matches via description', async () => {
@@ -193,8 +195,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('background_tile.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('background_tile.png');
   });
 
   it('returns empty array when nothing matches', async () => {
@@ -203,7 +205,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.total).toBe(0);
   });
 
   it('combined with assetType filter narrows results', async () => {
@@ -213,8 +216,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.every((a: { asset_type: string }) => a.asset_type === 'image')).toBe(true);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
+    expect(res.body.data.every((a: { asset_type: string }) => a.asset_type === 'image')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
   });
 
   it('combined with tags filter requires both match and tag', async () => {
@@ -224,8 +227,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero_idle.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero_idle.png');
   });
 
   it('result includes all asset tags regardless of which tag matched', async () => {
@@ -234,9 +237,9 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body[0].tags).toBeDefined();
-    expect(Array.isArray(res.body[0].tags)).toBe(true);
-    expect(res.body[0].tags[0].name).toBe('fire');
+    expect(res.body.data[0].tags).toBeDefined();
+    expect(Array.isArray(res.body.data[0].tags)).toBe(true);
+    expect(res.body.data[0].tags[0].name).toBe('fire');
   });
 
   it('limit param caps the number of results', async () => {
@@ -246,7 +249,9 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.total).toBeGreaterThanOrEqual(2);
   });
 
   it('returns 401 without auth', async () => {

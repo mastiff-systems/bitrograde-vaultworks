@@ -34,7 +34,8 @@ const FilesQuerySchema = z.object({
   categoryId: z.string().uuid().optional(),
   subcategoryId: z.string().uuid().optional(),
   format: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 type TagInfo = { id: string; name: string };
@@ -104,14 +105,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
     const params = query.data;
 
-    const limit = params.limit ?? 50;
-    const tagNames = params.tags
-      ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+    const { page, limit, tags: tagsParam, ...otherParams } = params;
+    const tagNames = tagsParam
+      ? tagsParam.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
       : [];
 
     if (params.q) {
       const q = params.q.trim();
-      if (!q) return reply.send([]);
+      if (!q) return reply.send({ data: [], total: 0, page, limit, totalPages: 0 });
 
       const like = `%${q}%`;
 
@@ -143,7 +144,23 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         )`;
       }
 
-      // Phase 1: ranked ID list via pg_trgm similarity + ILIKE fallback
+      // Phase 1a: count total matches for pagination metadata
+      const [countResult] = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(DISTINCT a.id) AS count
+        FROM assets a
+        LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+        LEFT JOIN tags t ON t.id = jat.tag_id
+        WHERE (
+          similarity(a.original_name, ${q}) > 0.3
+          OR a.original_name ILIKE ${like}
+          OR a.description ILIKE ${like}
+          OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+        )
+        ${extraFilters}
+      `;
+      const total = Number(countResult.count);
+
+      // Phase 1b: ranked ID list via pg_trgm similarity + ILIKE fallback with pagination
       // Ranking: name match (1) > tag match (2) > description match (3)
       const rankedIds = await prisma.$queryRaw<{ id: string }[]>`
         SELECT a.id
@@ -167,9 +184,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           END) ASC,
           similarity(a.original_name, ${q}) DESC
         LIMIT ${limit}
+        OFFSET ${(page - 1) * limit}
       `;
 
-      if (rankedIds.length === 0) return reply.send([]);
+      if (rankedIds.length === 0) {
+        return reply.send({ data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 });
+      }
 
       const ids = rankedIds.map((r) => r.id);
 
@@ -185,7 +205,13 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         (a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999),
       );
 
-      return reply.send(sorted.map(formatAsset));
+      return reply.send({
+        data: sorted.map(formatAsset),
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      });
     }
 
     // No query: standard filtered list
@@ -212,13 +238,24 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const where: Prisma.AssetWhereInput = conditions.length > 0 ? { AND: conditions } : {};
 
-    const assets = await prisma.asset.findMany({
-      where,
-      select: assetSelect,
-      orderBy: { uploadedAt: 'desc' },
-      take: limit,
+    const [total, assets] = await prisma.$transaction([
+      prisma.asset.count({ where }),
+      prisma.asset.findMany({
+        where,
+        select: assetSelect,
+        orderBy: { uploadedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return reply.send({
+      data: assets.map(formatAsset),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     });
-    return reply.send(assets.map(formatAsset));
   });
 
   app.get<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {

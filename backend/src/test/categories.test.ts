@@ -296,8 +296,8 @@ describe('GET /api/files taxonomy filters', () => {
       .get(`/api/files?categoryId=${cat.id}`)
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('in-cat.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('in-cat.png');
   });
 
   it('filters by format (mime_type prefix)', async () => {
@@ -312,8 +312,8 @@ describe('GET /api/files taxonomy filters', () => {
       .get('/api/files?format=image')
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('img.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('img.png');
   });
 
   it('returns taxonomy fields on each asset', async () => {
@@ -334,8 +334,8 @@ describe('GET /api/files taxonomy filters', () => {
       .get('/api/files')
       .set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body[0].category_id).toBe(cat.id);
-    expect(res.body[0].license).toBe('CC-BY');
-    expect(res.body[0].duration_seconds).toBe(120.5);
+    expect(res.body.data[0].category_id).toBe(cat.id);
+    expect(res.body.data[0].license).toBe('CC-BY');
+    expect(res.body.data[0].duration_seconds).toBe(120.5);
   });
 });

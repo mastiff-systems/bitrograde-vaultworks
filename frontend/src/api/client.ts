@@ -68,9 +68,18 @@ export interface ListFilesParams {
   subcategoryId?: string;
   format?: string;
   limit?: number;
+  page?: number;
 }
 
-export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
+export interface PaginatedFilesResponse {
+  data: Asset[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export async function listFiles(params?: ListFilesParams): Promise<PaginatedFilesResponse> {
   const p: Record<string, string> = {};
   if (params?.q) p.q = params.q;
   if (params?.assetType) p.assetType = params.assetType;
@@ -79,8 +88,9 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
   if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
+  if (params?.page) p.page = String(params.page);
   if (params?.tags?.length) p.tags = params.tags.join(',');
-  const { data } = await api.get<Asset[]>('/api/files', { params: p });
+  const { data } = await api.get<PaginatedFilesResponse>('/api/files', { params: p });
   return data;
 }
 

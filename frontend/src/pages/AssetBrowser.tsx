@@ -1451,6 +1451,8 @@ function AddToCollectionInlineModal({
 
 // --- Main AssetBrowser ---
 
+const PAGE_LIMIT = 24;
+
 export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: string | null } = {}) {
   const initial = getUrlFilters();
   const {
@@ -1489,6 +1491,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
@@ -1652,7 +1657,12 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       .map(([ext, count]) => ({ ext, count }));
   }, [assets]);
 
-  // Load assets on filter change
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
+
+  // Load assets on filter/page change
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -1661,11 +1671,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       categoryId: selectedCategoryId ?? undefined,
       subcategoryId: selectedSubcategoryId ?? undefined,
+      page,
+      limit: PAGE_LIMIT,
     })
-      .then(setAssets)
+      .then((result) => {
+        setAssets(result.data);
+        setTotal(result.total);
+        setTotalPages(result.totalPages);
+      })
       .catch(() => setError('Failed to load assets.'))
       .finally(() => setLoading(false));
-  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
+  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, page]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -1912,7 +1928,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         {(!loading && (hasFilters || displayed.length > 0)) && (
           <div className="px-6 py-2 flex items-center gap-2 flex-wrap border-b border-border/50 flex-shrink-0 bg-surface-0/30 min-h-[40px]">
             <span className="text-xs text-content-muted">
-              {loading ? '…' : `${displayed.length} ${displayed.length === 1 ? 'asset' : 'assets'}`}
+              {loading ? '…' : `Showing ${displayed.length} of ${total} ${total === 1 ? 'asset' : 'assets'}`}
             </span>
             {selectedCategoryId && (
               <button
@@ -2083,6 +2099,37 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             </div>
           )}
         </div>
+
+        {/* Pagination controls */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border flex-shrink-0 bg-surface-0/60">
+            <span className="text-xs text-content-muted">
+              Page {page} of {totalPages}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => p - 1)}
+                disabled={page === 1}
+                className="btn-secondary btn-sm text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <svg className="w-3.5 h-3.5 mr-1 inline" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                </svg>
+                Prev
+              </button>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={page === totalPages}
+                className="btn-secondary btn-sm text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+                <svg className="w-3.5 h-3.5 ml-1 inline" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Upload wizard */}

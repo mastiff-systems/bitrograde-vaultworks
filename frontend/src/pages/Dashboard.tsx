@@ -61,7 +61,7 @@ export function Dashboard() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    listFiles().then(setAssets).catch(() => setError('Failed to load assets.')).finally(() => setLoading(false));
+    listFiles().then((result) => setAssets(result.data)).catch(() => setError('Failed to load assets.')).finally(() => setLoading(false));
   }, []);
 
   const onDrop = useCallback(async (files: File[]) => {

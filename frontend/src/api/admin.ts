@@ -47,7 +47,15 @@ export async function updateUserRole(id: string, role: 'admin' | 'user'): Promis
   return data;
 }
 
-export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE';
+export type AuditAction =
+  | 'UPLOAD'
+  | 'DOWNLOAD'
+  | 'VIEW'
+  | 'UPDATE'
+  | 'UPDATE_METADATA'
+  | 'DELETE'
+  | 'SHARE'
+  | 'REVOKE_SHARE';
 
 export interface AuditLogEntry {
   id: string;
@@ -62,24 +70,31 @@ export interface AuditLogEntry {
 
 export interface AuditLogsFilters {
   action?: AuditAction;
-  from?: string;
-  to?: string;
-  cursor?: string;
+  userId?: string;
+  assetId?: string;
+  startDate?: string;
+  endDate?: string;
+  page?: number;
   limit?: number;
 }
 
 export interface AuditLogsResponse {
   data: AuditLogEntry[];
-  nextCursor: string | null;
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 export async function fetchAuditLogs(filters: AuditLogsFilters = {}): Promise<AuditLogsResponse> {
   const params = new URLSearchParams();
-  if (filters.action) params.set('action', filters.action);
-  if (filters.from) params.set('from', filters.from);
-  if (filters.to) params.set('to', filters.to);
-  if (filters.cursor) params.set('cursor', filters.cursor);
+  if (filters.action)    params.set('action',    filters.action);
+  if (filters.userId)    params.set('userId',    filters.userId);
+  if (filters.assetId)   params.set('assetId',   filters.assetId);
+  if (filters.startDate) params.set('startDate', filters.startDate);
+  if (filters.endDate)   params.set('endDate',   filters.endDate);
+  params.set('page',  String(filters.page  ?? 1));
   params.set('limit', String(filters.limit ?? 50));
-  const { data } = await api.get<AuditLogsResponse>(`/api/admin/audit-logs?${params.toString()}`);
+  const { data } = await api.get<AuditLogsResponse>(`/api/audit-logs?${params.toString()}`);
   return data;
 }

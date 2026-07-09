@@ -5,7 +5,7 @@ import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { useUpload } from '../contexts/UploadContext.js';
 import { NotificationBell } from './NotificationBell.js';
 
-type Page = 'dashboard' | 'admin' | 'profile' | 'collections';
+type Page = 'dashboard' | 'admin' | 'profile' | 'collections' | 'audit';
 
 interface Props {
   page: Page;

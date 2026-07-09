@@ -4,6 +4,7 @@ import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
 import { AssetBrowser } from './pages/AssetBrowser.js';
 import { AdminPanel } from './pages/admin/AdminPanel.js';
+import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { ProfilePage } from './pages/Profile.js';
 import { Collections } from './pages/Collections.js';
 import { useAuth } from './contexts/AuthContext.js';
@@ -17,7 +18,7 @@ function AppShell() {
   const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
 
   const handleNavigate = (p: Page) => {
-    if (p === 'admin' && user?.role !== 'admin') return;
+    if ((p === 'admin' || p === 'audit') && user?.role !== 'admin') return;
     setPage(p);
   };
 
@@ -29,7 +30,15 @@ function AppShell() {
   return (
     <Layout page={page} onNavigate={handleNavigate}>
       {page === 'dashboard' && <AssetBrowser initialDetailAssetId={pendingAssetId} />}
-      {page === 'admin' && user?.role === 'admin' && <AdminPanel onNavigateToAsset={handleNavigateToAsset} />}
+      {page === 'admin' && user?.role === 'admin' && (
+        <AdminPanel
+          onNavigateToAsset={handleNavigateToAsset}
+          onNavigateToAudit={() => handleNavigate('audit')}
+        />
+      )}
+      {page === 'audit' && user?.role === 'admin' && (
+        <AdminAuditLog onNavigateToAsset={handleNavigateToAsset} />
+      )}
       {page === 'profile' && <ProfilePage />}
       {page === 'collections' && <Collections />}
     </Layout>

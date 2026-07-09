@@ -2,18 +2,21 @@ import { useState } from 'react';
 import { AdminSettings } from './Settings.js';
 import { AdminUsers } from './Users.js';
 import { TaxonomyManager } from './TaxonomyManager.js';
-import { AuditLogs } from './AuditLogs.js';
 
-type AdminTab = 'settings' | 'taxonomy' | 'users' | 'audit-logs';
+type AdminTab = 'settings' | 'taxonomy' | 'users';
 
 const TABS: { id: AdminTab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
   { id: 'taxonomy', label: 'Taxonomy' },
   { id: 'users', label: 'Users' },
-  { id: 'audit-logs', label: 'Audit Logs' },
 ];
 
-export function AdminPanel({ onNavigateToAsset }: { onNavigateToAsset?: (assetId: string) => void } = {}) {
+interface Props {
+  onNavigateToAsset?: (assetId: string) => void;
+  onNavigateToAudit?: () => void;
+}
+
+export function AdminPanel({ onNavigateToAsset: _onNavigateToAsset, onNavigateToAudit }: Props = {}) {
   const [tab, setTab] = useState<AdminTab>('settings');
 
   return (
@@ -35,6 +38,12 @@ export function AdminPanel({ onNavigateToAsset }: { onNavigateToAsset?: (assetId
               {t.label}
             </button>
           ))}
+          <button
+            onClick={() => onNavigateToAudit?.()}
+            className="px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 border-transparent text-content-secondary hover:text-content-primary hover:border-border transition-colors"
+          >
+            Audit Logs ↗
+          </button>
         </nav>
       </div>
 
@@ -43,7 +52,6 @@ export function AdminPanel({ onNavigateToAsset }: { onNavigateToAsset?: (assetId
         {tab === 'settings' && <AdminSettings />}
         {tab === 'taxonomy' && <TaxonomyManager />}
         {tab === 'users' && <AdminUsers />}
-        {tab === 'audit-logs' && <AuditLogs onNavigateToAsset={onNavigateToAsset} />}
       </div>
     </div>
   );

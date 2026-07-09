@@ -94,6 +94,15 @@
     @apply focus:border-accent focus:ring-1 focus:ring-accent/30;
   }
 
+  /* Inline filter inputs/selects (no w-full; width set per-instance) */
+  .input-field {
+    @apply bg-surface-2 border border-border rounded-lg text-content-primary outline-none transition-colors;
+    @apply focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
+  select.input-field {
+    @apply appearance-none;
+  }
+
   .card {
     @apply bg-surface-2 border border-border rounded-xl;
   }

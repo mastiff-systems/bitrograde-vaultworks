@@ -307,8 +307,8 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
                           <span className="text-content-muted italic">deleted asset</span>
                         )}
                       </td>
-                      <td className="text-xs text-content-muted max-w-xs truncate" title={formatMetadata(row.metadata)}>
-                        {formatMetadata(row.metadata)}
+                      <td className="text-xs text-content-muted max-w-xs truncate" title={formatMetadata(row.details)}>
+                        {formatMetadata(row.details)}
                       </td>
                     </tr>
                   ))

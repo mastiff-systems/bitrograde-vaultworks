@@ -62,7 +62,7 @@ export interface AuditLogEntry {
   userId: string | null;
   assetId: string | null;
   action: AuditAction;
-  metadata: Record<string, unknown>;
+  details: Record<string, unknown>;
   createdAt: string;
   user: { email: string } | null;
   asset: { originalName: string } | null;

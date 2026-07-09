@@ -47,10 +47,12 @@ describe('logAudit', () => {
 
     expect(createMock).toHaveBeenCalledWith({
       data: {
-        userId:   'uid-123',
-        assetId:  'aid-456',
-        action:   'DOWNLOAD',
-        metadata: { ip: '1.2.3.4', userAgent: 'Mozilla/5.0' },
+        userId:    'uid-123',
+        assetId:   'aid-456',
+        assetName: null,
+        ipAddress: null,
+        action:    'DOWNLOAD',
+        details:   { ip: '1.2.3.4', userAgent: 'Mozilla/5.0' },
       },
     })
   })

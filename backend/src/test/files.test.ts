@@ -62,6 +62,34 @@ describe('GET /api/files', () => {
     expect(res.body.page).toBe(1);
   });
 
+  it('response includes pagination metadata', async () => {
+    await prisma.asset.create({
+      data: { originalName: 'a.txt', storageKey: 'k/a.txt', assetType: 'other' },
+    });
+    const res = await request(app.server)
+      .get('/api/files')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, page: 1, limit: 50, totalPages: 1 });
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('page=2 returns the correct offset slice', async () => {
+    await prisma.asset.createMany({
+      data: Array.from({ length: 3 }, (_, i) => ({
+        originalName: `f${i}.txt`, storageKey: `k/f${i}.txt`, assetType: 'other',
+      })),
+    });
+    const res = await request(app.server)
+      .get('/api/files?page=2&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.total).toBe(3);
+    expect(res.body.page).toBe(2);
+    expect(res.body.totalPages).toBe(2);
+  });
+
   it('returns 401 without auth', async () => {
     const res = await request(app.server).get('/api/files');
     expect(res.status).toBe(401);
@@ -254,6 +282,23 @@ describe('GET /api/files?q= (fuzzy search)', () => {
     expect(res.body.total).toBeGreaterThanOrEqual(2);
   });
 
+  it('page=1 and page=2 results are disjoint (no duplicates)', async () => {
+    const page1 = await request(app.server)
+      .get('/api/files?q=png&page=1&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+    const page2 = await request(app.server)
+      .get('/api/files?q=png&page=2&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(page1.status).toBe(200);
+    expect(page2.status).toBe(200);
+
+    const ids1 = page1.body.data.map((a: { id: string }) => a.id);
+    const ids2 = page2.body.data.map((a: { id: string }) => a.id);
+    const overlap = ids1.filter((id: string) => ids2.includes(id));
+    expect(overlap).toHaveLength(0);
+  });
+
   it('returns 401 without auth', async () => {
     const res = await request(app.server).get('/api/files?q=dragon');
     expect(res.status).toBe(401);
@@ -328,6 +373,14 @@ describe('GET /api/files query validation', () => {
   it('returns 400 when limit is out of range', async () => {
     const res = await request(app.server)
       .get('/api/files?limit=0')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when page=0', async () => {
+    const res = await request(app.server)
+      .get('/api/files?page=0')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(400);

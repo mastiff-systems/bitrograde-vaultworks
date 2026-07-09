@@ -144,48 +144,50 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         )`;
       }
 
-      // Phase 1a: count total matches for pagination metadata
-      const [countResult] = await prisma.$queryRaw<{ count: bigint }[]>`
-        SELECT COUNT(DISTINCT a.id) AS count
-        FROM assets a
-        LEFT JOIN asset_tags jat ON jat.asset_id = a.id
-        LEFT JOIN tags t ON t.id = jat.tag_id
-        WHERE (
-          similarity(a.original_name, ${q}) > 0.3
-          OR a.original_name ILIKE ${like}
-          OR a.description ILIKE ${like}
-          OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
-        )
-        ${extraFilters}
-      `;
-      const total = Number(countResult.count);
+      const skip = (page - 1) * limit;
 
-      // Phase 1b: ranked ID list via pg_trgm similarity + ILIKE fallback with pagination
-      // Ranking: name match (1) > tag match (2) > description match (3)
-      const rankedIds = await prisma.$queryRaw<{ id: string }[]>`
-        SELECT a.id
-        FROM assets a
-        LEFT JOIN asset_tags jat ON jat.asset_id = a.id
-        LEFT JOIN tags t ON t.id = jat.tag_id
-        WHERE (
-          similarity(a.original_name, ${q}) > 0.3
-          OR a.original_name ILIKE ${like}
-          OR a.description ILIKE ${like}
-          OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
-        )
-        ${extraFilters}
-        GROUP BY a.id, a.original_name, a.description
-        ORDER BY
-          MIN(CASE
-            WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
-            WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
-            WHEN a.description ILIKE ${like} THEN 3
-            ELSE 4
-          END) ASC,
-          similarity(a.original_name, ${q}) DESC
-        LIMIT ${limit}
-        OFFSET ${(page - 1) * limit}
-      `;
+      // Phase 1: count + ranked ID list in one transaction
+      const [countResult, rankedIds] = await prisma.$transaction([
+        prisma.$queryRaw<{ count: bigint }[]>`
+          SELECT COUNT(DISTINCT a.id) AS count
+          FROM assets a
+          LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+          LEFT JOIN tags t ON t.id = jat.tag_id
+          WHERE (
+            similarity(a.original_name, ${q}) > 0.3
+            OR a.original_name ILIKE ${like}
+            OR a.description ILIKE ${like}
+            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+          )
+          ${extraFilters}
+        `,
+        prisma.$queryRaw<{ id: string }[]>`
+          SELECT a.id
+          FROM assets a
+          LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+          LEFT JOIN tags t ON t.id = jat.tag_id
+          WHERE (
+            similarity(a.original_name, ${q}) > 0.3
+            OR a.original_name ILIKE ${like}
+            OR a.description ILIKE ${like}
+            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+          )
+          ${extraFilters}
+          GROUP BY a.id, a.original_name, a.description
+          ORDER BY
+            MIN(CASE
+              WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
+              WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
+              WHEN a.description ILIKE ${like} THEN 3
+              ELSE 4
+            END) ASC,
+            similarity(a.original_name, ${q}) DESC,
+            a.id ASC
+          LIMIT ${limit}
+          OFFSET ${skip}
+        `,
+      ]);
+      const total = Number(countResult[0].count);
 
       if (rankedIds.length === 0) {
         return reply.send({ data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 });

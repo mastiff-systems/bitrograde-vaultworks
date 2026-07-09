@@ -26,7 +26,10 @@ const AddAssetsSchema = z.object({
 
 export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/collections — list user's collections with asset count + first thumbnail
-  app.get('/api/collections', { preHandler: [authenticate] }, async (req, reply) => {
+  app.get('/api/collections', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const userId = req.user.userId;
 
     const collections = await prisma.collection.findMany({
@@ -56,7 +59,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST /api/collections — create a collection
-  app.post('/api/collections', { preHandler: [authenticate] }, async (req, reply) => {
+  app.post('/api/collections', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const body = parseBody(CreateCollectionSchema, req.body, reply);
     if (!body) return;
 
@@ -82,7 +88,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/collections/:id — get collection with full asset list (paginated)
   app.get<{ Params: { id: string }; Querystring: { limit?: string; offset?: string } }>(
     '/api/collections/:id',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -155,7 +164,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PATCH /api/collections/:id — update name/description (owner-only)
-  app.patch<{ Params: { id: string } }>('/api/collections/:id', { preHandler: [authenticate] }, async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/collections/:id', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -184,7 +196,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // DELETE /api/collections/:id — delete collection (owner-only)
-  app.delete<{ Params: { id: string } }>('/api/collections/:id', { preHandler: [authenticate] }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/collections/:id', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -197,7 +212,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // POST /api/collections/:id/assets — add assets (owner-only, upsert)
-  app.post<{ Params: { id: string } }>('/api/collections/:id/assets', { preHandler: [authenticate] }, async (req, reply) => {
+  app.post<{ Params: { id: string } }>('/api/collections/:id/assets', {
+    preHandler: [authenticate],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -238,7 +256,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // DELETE /api/collections/:id/assets/:assetId — remove asset from collection (owner-only)
   app.delete<{ Params: { id: string; assetId: string } }>(
     '/api/collections/:id/assets/:assetId',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(AssetUuidParams, req.params, reply);
       if (!params) return;

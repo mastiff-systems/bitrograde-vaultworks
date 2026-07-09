@@ -10,7 +10,9 @@ const CreateTagBody = z.object({ name: z.string().min(1).max(100) });
 const SetTagsBody = z.object({ tags: z.array(z.string().min(1).max(100)) });
 
 export async function tagsRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/tags', async (_req, reply) => {
+  app.get('/api/tags', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
     const tags = await prisma.tag.findMany({
       select: {
         id: true,
@@ -30,7 +32,9 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
-  app.post('/api/tags', async (req, reply) => {
+  app.post('/api/tags', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const body = parseBody(CreateTagBody, req.body, reply);
     if (!body) return;
 
@@ -50,7 +54,10 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>('/api/tags/:id', { preHandler: [requireAdmin] }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/tags/:id', {
+    preHandler: [requireAdmin],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -65,7 +72,9 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
-  app.put<{ Params: { id: string } }>('/api/files/:id/tags', async (req, reply) => {
+  app.put<{ Params: { id: string } }>('/api/files/:id/tags', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

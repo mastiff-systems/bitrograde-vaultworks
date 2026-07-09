@@ -18,7 +18,10 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/files/:id/share — create or replace share link for asset
   app.post<{ Params: { id: string } }>(
     '/api/files/:id/share',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 20, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(UuidParams, req.params, reply);
       if (!params) return;
@@ -68,7 +71,9 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // GET /api/share/:token — public; streams the asset file (no auth)
-  app.get<{ Params: { token: string } }>('/api/share/:token', async (req, reply) => {
+  app.get<{ Params: { token: string } }>('/api/share/:token', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(TokenParams, req.params, reply);
     if (!params) return;
 
@@ -97,7 +102,10 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/files/:id/share — list active share links for asset (auth required)
   app.get<{ Params: { id: string } }>(
     '/api/files/:id/share',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(UuidParams, req.params, reply);
       if (!params) return;
@@ -135,7 +143,10 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
   // DELETE /api/files/:id/share — revoke all share links for asset owned by requester
   app.delete<{ Params: { id: string } }>(
     '/api/files/:id/share',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(UuidParams, req.params, reply);
       if (!params) return;

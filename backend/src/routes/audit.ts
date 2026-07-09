@@ -15,7 +15,10 @@ const AuditLogsQuerySchema = z.object({
 });
 
 export async function auditRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/audit-logs', { preHandler: [requireAdmin] }, async (req, reply) => {
+  app.get('/api/audit-logs', {
+    preHandler: [requireAdmin],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const parsed = AuditLogsQuerySchema.safeParse(req.query);
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
     const { page, limit, userId, action, assetId, startDate, endDate } = parsed.data;

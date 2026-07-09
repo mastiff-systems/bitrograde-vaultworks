@@ -102,7 +102,9 @@ const subcategorySelect = {
 } as const;
 
 export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/categories', async (_req, reply) => {
+  app.get('/api/categories', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
     const categories = await prisma.category.findMany({
       select: categorySelect,
       orderBy: { name: 'asc' },
@@ -110,7 +112,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(categories.map(formatCategory));
   });
 
-  app.post('/api/categories', async (req, reply) => {
+  app.post('/api/categories', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const body = parseBody(CreateCategoryBody, req.body, reply);
     if (!body) return;
 
@@ -131,7 +135,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.patch<{ Params: { id: string } }>('/api/categories/:id', async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/categories/:id', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -158,7 +164,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>('/api/categories/:id', async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/categories/:id', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -177,6 +185,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { categoryId: string } }>(
     '/api/categories/:categoryId/subcategories',
+    {
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(CategoryIdParams, req.params, reply);
       if (!params) return;
@@ -198,6 +209,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { categoryId: string } }>(
     '/api/categories/:categoryId/subcategories',
+    {
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(CategoryIdParams, req.params, reply);
       if (!params) return;
@@ -231,6 +245,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
+    {
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(SubcategoryParams, req.params, reply);
       if (!params) return;
@@ -266,6 +283,9 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
+    {
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(SubcategoryParams, req.params, reply);
       if (!params) return;

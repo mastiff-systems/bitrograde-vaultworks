@@ -27,7 +27,9 @@ const MessageSchema = z.string().max(500).optional();
 
 export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   // List version history for an asset
-  app.get<{ Params: { id: string } }>('/api/files/:id/versions', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/versions', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -62,7 +64,9 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Upload a new version of an asset
-  app.post<{ Params: { id: string } }>('/api/files/:id/versions', async (req, reply) => {
+  app.post<{ Params: { id: string } }>('/api/files/:id/versions', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -179,6 +183,9 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   // Download a specific version
   app.get<{ Params: { id: string; versionId: string } }>(
     '/api/files/:id/versions/:versionId/download',
+    {
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const token = (req.query as Record<string, string>).token;
       if (!await authenticateToken(token, reply)) return;

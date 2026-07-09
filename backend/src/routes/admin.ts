@@ -24,7 +24,10 @@ function maskSecrets(settings: Record<string, string>): Record<string, string> {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  const opts = { preHandler: [requireAdmin] };
+  const opts = {
+    preHandler: [requireAdmin],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 10, timeWindow: '1 minute' } },
+  };
 
   // GET /api/admin/stats
   app.get('/api/admin/stats', opts, async (_req, reply) => {

@@ -1334,15 +1334,17 @@ function AssetListRow({
 // --- Add to Collection Inline Modal ---
 
 function AddToCollectionInlineModal({
-  assetId,
+  assetIds,
   collections,
   onClose,
   onCollectionCreated,
+  onAdded,
 }: {
-  assetId: string;
+  assetIds: string[];
   collections: Collection[];
   onClose: () => void;
   onCollectionCreated: (c: Collection) => void;
+  onAdded?: () => void;
 }) {
   const [adding, setAdding] = useState<string | null>(null);
   const [done, setDone] = useState<Set<string>>(new Set());
@@ -1353,8 +1355,9 @@ function AddToCollectionInlineModal({
   async function handleAdd(collectionId: string) {
     setAdding(collectionId);
     try {
-      await addAssetsToCollection(collectionId, [assetId]);
+      await addAssetsToCollection(collectionId, assetIds);
       setDone((prev) => new Set([...prev, collectionId]));
+      onAdded?.();
     } catch {
       // silently ignore duplicate / network error
     } finally {
@@ -1507,9 +1510,24 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [addToCollectionAssetId, setAddToCollectionAssetId] = useState<string | null>(null);
   const [collectionsForModal, setCollectionsForModal] = useState<Collection[]>([]);
   const [collectionsLoaded, setCollectionsLoaded] = useState(false);
+  const [bulkAddToCollectionOpen, setBulkAddToCollectionOpen] = useState(false);
+  const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   async function openAddToCollection(assetId: string) {
     setAddToCollectionAssetId(assetId);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
+
+  async function openBulkAddToCollection() {
+    setBulkAddToCollectionOpen(true);
     if (!collectionsLoaded) {
       try {
         const cols = await listCollections();
@@ -1989,6 +2007,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           </div>
         )}
 
+        {/* Success banner */}
+        {bulkSuccess && (
+          <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-success/10 border border-success/20 text-success text-sm flex-shrink-0">
+            {bulkSuccess}
+          </div>
+        )}
+
         {/* Content area */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {/* Loading state */}
@@ -2165,10 +2190,27 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       {/* Add to Collection modal */}
       {addToCollectionAssetId && (
         <AddToCollectionInlineModal
-          assetId={addToCollectionAssetId}
+          assetIds={[addToCollectionAssetId]}
           collections={collectionsForModal}
           onClose={() => setAddToCollectionAssetId(null)}
           onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+        />
+      )}
+
+      {/* Bulk Add to Collection modal */}
+      {bulkAddToCollectionOpen && (
+        <AddToCollectionInlineModal
+          assetIds={Array.from(selectedIds)}
+          collections={collectionsForModal}
+          onClose={() => setBulkAddToCollectionOpen(false)}
+          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onAdded={() => {
+            const count = selectedIds.size;
+            setBulkAddToCollectionOpen(false);
+            setBulkSuccess(`${count} asset${count > 1 ? 's' : ''} added to collection.`);
+            setTimeout(() => setBulkSuccess(null), 3000);
+            exitSelectionMode();
+          }}
         />
       )}
 
@@ -2192,6 +2234,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
               </svg>
             )}
             Download ZIP
+          </button>
+          <button
+            onClick={openBulkAddToCollection}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            Add to Collection
           </button>
           <button
             onClick={handleBulkDelete}

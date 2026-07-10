@@ -1351,15 +1351,17 @@ function AddToCollectionInlineModal({
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleAdd(collectionId: string) {
     setAdding(collectionId);
+    setError(null);
     try {
       await addAssetsToCollection(collectionId, assetIds);
       setDone((prev) => new Set([...prev, collectionId]));
       onAdded?.();
     } catch {
-      // silently ignore duplicate / network error
+      setError('Failed to add to collection. Please try again.');
     } finally {
       setAdding(null);
     }
@@ -1422,6 +1424,10 @@ function AddToCollectionInlineModal({
             </div>
           )}
         </div>
+
+        {error && (
+          <p className="px-5 pt-2 text-xs text-danger">{error}</p>
+        )}
 
         <div className="px-5 pb-4 pt-2 border-t border-border">
           {showCreate ? (

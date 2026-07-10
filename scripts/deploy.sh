@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # deploy.sh — pull main, build, migrate, restart
+# For manual restarts without a full redeploy, use: scripts/pm2-restart.sh
 set -euo pipefail
 
 REPO_DIR="/home/mastiff/development/bitrograde-vaultworks"

@@ -100,7 +100,14 @@ const assetSelect = {
 } as const;
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/files', async (req, reply) => {
+  app.get('/api/files', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 60,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const query = FilesQuerySchema.safeParse(req.query);
     if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
     const params = query.data;
@@ -260,7 +267,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 120,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -325,7 +339,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Inline stream for previews — no Content-Disposition attachment
-  app.get<{ Params: { id: string } }>('/api/files/:id/stream', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/stream', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
     if (await authenticateToken(token, reply) === false) return;
 
@@ -347,7 +368,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
-  app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 60,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
     if (await authenticateToken(token, reply) === false) return;
 
@@ -577,7 +605,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     archive.finalize();
   });
 
-  app.delete<{ Params: { id: string } }>('/api/files/:id', { preHandler: [authenticate] }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/files/:id', {
+    preHandler: [authenticate],
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

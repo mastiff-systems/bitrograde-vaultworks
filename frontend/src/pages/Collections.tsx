@@ -6,10 +6,12 @@ import {
   deleteCollection,
   removeAssetFromCollection,
   addAssetsToCollection,
+  updateCollection,
   type Collection,
   type CollectionDetail,
 } from '../api/collections.js';
-import { thumbnailUrl } from '../api/client.js';
+import { thumbnailUrl, bulkDownload, type Asset } from '../api/client.js';
+import { FileViewer } from '../components/FileViewer/index.js';
 
 function CollectionIcon({ className }: { className?: string }) {
   return (
@@ -264,6 +266,11 @@ function CollectionDetailView({
   const [detail, setDetail] = useState<CollectionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -277,6 +284,21 @@ function CollectionDetailView({
     if (!detail) return;
     await removeAssetFromCollection(collectionId, assetId);
     setDetail((prev) => prev ? { ...prev, assets: prev.assets.filter((a) => a.id !== assetId), asset_count: prev.asset_count - 1 } : prev);
+  }
+
+  async function handleSave() {
+    if (!editName.trim()) return;
+    setSaving(true);
+    try {
+      const updated = await updateCollection(collectionId, {
+        name: editName.trim(),
+        description: editDesc.trim() || null,
+      });
+      setDetail((prev) => prev ? { ...prev, name: updated.name, description: updated.description } : prev);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (loading) {
@@ -308,14 +330,72 @@ function CollectionDetailView({
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <CollectionIcon className="w-5 h-5 text-accent flex-shrink-0" />
-          <h1 className="text-lg font-semibold text-content-primary truncate">{detail.name}</h1>
-          <span className="text-sm text-content-muted flex-shrink-0">({detail.asset_count})</span>
+          {editing ? (
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <input
+                className="input text-lg font-semibold flex-1 min-w-0"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                autoFocus
+                required
+              />
+              <button
+                onClick={handleSave}
+                disabled={saving || !editName.trim()}
+                className="btn-primary btn-sm text-xs flex-shrink-0"
+              >
+                {saving ? <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : 'Save'}
+              </button>
+              <button
+                onClick={() => setEditing(false)}
+                disabled={saving}
+                className="btn-ghost btn-sm text-xs flex-shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <>
+              <h1 className="text-lg font-semibold text-content-primary truncate">{detail.name}</h1>
+              <span className="text-sm text-content-muted flex-shrink-0">({detail.asset_count})</span>
+              <button
+                onClick={() => { setEditName(detail.name); setEditDesc(detail.description ?? ''); setEditing(true); }}
+                className="btn-ghost btn-sm p-1 text-content-muted hover:text-content-primary flex-shrink-0"
+                title="Edit name and description"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+                </svg>
+              </button>
+            </>
+          )}
         </div>
+        <button
+          onClick={() => bulkDownload(detail.assets.map((a) => a.id))}
+          className="btn-secondary btn-sm text-xs flex-shrink-0"
+          disabled={detail.assets.length === 0}
+          title="Download all assets as ZIP"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          Download All
+        </button>
       </div>
 
-      {detail.description && (
+      {editing ? (
+        <div className="mb-5 -mt-2">
+          <textarea
+            className="input w-full resize-none text-sm"
+            rows={2}
+            value={editDesc}
+            onChange={(e) => setEditDesc(e.target.value)}
+            placeholder="Optional description…"
+          />
+        </div>
+      ) : detail.description && (
         <p className="text-sm text-content-secondary mb-5 -mt-2">{detail.description}</p>
       )}
 
@@ -330,7 +410,14 @@ function CollectionDetailView({
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {detail.assets.map((asset) => (
-            <div key={asset.id} className="card flex flex-col overflow-hidden group">
+            <div
+              key={asset.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => setPreviewAsset(asset as Asset)}
+              onKeyDown={(e) => e.key === 'Enter' && setPreviewAsset(asset as Asset)}
+              className="card flex flex-col overflow-hidden group cursor-pointer hover:border-border-light transition-all hover:shadow-lg hover:shadow-black/20 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
               <div className="aspect-square bg-surface-3 flex items-center justify-center overflow-hidden relative">
                 {asset.asset_type === 'image' && asset.thumbnail_key ? (
                   <img src={thumbnailUrl(asset.id)} alt="" className="w-full h-full object-cover" loading="lazy" />
@@ -342,7 +429,10 @@ function CollectionDetailView({
                   </div>
                 )}
                 {/* Remove button */}
-                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div
+                  className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button
                     onClick={() => handleRemoveAsset(asset.id)}
                     className="btn-ghost btn-sm p-1 bg-surface-0/80 backdrop-blur-sm rounded text-content-muted hover:text-danger"
@@ -360,6 +450,13 @@ function CollectionDetailView({
             </div>
           ))}
         </div>
+      )}
+      {previewAsset && (
+        <FileViewer
+          asset={previewAsset}
+          assets={detail.assets as Asset[]}
+          onClose={() => setPreviewAsset(null)}
+        />
       )}
     </div>
   );

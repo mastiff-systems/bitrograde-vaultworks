@@ -17,6 +17,7 @@ vi.mock('../storage/s3.js', () => ({
 let app: FastifyInstance;
 let token: string;
 let adminToken: string;
+let userId: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -38,6 +39,7 @@ beforeEach(async () => {
     .post('/api/auth/register')
     .send({ email: 'user@example.com', password: 'password123' });
   token = userRes.body.token;
+  userId = userRes.body.user.id;
 });
 
 // --- GET /api/tags ---
@@ -168,7 +170,7 @@ describe('DELETE /api/tags/:id', () => {
 describe('PUT /api/files/:id/tags', () => {
   it('sets tags on an asset and auto-creates new tags', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image', uploadedBy: userId },
     });
 
     const res = await request(app.server)
@@ -187,7 +189,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('replaces existing tags on second call', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'image' },
+      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'image', uploadedBy: userId },
     });
 
     await request(app.server)
@@ -207,7 +209,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('clears tags when passed empty array', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'image' },
+      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'image', uploadedBy: userId },
     });
     await request(app.server)
       .put(`/api/files/${asset.id}/tags`)
@@ -225,7 +227,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('normalizes tag names to lowercase', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'image' },
+      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'image', uploadedBy: userId },
     });
 
     const res = await request(app.server)

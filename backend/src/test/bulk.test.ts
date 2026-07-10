@@ -179,7 +179,7 @@ describe('POST /api/files/bulk-delete', () => {
     );
 
     const logs = await prisma.auditLog.findMany({ where: { action: 'DELETE' } });
-    const deletedIds = logs.map((l) => (l.metadata as Record<string, unknown>).deletedAssetId);
+    const deletedIds = logs.map((l) => (l.details as Record<string, unknown>).deletedAssetId);
     expect(deletedIds).toContain(a1.id);
     expect(deletedIds).toContain(a2.id);
   });

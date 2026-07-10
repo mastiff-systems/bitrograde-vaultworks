@@ -205,13 +205,13 @@ describe('PATCH /api/files/:id', () => {
 
     await vi.waitFor(
       async () => {
-        const logs = await prisma.auditLog.findMany({ where: { action: 'UPDATE' } });
+        const logs = await prisma.auditLog.findMany({ where: { action: 'UPDATE_METADATA' } });
         expect(logs).toHaveLength(1);
       },
       { timeout: 3000 },
     );
 
-    const logs = await prisma.auditLog.findMany({ where: { action: 'UPDATE' } });
+    const logs = await prisma.auditLog.findMany({ where: { action: 'UPDATE_METADATA' } });
     expect(logs[0].assetId).toBe(asset.id);
     expect(logs[0].userId).toBe(userId);
   });

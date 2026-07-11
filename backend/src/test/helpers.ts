@@ -13,6 +13,9 @@ export async function cleanDb(): Promise<void> {
   await prisma.shareLink.deleteMany();
   await prisma.assetTag.deleteMany();
   await prisma.assetVersion.deleteMany();
+  await prisma.collectionAsset.deleteMany();
+  await prisma.collection.deleteMany();
+  await prisma.notification.deleteMany();
   await prisma.asset.deleteMany();
   await prisma.tag.deleteMany();
   await prisma.user.deleteMany();

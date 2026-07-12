@@ -53,7 +53,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT /api/admin/settings
-  app.put('/api/admin/settings', opts, async (req, reply) => {
+  app.put('/api/admin/settings', {
+    ...opts,
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: { type: 'string' },
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(SettingsBody, req.body, reply);
     if (!body) return;
 
@@ -83,7 +91,26 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PATCH /api/admin/users/:id/role
-  app.patch<{ Params: { id: string } }>('/api/admin/users/:id/role', opts, async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/admin/users/:id/role', {
+    ...opts,
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['role'],
+        additionalProperties: false,
+        properties: {
+          role: { type: 'string', enum: ['admin', 'user'] },
+        },
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -121,7 +148,24 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/admin/audit-logs
-  app.get('/api/admin/audit-logs', opts, async (req, reply) => {
+  app.get('/api/admin/audit-logs', {
+    ...opts,
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          assetId: { type: 'string', format: 'uuid' },
+          userId:  { type: 'string', format: 'uuid' },
+          action:  { type: 'string', enum: ['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE'] },
+          from:    { type: 'string', format: 'date-time' },
+          to:      { type: 'string', format: 'date-time' },
+          limit:   { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          cursor:  { type: 'string' },
+        },
+      },
+    },
+  }, async (req, reply) => {
     const parsed = AuditLogsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid query parameters', details: parsed.error.flatten() });

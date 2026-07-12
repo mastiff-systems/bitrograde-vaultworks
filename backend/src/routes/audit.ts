@@ -17,6 +17,21 @@ const AuditLogsQuerySchema = z.object({
 export async function auditRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/audit-logs', {
     preHandler: [requireAdmin],
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          page:      { type: 'integer', minimum: 1, default: 1 },
+          limit:     { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          userId:    { type: 'string', format: 'uuid' },
+          action:    { type: 'string', enum: ['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'UPDATE_METADATA', 'DELETE', 'SHARE', 'REVOKE_SHARE'] },
+          assetId:   { type: 'string', format: 'uuid' },
+          startDate: { type: 'string', format: 'date-time' },
+          endDate:   { type: 'string', format: 'date-time' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const parsed = AuditLogsQuerySchema.safeParse(req.query);

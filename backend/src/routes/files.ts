@@ -101,6 +101,23 @@ const assetSelect = {
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/files', {
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          q: { type: 'string' },
+          tags: { type: 'string' },
+          assetType: { type: 'string' },
+          mimeType: { type: 'string' },
+          categoryId: { type: 'string', format: 'uuid' },
+          subcategoryId: { type: 'string', format: 'uuid' },
+          format: { type: 'string' },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 60,
@@ -268,6 +285,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>('/api/files/:id', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 120,
@@ -296,6 +322,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
   app.get<{ Params: { id: string } }>('/api/files/:id/download', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 30,
@@ -340,6 +381,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Inline stream for previews — no Content-Disposition attachment
   app.get<{ Params: { id: string } }>('/api/files/:id/stream', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 20,
@@ -369,6 +425,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
   app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 60,
@@ -406,7 +477,29 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { id: string } }>(
     '/api/files/:id',
-    { preHandler: [authenticate] },
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1 },
+            description: { type: ['string', 'null'], maxLength: 2000 },
+            categoryId: { type: ['string', 'null'], format: 'uuid' },
+            subcategoryId: { type: ['string', 'null'], format: 'uuid' },
+            tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 } },
+          },
+        },
+      },
+    },
     async (req, reply) => {
       const params = parseParams(UuidParams, req.params, reply);
       if (!params) return;
@@ -478,6 +571,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/files/bulk-delete', {
     preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 20,
@@ -541,6 +649,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/files/bulk-download', {
     preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 10,
@@ -607,6 +730,15 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/api/files/:id', {
     preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 10,

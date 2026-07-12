@@ -33,6 +33,16 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/tags', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 100 },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const body = parseBody(CreateTagBody, req.body, reply);
@@ -56,6 +66,15 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string } }>('/api/tags/:id', {
     preHandler: [requireAdmin],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -73,6 +92,23 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.put<{ Params: { id: string } }>('/api/files/:id/tags', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['tags'],
+        additionalProperties: false,
+        properties: {
+          tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 } },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);

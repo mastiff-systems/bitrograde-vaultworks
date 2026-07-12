@@ -21,6 +21,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   if ((process.env.AUTH_PROVIDER ?? 'local') !== 'local') return;
 
   app.post('/api/auth/register', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['email', 'password'],
+        additionalProperties: false,
+        properties: {
+          email: { type: 'string', format: 'email' },
+          password: { type: 'string', minLength: 8 },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 5,
@@ -54,6 +65,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/auth/login', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['email', 'password'],
+        additionalProperties: false,
+        properties: {
+          email: { type: 'string', format: 'email' },
+          password: { type: 'string', minLength: 1 },
+        },
+      },
+    },
     config: {
       rateLimit: {
         max: process.env.VITEST ? 10000 : 10,

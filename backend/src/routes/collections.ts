@@ -61,6 +61,17 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/collections — create a collection
   app.post('/api/collections', {
     preHandler: [authenticate],
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          description: { type: 'string' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const body = parseBody(CreateCollectionSchema, req.body, reply);
@@ -90,6 +101,23 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     '/api/collections/:id',
     {
       preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+            offset: { type: 'integer', minimum: 0, default: 0 },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
@@ -166,6 +194,23 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // PATCH /api/collections/:id — update name/description (owner-only)
   app.patch<{ Params: { id: string } }>('/api/collections/:id', {
     preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          description: { type: ['string', 'null'] },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -198,6 +243,15 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // DELETE /api/collections/:id — delete collection (owner-only)
   app.delete<{ Params: { id: string } }>('/api/collections/:id', {
     preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -214,6 +268,28 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/collections/:id/assets — add assets (owner-only, upsert)
   app.post<{ Params: { id: string } }>('/api/collections/:id/assets', {
     preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['assetIds'],
+        additionalProperties: false,
+        properties: {
+          assetIds: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -258,6 +334,16 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     '/api/collections/:id/assets/:assetId',
     {
       preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'assetId'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            assetId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
     },
     async (req, reply) => {

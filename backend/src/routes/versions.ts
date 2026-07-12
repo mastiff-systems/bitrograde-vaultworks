@@ -28,6 +28,15 @@ const MessageSchema = z.string().max(500).optional();
 export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   // List version history for an asset
   app.get<{ Params: { id: string } }>('/api/files/:id/versions', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -65,6 +74,15 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
 
   // Upload a new version of an asset
   app.post<{ Params: { id: string } }>('/api/files/:id/versions', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
@@ -184,6 +202,22 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string; versionId: string } }>(
     '/api/files/:id/versions/:versionId/download',
     {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'versionId'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            versionId: { type: 'string', format: 'uuid' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
     },
     async (req, reply) => {

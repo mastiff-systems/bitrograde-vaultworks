@@ -20,6 +20,22 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
     '/api/files/:id/share',
     {
       preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            expiresInDays: { type: 'integer', minimum: 1, maximum: 365 },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 20, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
@@ -72,6 +88,15 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
 
   // GET /api/share/:token — public; streams the asset file (no auth)
   app.get<{ Params: { token: string } }>('/api/share/:token', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['token'],
+        properties: {
+          token: { type: 'string', minLength: 64, maxLength: 64 },
+        },
+      },
+    },
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const params = parseParams(TokenParams, req.params, reply);
@@ -104,6 +129,15 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
     '/api/files/:id/share',
     {
       preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
@@ -145,6 +179,15 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
     '/api/files/:id/share',
     {
       preHandler: [authenticate],
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
       config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
     },
     async (req, reply) => {

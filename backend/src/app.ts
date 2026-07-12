@@ -23,7 +23,18 @@ const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download
 const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
 
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false });
+  const app = Fastify({
+    logger: opts.logger ?? false,
+    ajv: {
+      customOptions: {
+        // Do not silently strip extra fields — schemas with additionalProperties:false must reject them.
+        removeAdditional: false,
+        coerceTypes: 'array',
+        useDefaults: true,
+        allErrors: true,
+      },
+    },
+  });
 
   // Security headers on every response — registered first so all replies are covered
   await app.register(helmet, {

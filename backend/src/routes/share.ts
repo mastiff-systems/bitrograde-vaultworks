@@ -119,6 +119,7 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
 
     reply.header('Content-Type', mime);
     reply.header('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
+    reply.header('Cache-Control', 'public, max-age=300');
     if (contentLength) reply.header('Content-Length', contentLength);
 
     return reply.send(stream);

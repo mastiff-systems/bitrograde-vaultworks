@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
@@ -99,6 +100,10 @@ const assetSelect = {
   tags: { select: { tag: { select: { id: true, name: true } } } },
 } as const;
 
+function makeEtag(data: string): string {
+  return '"' + crypto.createHash('sha1').update(data).digest('hex') + '"';
+}
+
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/files', {
     schema: {
@@ -136,7 +141,13 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     if (params.q) {
       const q = params.q.trim();
-      if (!q) return reply.send({ data: [], total: 0, page, limit, totalPages: 0 });
+      if (!q) {
+        const body = { data: [], total: 0, page, limit, totalPages: 0 };
+        const etag = makeEtag(JSON.stringify(body));
+        reply.header('ETag', etag).header('Cache-Control', 'private, no-cache');
+        if (req.headers['if-none-match'] === etag) return reply.status(304).send();
+        return reply.send(body);
+      }
 
       const like = `%${q}%`;
 
@@ -214,7 +225,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       const total = Number(countResult[0].count);
 
       if (rankedIds.length === 0) {
-        return reply.send({ data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 });
+        const body = { data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 };
+        const etag = makeEtag(JSON.stringify(body));
+        reply.header('ETag', etag).header('Cache-Control', 'private, no-cache');
+        if (req.headers['if-none-match'] === etag) return reply.status(304).send();
+        return reply.send(body);
       }
 
       const ids = rankedIds.map((r) => r.id);
@@ -231,13 +246,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         (a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999),
       );
 
-      return reply.send({
-        data: sorted.map(formatAsset),
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      });
+      const searchBody = { data: sorted.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
+      const searchEtag = makeEtag(JSON.stringify(searchBody));
+      reply.header('ETag', searchEtag).header('Cache-Control', 'private, no-cache');
+      if (req.headers['if-none-match'] === searchEtag) return reply.status(304).send();
+      return reply.send(searchBody);
     }
 
     // No query: standard filtered list
@@ -275,13 +288,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }),
     ]);
 
-    return reply.send({
-      data: assets.map(formatAsset),
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    });
+    const listBody = { data: assets.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
+    const listEtag = makeEtag(JSON.stringify(listBody));
+    reply.header('ETag', listEtag).header('Cache-Control', 'private, no-cache');
+    if (req.headers['if-none-match'] === listEtag) return reply.status(304).send();
+    return reply.send(listBody);
   });
 
   app.get<{ Params: { id: string } }>('/api/files/:id', {
@@ -306,6 +317,25 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
     if (!asset) return reply.status(404).send({ error: 'Not found' });
+
+    const etag = makeEtag(`${asset.id}:${asset.updatedAt.toISOString()}`);
+    const lastModified = asset.updatedAt.toUTCString();
+    reply.header('ETag', etag);
+    reply.header('Last-Modified', lastModified);
+    reply.header('Cache-Control', 'private, no-cache');
+
+    const ifNoneMatch = req.headers['if-none-match'];
+    if (ifNoneMatch && ifNoneMatch === etag) return reply.status(304).send();
+
+    const ifModifiedSince = req.headers['if-modified-since'];
+    if (ifModifiedSince) {
+      const since = new Date(ifModifiedSince);
+      if (!isNaN(since.getTime())) {
+        const updatedAtSec = Math.floor(asset.updatedAt.getTime() / 1000);
+        const sinceSec = Math.floor(since.getTime() / 1000);
+        if (updatedAtSec <= sinceSec) return reply.status(304).send();
+      }
+    }
 
     logAudit({
       prisma,

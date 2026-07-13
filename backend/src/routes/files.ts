@@ -144,7 +144,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       if (!q) {
         const body = { data: [], total: 0, page, limit, totalPages: 0 };
         const etag = makeEtag(JSON.stringify(body));
-        reply.header('ETag', etag).header('Cache-Control', 'private, no-cache');
+        reply.header('ETag', etag).header('Cache-Control', 'no-cache');
         if (req.headers['if-none-match'] === etag) return reply.status(304).send();
         return reply.send(body);
       }
@@ -227,7 +227,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       if (rankedIds.length === 0) {
         const body = { data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 };
         const etag = makeEtag(JSON.stringify(body));
-        reply.header('ETag', etag).header('Cache-Control', 'private, no-cache');
+        reply.header('ETag', etag).header('Cache-Control', 'no-cache');
         if (req.headers['if-none-match'] === etag) return reply.status(304).send();
         return reply.send(body);
       }
@@ -248,7 +248,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
       const searchBody = { data: sorted.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
       const searchEtag = makeEtag(JSON.stringify(searchBody));
-      reply.header('ETag', searchEtag).header('Cache-Control', 'private, no-cache');
+      reply.header('ETag', searchEtag).header('Cache-Control', 'no-cache');
       if (req.headers['if-none-match'] === searchEtag) return reply.status(304).send();
       return reply.send(searchBody);
     }
@@ -290,7 +290,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const listBody = { data: assets.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
     const listEtag = makeEtag(JSON.stringify(listBody));
-    reply.header('ETag', listEtag).header('Cache-Control', 'private, no-cache');
+    reply.header('ETag', listEtag).header('Cache-Control', 'no-cache');
     if (req.headers['if-none-match'] === listEtag) return reply.status(304).send();
     return reply.send(listBody);
   });
@@ -322,7 +322,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const lastModified = asset.updatedAt.toUTCString();
     reply.header('ETag', etag);
     reply.header('Last-Modified', lastModified);
-    reply.header('Cache-Control', 'private, no-cache');
+    reply.header('Cache-Control', 'no-cache');
 
     const ifNoneMatch = req.headers['if-none-match'];
     if (ifNoneMatch && ifNoneMatch === etag) return reply.status(304).send();

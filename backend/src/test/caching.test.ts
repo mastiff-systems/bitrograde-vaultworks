@@ -41,7 +41,7 @@ describe('ETag / Cache-Control — GET /api/files', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['etag']).toMatch(/^"[0-9a-f]+"$/);
-    expect(res.headers['cache-control']).toBe('private, no-cache');
+    expect(res.headers['cache-control']).toBe('no-cache');
   });
 
   it('returns 304 when If-None-Match matches the ETag', async () => {
@@ -81,7 +81,7 @@ describe('ETag / Cache-Control — GET /api/files/:id', () => {
     expect(res.status).toBe(200);
     expect(res.headers['etag']).toMatch(/^"[0-9a-f]+"$/);
     expect(res.headers['last-modified']).toBeDefined();
-    expect(res.headers['cache-control']).toBe('private, no-cache');
+    expect(res.headers['cache-control']).toBe('no-cache');
   });
 
   it('returns 304 when If-None-Match matches the ETag', async () => {

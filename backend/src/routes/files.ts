@@ -529,6 +529,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           },
         },
       },
+      config: {
+        rateLimit: {
+          max: process.env.VITEST ? 10000 : 20,
+          timeWindow: '1 minute',
+        },
+      },
     },
     async (req, reply) => {
       const params = parseParams(UuidParams, req.params, reply);

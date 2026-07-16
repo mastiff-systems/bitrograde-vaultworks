@@ -1,14 +1,26 @@
-// webhook-server.mjs — listens for GitHub push events and triggers deploy
+// webhook-server.mjs — listens for GitHub push events and routes to per-environment deploy scripts
+// main   → deploy-prod.sh    (port 3000, production)
+// develop → deploy-staging.sh (port 3001, staging) + deploy-dev.sh (port 3002, dev)
 import http from 'http';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = 9876;
 const SECRET = process.env.WEBHOOK_SECRET || 'vaultworks-webhook-secret';
-const DEPLOY_SCRIPT = new URL('../scripts/deploy.sh', import.meta.url).pathname;
-const WATCHED_BRANCHES = ['refs/heads/main', 'refs/heads/develop'];
 
-let deployRunning = false;
+const DEPLOY_SCRIPTS = {
+  'refs/heads/main': path.join(__dirname, 'deploy-prod.sh'),
+  'refs/heads/develop': [
+    path.join(__dirname, 'deploy-staging.sh'),
+    path.join(__dirname, 'deploy-dev.sh'),
+  ],
+};
+
+const running = new Set();
 
 function verify(secret, payload, sig) {
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
@@ -17,6 +29,25 @@ function verify(secret, payload, sig) {
   } catch {
     return false;
   }
+}
+
+function runDeploy(script, label) {
+  if (running.has(script)) {
+    console.log(`webhook: deploy already running for ${label}, skipping`);
+    return;
+  }
+  running.add(script);
+  console.log(`webhook: triggering ${label}`);
+  execFile(script, { timeout: 600_000 }, (err, stdout, stderr) => {
+    running.delete(script);
+    if (err) {
+      console.error(`deploy ${label} failed:`, err.message);
+      console.error(stderr);
+    } else {
+      console.log(`deploy ${label} succeeded`);
+      console.log(stdout);
+    }
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -45,33 +76,26 @@ const server = http.createServer((req, res) => {
       res.writeHead(400); res.end('bad json'); return;
     }
 
-    if (!WATCHED_BRANCHES.includes(payload.ref)) {
+    const scripts = DEPLOY_SCRIPTS[payload.ref];
+    if (!scripts) {
       console.log(`webhook: ignoring push to ${payload.ref}`);
       res.writeHead(200); res.end('ignored'); return;
     }
 
-    if (deployRunning) {
-      console.log('webhook: deploy already running, skipping');
-      res.writeHead(202); res.end('deploy already in progress'); return;
-    }
-
-    console.log(`webhook: triggering deploy for ${payload.ref} @ ${payload.after}`);
+    console.log(`webhook: push to ${payload.ref} @ ${payload.after}`);
     res.writeHead(202); res.end('deploy triggered');
 
-    deployRunning = true;
-    execFile(DEPLOY_SCRIPT, { timeout: 600_000 }, (err, stdout, stderr) => {
-      deployRunning = false;
-      if (err) {
-        console.error('deploy failed:', err.message);
-        console.error(stderr);
-      } else {
-        console.log('deploy succeeded');
-        console.log(stdout);
-      }
-    });
+    const scriptList = Array.isArray(scripts) ? scripts : [scripts];
+    for (const script of scriptList) {
+      runDeploy(script, path.basename(script));
+    }
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`webhook server listening on :${PORT}`);
+  console.log('Routes:');
+  console.log('  main    → deploy-prod.sh    (production, port 3000)');
+  console.log('  develop → deploy-staging.sh (staging, port 3001)');
+  console.log('           + deploy-dev.sh    (dev, port 3002)');
 });

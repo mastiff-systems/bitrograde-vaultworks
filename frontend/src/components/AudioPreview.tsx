@@ -23,7 +23,6 @@ export function AudioPreview({ assetId }: Props) {
       cursorColor: '#fff',
       height: 100,
       normalize: true,
-      backend: 'WebAudio',
     });
 
     wsRef.current = ws;

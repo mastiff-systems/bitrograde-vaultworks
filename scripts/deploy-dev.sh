@@ -11,23 +11,23 @@ git -C "$DEV_DIR" fetch origin develop
 git -C "$DEV_DIR" reset --hard origin/develop
 
 echo "[deploy-dev] Installing backend dependencies..."
-npm ci --prefix "$DEV_DIR/backend"
+pnpm install --frozen-lockfile --dir "$DEV_DIR/backend"
 
 echo "[deploy-dev] Running database migrations..."
 cd "$DEV_DIR" && env $(grep -v '^#' "$ENV_FILE" | xargs) \
-  npx --prefix "$DEV_DIR/backend" prisma migrate deploy \
+  pnpm --dir "$DEV_DIR/backend" exec prisma migrate deploy \
   --schema "$DEV_DIR/backend/prisma/schema.prisma"
 
 echo "[deploy-dev] Building backend..."
-npm run build --prefix "$DEV_DIR/backend"
+pnpm --dir "$DEV_DIR/backend" run build
 
 echo "[deploy-dev] Installing frontend dependencies..."
-npm ci --prefix "$DEV_DIR/frontend"
+pnpm install --frozen-lockfile --dir "$DEV_DIR/frontend"
 
 echo "[deploy-dev] Building frontend..."
 cd "$DEV_DIR/frontend" && \
   env $(grep -v '^#' "$ENV_FILE" | grep '^VITE_' | xargs) \
-  npm run build --prefix "$DEV_DIR/frontend"
+  pnpm --dir "$DEV_DIR/frontend" run build
 
 echo "[deploy-dev] Reloading PM2 process..."
 pm2 reload vaultworks-dev --update-env

@@ -30,6 +30,10 @@ cd "$DEV_DIR/frontend" && \
   pnpm --dir "$DEV_DIR/frontend" run build
 
 echo "[deploy-dev] Reloading PM2 process..."
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
 pm2 reload vaultworks-dev --update-env
 
 echo "[deploy-dev] Done."

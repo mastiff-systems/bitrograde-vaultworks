@@ -25,6 +25,7 @@ pnpm install --frozen-lockfile
 pnpm run build
 
 echo "--- frontend deps + build ---"
+set -a; source "$ENV_FILE"; set +a
 cd "$REPO_DIR/frontend"
 pnpm install --frozen-lockfile
 pnpm run build

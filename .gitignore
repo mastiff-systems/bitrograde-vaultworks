@@ -5,3 +5,5 @@ backend/dist/
 frontend/dist/
 .env
 *.env.local
+.env.*
+!.env.example

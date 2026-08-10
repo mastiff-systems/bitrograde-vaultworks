@@ -70,6 +70,23 @@ export interface ListFilesParams {
   limit?: number;
 }
 
+/**
+ * Look up an asset by its exact original filename.
+ *
+ * Wraps `GET /api/files?exact_name=<name>` (added in MAS-342).
+ * The endpoint returns only `{ id, original_name }` per match — sufficient
+ * for drag-and-drop overwrite conflict detection (MAS-341).
+ *
+ * Returns the first matching asset or `null` when no match is found.
+ * Never throws on a 200 empty-list response.
+ */
+export async function findAssetByExactName(name: string): Promise<Pick<Asset, 'id' | 'original_name'> | null> {
+  const { data } = await api.get<Pick<Asset, 'id' | 'original_name'>[]>('/api/files', {
+    params: { exact_name: name },
+  });
+  return data.length > 0 ? data[0] : null;
+}
+
 export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   const p: Record<string, string> = {};
   if (params?.q) p.q = params.q;

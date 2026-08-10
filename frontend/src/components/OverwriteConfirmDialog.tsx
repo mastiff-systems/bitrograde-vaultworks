@@ -11,11 +11,13 @@ export interface OverwriteConfirmDialogProps {
   onResolve: (decisions: Record<string, ConflictResolution>) => void;
   /** Called when the user cancels without resolving. */
   onCancel: () => void;
+  /**
+   * Called synchronously when the user clicks "don't ask me again".
+   * The caller (DropZone) is responsible for persisting the preference;
+   * the dialog itself does not write to localStorage.
+   */
+  onNeverAsk?: () => void;
 }
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const OVERWRITE_PREF_KEY = 'vaultworks_overwrite_pref';
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +33,7 @@ export function OverwriteConfirmDialog({
   conflicts,
   onResolve,
   onCancel,
+  onNeverAsk,
 }: OverwriteConfirmDialogProps) {
   // Per-filename decision map; null = not yet decided
   const [decisions, setDecisions] = useState<Record<string, ConflictResolution | null>>(
@@ -115,13 +118,14 @@ export function OverwriteConfirmDialog({
     [applyToAll],
   );
 
-  // "Don't ask me again" — save pref, resolve everything as overwrite, and close
+  // "Don't ask me again" — notify DropZone to persist the pref (on upload success),
+  // then resolve everything as overwrite and close
   const handleNeverAsk = useCallback(() => {
-    localStorage.setItem(OVERWRITE_PREF_KEY, 'always');
+    onNeverAsk?.();
     onResolve(
       Object.fromEntries(conflicts.map((f) => [f, 'overwrite' as ConflictResolution])),
     );
-  }, [conflicts, onResolve]);
+  }, [conflicts, onResolve, onNeverAsk]);
 
   // Confirm — unresolved items default to 'keep'
   const handleConfirm = useCallback(() => {

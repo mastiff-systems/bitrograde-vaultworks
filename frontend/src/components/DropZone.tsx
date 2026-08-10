@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { findAssetByExactName, uploadFiles, uploadVersion } from '../api/client.js';
 import type { Asset } from '../api/client.js';
@@ -15,9 +15,11 @@ interface ConflictEntry {
 
 interface Props {
   onUploaded: (assets: Asset[]) => void;
+  /** Called after all overwrite versions succeed. Lets the parent refresh the asset list. */
+  onVersionsCreated?: () => void;
 }
 
-export function DropZone({ onUploaded }: Props) {
+export function DropZone({ onUploaded, onVersionsCreated }: Props) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +27,9 @@ export function DropZone({ onUploaded }: Props) {
   // Non-empty while the overwrite-confirm dialog is open
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
   const [pendingNonConflicts, setPendingNonConflicts] = useState<File[]>([]);
+
+  // Set to true when "don't ask again" is clicked; pref is committed only on upload success
+  const pendingPrefSave = useRef(false);
 
   // ── Shared upload executor ───────────────────────────────────────────────────
 
@@ -39,6 +44,9 @@ export function DropZone({ onUploaded }: Props) {
       setUploading(true);
       setProgress(0);
       try {
+        // Fix 2: clear stale error banner at the start of every attempt
+        setError(null);
+
         const allAssets: Asset[] = [];
 
         // New / keep-both files — one batched multipart request
@@ -52,6 +60,14 @@ export function DropZone({ onUploaded }: Props) {
           await Promise.all(
             overwriteEntries.map((e) => uploadVersion(e.existingId, e.file)),
           );
+          // Fix 1: notify parent so it can refresh overwritten assets
+          onVersionsCreated?.();
+        }
+
+        // Fix 3: persist "don't ask again" only after a successful upload
+        if (pendingPrefSave.current) {
+          localStorage.setItem(OVERWRITE_PREF_KEY, 'always');
+          pendingPrefSave.current = false;
         }
 
         onUploaded(allAssets);
@@ -62,7 +78,7 @@ export function DropZone({ onUploaded }: Props) {
         setProgress(0);
       }
     },
-    [onUploaded],
+    [onUploaded, onVersionsCreated],
   );
 
   // ── Dialog callbacks ─────────────────────────────────────────────────────────
@@ -137,7 +153,6 @@ export function DropZone({ onUploaded }: Props) {
       // 4. No dialog needed — route directly
       //    - pref === 'always': overwrite all conflicting files silently
       //    - no conflicts:      upload everything fresh
-      setUploading(false);
       await executeUploads(conflicting, nonConflicting);
     },
     [executeUploads],
@@ -160,6 +175,7 @@ export function DropZone({ onUploaded }: Props) {
           conflicts={conflicts.map((c) => c.file.name)}
           onResolve={handleResolve}
           onCancel={handleCancel}
+          onNeverAsk={() => { pendingPrefSave.current = true; }}
         />
       )}
       <div

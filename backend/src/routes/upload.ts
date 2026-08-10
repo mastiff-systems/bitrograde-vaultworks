@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
+import { generateDuplicateName } from '../lib/filename.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
@@ -133,11 +134,27 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Build the initial set of taken names from the database so we can
+    // auto-rename any incoming file that would collide (keep-both path).
+    // We extend this set as each file in the batch is assigned a name, so
+    // a multi-file upload with two identically-named files both get unique names.
+    const existingAssets = await prisma.asset.findMany({ select: { originalName: true } });
+    const takenNames: string[] = existingAssets.map((a) => a.originalName);
+
     for (const file of files) {
       const { filename, mimetype: mime, buffer } = file;
+
+      // Resolve a unique name: if the incoming filename is already taken,
+      // apply the -Copy / (N) suffix scheme from generateDuplicateName.
+      const resolvedName = takenNames.includes(filename)
+        ? generateDuplicateName(takenNames, filename)
+        : filename;
+      // Track the resolved name so subsequent files in this batch don't collide with it.
+      takenNames.push(resolvedName);
+
       const id = uuidv4();
-      const storageKey = `assets/${id}/${filename}`;
-      const assetType = detectAssetType(filename, mime);
+      const storageKey = `assets/${id}/${resolvedName}`;
+      const assetType = detectAssetType(resolvedName, mime);
 
       await uploadToS3(storageKey, buffer, mime);
 
@@ -160,7 +177,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         asset = await prisma.asset.create({
           data: {
             id,
-            originalName: filename,
+            originalName: resolvedName,
             mimeType: mime,
             sizeBytes: BigInt(buffer.length),
             storageKey,
@@ -236,7 +253,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             userId: req.user.userId,
             type: 'upload_complete',
             title: 'Upload complete',
-            body: `${filename} is ready.`,
+            body: `${resolvedName} is ready.`,
             resourceId: asset.id,
           });
 
@@ -250,7 +267,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
                 userId: u.id,
                 type: 'new_asset',
                 title: 'New asset uploaded',
-                body: `${filename} was added to the library.`,
+                body: `${resolvedName} was added to the library.`,
                 resourceId: asset.id,
               }),
             ),

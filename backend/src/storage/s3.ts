@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import type { Readable } from 'stream';
 import { getS3Config } from '../db/settings.js';
@@ -26,6 +27,17 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
 export async function deleteFromS3(key: string): Promise<void> {
   const { client, bucket } = await getClient();
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+export async function copyS3Object(sourceKey: string, destKey: string): Promise<void> {
+  const { client, bucket } = await getClient();
+  await client.send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${sourceKey}`,
+      Key: destKey,
+    }),
+  );
 }
 
 export async function getS3ObjectStream(

@@ -1,11 +1,13 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { copyS3Object, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
+import { generateDuplicateName } from '../lib/filename.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -287,6 +289,61 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (contentLength) reply.header('Content-Length', contentLength);
 
     return reply.send(stream);
+  });
+
+  // Creates a copy of an asset with a non-conflicting suffixed name.
+  // Returns the new asset record (same shape as GET /api/files/:id).
+  app.post<{ Params: { id: string } }>('/api/files/:id/duplicate', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
+    // Fetch the source asset
+    const source = await prisma.asset.findUnique({
+      where: { id: params.id },
+      select: {
+        ...assetSelect,
+        storageKey: true,
+        mimeType: true,
+      },
+    });
+    if (!source) return reply.status(404).send({ error: 'Not found' });
+
+    // Gather all existing names to avoid conflicts
+    const allNames = await prisma.asset.findMany({ select: { originalName: true } });
+    const existingNames = allNames.map((a) => a.originalName);
+
+    // Derive the new name using the duplicate-suffix logic
+    const newName = generateDuplicateName(existingNames, source.originalName);
+
+    // Copy the S3 object under a new key
+    const newId = uuidv4();
+    const storageKey = `assets/${newId}/${newName}`;
+
+    await copyS3Object(source.storageKey, storageKey);
+
+    // Persist the new asset, copying all metadata from the source
+    const newAsset = await prisma.asset.create({
+      data: {
+        id: newId,
+        originalName: newName,
+        mimeType: source.mimeType,
+        sizeBytes: source.sizeBytes,
+        storageKey,
+        assetType: source.assetType,
+        // Thumbnail is intentionally not copied — it is keyed to the source asset's path.
+        // A fresh thumbnail would require re-processing the image.
+        description: source.description,
+        categoryId: source.categoryId,
+        subcategoryId: source.subcategoryId,
+        license: source.license,
+        resolutionW: source.resolutionW,
+        resolutionH: source.resolutionH,
+        durationSeconds: source.durationSeconds,
+      },
+      select: assetSelect,
+    });
+
+    return reply.status(201).send(formatAsset(newAsset));
   });
 
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {

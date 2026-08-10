@@ -22,6 +22,7 @@ const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
 
 const FilesQuerySchema = z.object({
   q: z.string().optional(),
+  exact_name: z.string().optional(),
   tags: z.string().optional(),
   assetType: z.string().optional(),
   mimeType: z.string().optional(),
@@ -94,6 +95,17 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const query = FilesQuerySchema.safeParse(req.query);
     if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
     const params = query.data;
+
+    // Exact-name conflict lookup — used by drag-and-drop overwrite detection (MAS-342)
+    // Returns [{id, original_name}] for every asset whose originalName exactly matches
+    // (case-sensitive PostgreSQL =), or [] if none. Bypasses all other filters.
+    if (params.exact_name) {
+      const matches = await prisma.asset.findMany({
+        where: { originalName: params.exact_name },
+        select: { id: true, originalName: true },
+      });
+      return reply.send(matches.map((a) => ({ id: a.id, original_name: a.originalName })));
+    }
 
     const limit = params.limit ?? 50;
     const tagNames = params.tags

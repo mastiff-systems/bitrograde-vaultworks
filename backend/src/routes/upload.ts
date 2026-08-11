@@ -1,9 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
+import { Transform } from 'stream';
 import sharp from 'sharp';
 import { prisma } from '../db/client.js';
-import { uploadToS3, deleteFromS3 } from '../storage/s3.js';
+import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
 
@@ -74,10 +75,27 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const parts = req.parts();
     const uploaded: object[] = [];
 
-    // Collect non-file fields and buffer file parts in a single pass
     const fields: Record<string, string> = {};
+
+    // Buffered files: images that need thumbnail generation (typically small).
     type BufferedFile = { filename: string; mimetype: string; buffer: Buffer };
+    // Streamed files: everything else — uploaded directly to S3 with no heap copy.
+    type StreamedFile = {
+      id: string;
+      filename: string;
+      resolvedName: string;
+      mimetype: string;
+      storageKey: string;
+      assetType: string;
+      sizeBytes: number;
+    };
     const files: BufferedFile[] = [];
+    const streamedFiles: StreamedFile[] = [];
+
+    // Pre-fetch existing asset names so duplicate resolution is available while
+    // we're still inside the parts() loop (required for the streaming path).
+    const existingAssets = await prisma.asset.findMany({ select: { originalName: true } });
+    const takenNames: string[] = existingAssets.map((a) => a.originalName);
 
     for await (const part of parts) {
       if (part.type === 'field') {
@@ -88,6 +106,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       const filenameResult = FilenameSchema.safeParse(part.filename);
       if (!filenameResult.success) {
         part.file.resume();
+        // Clean up any S3 objects we already streamed before erroring out.
+        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
         return reply.status(400).send({
           error: 'Invalid filename',
           fields: { filename: filenameResult.error.issues.map((i) => i.message) },
@@ -97,14 +117,52 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       const mimeResult = MimeSchema.safeParse(part.mimetype);
       const mime = mimeResult.success ? mimeResult.data : 'application/octet-stream';
 
-      const chunks: Buffer[] = [];
-      for await (const chunk of part.file) {
-        chunks.push(chunk);
+      const assetType = detectAssetType(part.filename, mime);
+
+      // Images (and sprites, if added later) must be buffered because thumbnail
+      // generation via sharp requires a full Buffer. All other types stream
+      // directly to S3 to avoid heap pressure for large files.
+      const needsBuffer = assetType === 'image' || assetType === 'sprite';
+
+      if (needsBuffer) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) { chunks.push(chunk); }
+        files.push({ filename: part.filename, mimetype: mime, buffer: Buffer.concat(chunks) });
+      } else {
+        // Resolve the name now so the S3 key is stable before the DB write.
+        const resolvedName = takenNames.includes(part.filename)
+          ? generateDuplicateName(takenNames, part.filename)
+          : part.filename;
+        // Extend takenNames immediately so later parts in the same batch don't collide.
+        takenNames.push(resolvedName);
+
+        const id = uuidv4();
+        const storageKey = `assets/${id}/${resolvedName}`;
+
+        // Wrap the incoming file stream in a passthrough Transform that counts bytes
+        // as they flow through — no full-file buffer is ever allocated.
+        let sizeBytes = 0;
+        const counter = new Transform({
+          transform(chunk, _enc, cb) {
+            sizeBytes += (chunk as Buffer).length;
+            cb(null, chunk);
+          },
+        });
+        part.file.pipe(counter);
+
+        try {
+          await streamUploadToS3(storageKey, counter, mime);
+        } catch (err) {
+          // Clean up already-completed streamed uploads before propagating.
+          await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+          throw err;
+        }
+
+        streamedFiles.push({ id, filename: part.filename, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes });
       }
-      files.push({ filename: part.filename, mimetype: mime, buffer: Buffer.concat(chunks) });
     }
 
-    if (files.length === 0) {
+    if (files.length === 0 && streamedFiles.length === 0) {
       return reply.status(400).send({ error: 'At least one file is required' });
     }
 
@@ -112,6 +170,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const rawMeta = coerceMeta(fields);
     const metaResult = UploadMetaSchema.safeParse(rawMeta);
     if (!metaResult.success) {
+      await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
       const fieldErrors: Record<string, string[]> = {};
       for (const issue of metaResult.error.issues) {
         const key = issue.path.join('.') || '_';
@@ -124,22 +183,25 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     // Validate category/subcategory FK references if provided
     if (meta.category_id) {
       const cat = await prisma.category.findUnique({ where: { id: meta.category_id }, select: { id: true } });
-      if (!cat) return reply.status(400).send({ error: 'category_id does not exist' });
+      if (!cat) {
+        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        return reply.status(400).send({ error: 'category_id does not exist' });
+      }
     }
     if (meta.subcategory_id) {
       const sub = await prisma.subcategory.findUnique({ where: { id: meta.subcategory_id }, select: { id: true, categoryId: true } });
-      if (!sub) return reply.status(400).send({ error: 'subcategory_id does not exist' });
+      if (!sub) {
+        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        return reply.status(400).send({ error: 'subcategory_id does not exist' });
+      }
       if (meta.category_id && sub.categoryId !== meta.category_id) {
+        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'subcategory_id does not belong to category_id' });
       }
     }
 
-    // Build the initial set of taken names from the database so we can
-    // auto-rename any incoming file that would collide (keep-both path).
-    // We extend this set as each file in the batch is assigned a name, so
-    // a multi-file upload with two identically-named files both get unique names.
-    const existingAssets = await prisma.asset.findMany({ select: { originalName: true } });
-    const takenNames: string[] = existingAssets.map((a) => a.originalName);
+    // ── Buffered files (images) ──────────────────────────────────────────────
+    // Upload to S3 + generate thumbnail, then create DB record.
 
     for (const file of files) {
       const { filename, mimetype: mime, buffer } = file;
@@ -225,6 +287,118 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         await deleteFromS3(storageKey).catch(() => {});
         if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
+        throw err;
+      }
+
+      uploaded.push({
+        id: asset.id,
+        original_name: asset.originalName,
+        mime_type: asset.mimeType,
+        size_bytes: asset.sizeBytes !== null ? Number(asset.sizeBytes) : null,
+        asset_type: asset.assetType,
+        thumbnail_key: asset.thumbnailKey,
+        uploaded_at: asset.uploadedAt,
+        description: asset.description,
+        tags: tagRecords,
+        category_id: asset.categoryId,
+        subcategory_id: asset.subcategoryId,
+        license: asset.license,
+        resolution_w: asset.resolutionW,
+        resolution_h: asset.resolutionH,
+        duration_seconds: asset.durationSeconds,
+      });
+
+      // Fire-and-forget notifications — don't block the upload response
+      void (async () => {
+        try {
+          await createNotification({
+            userId: req.user.userId,
+            type: 'upload_complete',
+            title: 'Upload complete',
+            body: `${resolvedName} is ready.`,
+            resourceId: asset.id,
+          });
+
+          const others = await prisma.user.findMany({
+            where: { id: { not: req.user.userId } },
+            select: { id: true },
+          });
+          await Promise.all(
+            others.map((u) =>
+              createNotification({
+                userId: u.id,
+                type: 'new_asset',
+                title: 'New asset uploaded',
+                body: `${resolvedName} was added to the library.`,
+                resourceId: asset.id,
+              }),
+            ),
+          );
+        } catch {
+          // Notification failure should not affect upload response
+        }
+      })();
+    }
+
+    // ── Streamed files (non-images) ──────────────────────────────────────────
+    // Already on S3 — just create the DB record.
+
+    for (const sf of streamedFiles) {
+      const { id, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes } = sf;
+
+      let asset;
+      let tagRecords: Array<{ id: string; name: string }> = [];
+      try {
+        asset = await prisma.asset.create({
+          data: {
+            id,
+            originalName: resolvedName,
+            mimeType: mime,
+            sizeBytes: BigInt(sizeBytes),
+            storageKey,
+            assetType,
+            description: meta.description,
+            categoryId: meta.category_id,
+            subcategoryId: meta.subcategory_id,
+            license: meta.license,
+            resolutionW: meta.resolution_w,
+            resolutionH: meta.resolution_h,
+            durationSeconds: meta.duration_seconds,
+          },
+          select: {
+            id: true,
+            originalName: true,
+            mimeType: true,
+            sizeBytes: true,
+            assetType: true,
+            thumbnailKey: true,
+            uploadedAt: true,
+            description: true,
+            categoryId: true,
+            subcategoryId: true,
+            license: true,
+            resolutionW: true,
+            resolutionH: true,
+            durationSeconds: true,
+          },
+        });
+
+        if (meta.tags && meta.tags.length > 0) {
+          const tagNames = [...new Set(meta.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+          if (tagNames.length > 0) {
+            await prisma.$transaction(async (tx) => {
+              for (const name of tagNames) {
+                await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+              }
+              const tags = await tx.tag.findMany({ where: { name: { in: tagNames } }, select: { id: true, name: true } });
+              await tx.assetTag.createMany({ data: tags.map((t) => ({ assetId: id, tagId: t.id })) });
+              tagRecords = [...tags];
+            });
+          }
+        }
+      } catch (err) {
+        // S3 object already exists; clean it up to avoid orphans.
+        await deleteFromS3(storageKey).catch(() => {});
         throw err;
       }
 

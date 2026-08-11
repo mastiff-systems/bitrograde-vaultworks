@@ -6,6 +6,15 @@ import { prisma } from '../db/client.js';
 
 vi.mock('../storage/s3.js', () => ({
   uploadToS3: vi.fn().mockResolvedValue(undefined),
+  // Drain the stream so the multipart parser can move on to the next part,
+  // which is what the real S3 Upload class does when it reads the body.
+  streamUploadToS3: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+    new Promise<void>((resolve, reject) => {
+      body.resume();
+      body.on('end', resolve);
+      body.on('error', reject);
+    }),
+  ),
   deleteFromS3: vi.fn().mockResolvedValue(undefined),
   getS3ObjectStream: vi.fn().mockResolvedValue({
     stream: Buffer.from(''),

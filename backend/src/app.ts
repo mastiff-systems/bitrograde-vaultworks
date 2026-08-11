@@ -24,7 +24,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   });
 
   await app.register(multipart, {
-    limits: { fileSize: 500 * 1024 * 1024, files: 10 },
+    limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES ?? 5 * 1024 * 1024 * 1024), files: 10 },
   });
 
   app.addHook('preHandler', async (req, reply) => {

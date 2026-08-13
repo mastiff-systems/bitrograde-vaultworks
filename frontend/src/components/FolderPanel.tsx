@@ -93,16 +93,28 @@ function FolderRow({ folder, isActive, onSelect, onDeleted, onRenamed, depth = 0
   async function handleDelete(e: React.MouseEvent) {
     e.stopPropagation();
     if (!window.confirm(`Delete folder "${folder.name}"? Its assets will not be deleted.`)) return;
-    await deleteFolder(folder.id);
-    onDeleted();
+    try {
+      await deleteFolder(folder.id);
+      onDeleted();
+    } catch (err) {
+      console.error('Failed to delete folder:', err);
+    }
   }
 
   async function commitRename() {
     const trimmed = renameValue.trim();
     if (!trimmed || trimmed === folder.name) { setRenaming(false); return; }
-    const updated = await updateFolder(folder.id, { name: trimmed });
-    setRenaming(false);
-    onRenamed(updated);
+    try {
+      const updated = await updateFolder(folder.id, { name: trimmed });
+      setRenaming(false);
+      onRenamed(updated);
+    } catch (err) {
+      console.error('Failed to rename folder:', err);
+      // Always close the input and restore the original name on failure so it
+      // does not stay permanently stuck open.
+      setRenaming(false);
+      setRenameValue(folder.name);
+    }
   }
 
   function handleRenameKeyDown(e: React.KeyboardEvent) {
@@ -227,9 +239,13 @@ export function FolderPanel({ activeFolderId, onSelectFolder }: FolderPanelProps
     try {
       const folder = await createFolder({ name: trimmed });
       setFolders((prev) => [...prev, folder].sort((a, b) => a.name.localeCompare(b.name)));
-    } finally {
+      // Reset only on success so the user can retry with the same name on error.
       setNewName('');
       setCreating(false);
+    } catch (err) {
+      console.error('Failed to create folder:', err);
+      // Leave creating=true and newName intact so the user can retry without
+      // re-typing their folder name.
     }
   }
 

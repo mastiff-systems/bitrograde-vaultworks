@@ -15,6 +15,7 @@ model User {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   notifications Notification[]
   assetVersions AssetVersion[]
+  folders       Folder[]       @relation("FolderCreator")
 
   @@map("users")
 }
@@ -64,6 +65,7 @@ model Asset {
   tags            AssetTag[]
   notifications   Notification[]
   versions        AssetVersion[]
+  folders         FolderAsset[]
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
 
@@ -134,4 +136,35 @@ model Setting {
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   @@map("settings")
+}
+
+model Folder {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  description     String?
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  parentFolderId  String?  @map("parent_folder_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  createdBy User?         @relation("FolderCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  parent    Folder?       @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Cascade)
+  children  Folder[]      @relation("FolderChildren")
+  assets    FolderAsset[]
+
+  @@index([createdByUserId])
+  @@index([parentFolderId])
+  @@map("folders")
+}
+
+model FolderAsset {
+  folderId String @map("folder_id") @db.Uuid
+  assetId  String @map("asset_id") @db.Uuid
+
+  folder Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  asset  Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@id([folderId, assetId])
+  @@index([assetId])
+  @@map("folder_assets")
 }

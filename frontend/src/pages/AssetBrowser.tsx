@@ -15,7 +15,14 @@ import {
   type AssetVersion,
   type Tag,
 } from '../api/client.js';
-import { listFolderAssets } from '../api/folders.js';
+import {
+  listFolderAssets,
+  listFolders,
+  listFoldersForAsset,
+  addAssetsToFolder,
+  removeAssetFromFolder,
+  type Folder,
+} from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
 import { FolderPanel } from '../components/FolderPanel.js';
 import { Preview3D } from '../components/Preview3D.js';
@@ -205,6 +212,7 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
+  onRemoveFromFolder,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -212,6 +220,8 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
+  onRemoveFromFolder?: () => void;
 }) {
   const palette = (name: string) => tagPalette(name);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -273,6 +283,17 @@ function AssetCard({
                     </svg>
                     Details
                   </button>
+                  {onRemoveFromFolder && (
+                    <button
+                      className="w-full text-left px-3 py-2 text-sm text-danger hover:text-danger hover:bg-surface-3 transition-colors flex items-center gap-2"
+                      onClick={() => { setMenuOpen(false); onRemoveFromFolder(); }}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h18M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2m3 0v12a2 2 0 01-2 2H7a2 2 0 01-2-2V7h14z" />
+                      </svg>
+                      Remove from folder
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -512,6 +533,54 @@ function AssetDetailModal({
   const [deleting, setDeleting] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Folder membership state ─────────────────────────────────────────────────
+  const [assetFolders, setAssetFolders] = useState<Folder[]>([]);
+  const [allFolders, setAllFolders] = useState<Folder[]>([]);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [folderPickerSearch, setFolderPickerSearch] = useState('');
+  const [addingToFolder, setAddingToFolder] = useState(false);
+
+  useEffect(() => {
+    listFoldersForAsset(asset.id).then(setAssetFolders).catch(() => {});
+    listFolders().then(setAllFolders).catch(() => {});
+  }, [asset.id]);
+
+  const handleRemoveFromFolderInModal = async (folderId: string) => {
+    try {
+      await removeAssetFromFolder(folderId, asset.id);
+      setAssetFolders((prev) => prev.filter((f) => f.id !== folderId));
+    } catch (err) {
+      console.error('Failed to remove asset from folder', err);
+    }
+  };
+
+  const handleAddToFolder = async (folderId: string) => {
+    if (addingToFolder) return;
+    setAddingToFolder(true);
+    try {
+      await addAssetsToFolder(folderId, [asset.id]);
+      // Add the folder to the asset's folder list optimistically
+      const folder = allFolders.find((f) => f.id === folderId);
+      if (folder && !assetFolders.some((f) => f.id === folderId)) {
+        setAssetFolders((prev) => [...prev, folder]);
+      }
+      setShowFolderPicker(false);
+      setFolderPickerSearch('');
+    } catch (err) {
+      console.error('Failed to add asset to folder', err);
+    } finally {
+      setAddingToFolder(false);
+    }
+  };
+
+  // Folders available to add (not already containing this asset)
+  const addableFolders = allFolders.filter(
+    (f) => !assetFolders.some((af) => af.id === f.id),
+  ).filter(
+    (f) => folderPickerSearch.trim() === '' || f.name.toLowerCase().includes(folderPickerSearch.toLowerCase()),
+  );
+  // ── End folder state ─────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!editingTags) setPendingTags(asset.tags?.map((t) => t.name) ?? []);
   }, [asset.tags, editingTags]);
@@ -738,6 +807,82 @@ function AssetDetailModal({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Folders */}
+          <div>
+            <div className="flex items-center justify-between mb-2.5">
+              <span className="label mb-0">Folders</span>
+              <button
+                onClick={() => { setShowFolderPicker((v) => !v); setFolderPickerSearch(''); }}
+                className="text-xs text-accent-light hover:text-accent transition-colors"
+              >
+                Add to folder
+              </button>
+            </div>
+
+            {/* Folder picker */}
+            {showFolderPicker && (
+              <div className="mb-2 card bg-surface-1 p-2 space-y-1">
+                <input
+                  autoFocus
+                  className="input py-1 text-xs w-full mb-1"
+                  placeholder="Search folders…"
+                  value={folderPickerSearch}
+                  onChange={(e) => setFolderPickerSearch(e.target.value)}
+                />
+                {allFolders.length === 0 ? (
+                  <p className="text-xs text-content-muted px-1 py-1">No folders yet — create one in the sidebar.</p>
+                ) : addableFolders.length === 0 ? (
+                  <p className="text-xs text-content-muted px-1 py-1">Asset is already in all matching folders.</p>
+                ) : (
+                  <div className="max-h-36 overflow-y-auto space-y-0.5">
+                    {addableFolders.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => handleAddToFolder(f.id)}
+                        disabled={addingToFolder}
+                        className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-surface-3 transition-colors text-content-secondary hover:text-content-primary flex items-center justify-between"
+                      >
+                        <span className="truncate">{f.name}</span>
+                        <span className="text-content-muted ml-2 flex-shrink-0">{f.asset_count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowFolderPicker(false)}
+                  className="text-xs text-content-muted hover:text-content-secondary transition-colors mt-1"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Assigned folders as removable chips */}
+            <div className="flex flex-wrap gap-1.5 min-h-6">
+              {assetFolders.length === 0 ? (
+                <span className="text-xs text-content-muted italic">No folders — click "Add to folder" to assign</span>
+              ) : (
+                assetFolders.map((f) => (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-surface-3 text-content-secondary"
+                  >
+                    {f.name}
+                    <button
+                      onClick={() => handleRemoveFromFolderInModal(f.id)}
+                      className="opacity-60 hover:opacity-100 ml-0.5"
+                      aria-label={`Remove from folder ${f.name}`}
+                    >
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
           </div>
 
           {/* Version history */}
@@ -993,6 +1138,17 @@ export function AssetBrowser() {
     setAssets((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     setDetailAsset(updated);
     listTags().then(setAllTags).catch(() => {});
+  }
+
+  /** Remove asset from the active folder view; optimistic — no reload needed. */
+  async function handleRemoveFromFolder(assetId: string) {
+    if (!activeFolderId) return;
+    try {
+      await removeAssetFromFolder(activeFolderId, assetId);
+      setAssets((prev) => prev.filter((a) => a.id !== assetId));
+    } catch (err) {
+      console.error('Failed to remove asset from folder', err);
+    }
   }
 
   const sortOptions = debouncedQuery
@@ -1251,6 +1407,7 @@ export function AssetBrowser() {
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
+                  onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
                 />
               ))}
             </div>

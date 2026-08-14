@@ -443,4 +443,36 @@ describe('Folders API', () => {
     for (const id of ids2) expect(ids1.has(id)).toBe(false);
     for (const id of ids3) expect(ids1.has(id) || ids2.has(id)).toBe(false);
   });
+
+  // ─── assetId filter on GET /api/folders ────────────────────────────────────
+
+  it('GET /api/folders?assetId=<id> — returns only folders containing that asset', async () => {
+    const asset = await seedAsset('filter-asset-key');
+
+    // Create two folders; add the asset to only one
+    const folderA = await request(app.server)
+      .post('/api/folders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Folder With Asset' });
+    const folderB = await request(app.server)
+      .post('/api/folders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Empty Folder' });
+
+    await request(app.server)
+      .post(`/api/folders/${folderA.body.id}/assets`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [asset.id] });
+
+    const res = await request(app.server)
+      .get(`/api/folders?assetId=${asset.id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.length).toBe(1);
+    expect(res.body[0].id).toBe(folderA.body.id);
+    // Folder B must not appear
+    const returnedIds = res.body.map((f: { id: string }) => f.id);
+    expect(returnedIds).not.toContain(folderB.body.id);
+  });
 });

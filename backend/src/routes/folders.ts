@@ -45,6 +45,7 @@ const AddAssetsBody = z.object({
 
 const ListFoldersQuery = z.object({
   parentFolderId: z.string().optional(), // uuid | "root" | undefined
+  assetId: z.string().uuid().optional(), // filter to folders containing this asset
 });
 
 const ListAssetsQuery = z.object({
@@ -172,17 +173,23 @@ async function wouldCreateCycle(folderId: string, candidateParentId: string): Pr
 
 export async function foldersRoutes(app: FastifyInstance) {
   // GET /api/folders
+  // Supports ?parentFolderId=root|<uuid> and ?assetId=<uuid> (folders containing the asset)
   app.get('/api/folders', async (req, reply) => {
     const qResult = ListFoldersQuery.safeParse(req.query);
     if (!qResult.success) return reply.status(400).send({ error: 'Invalid query' });
-    const { parentFolderId } = qResult.data;
+    const { parentFolderId, assetId } = qResult.data;
 
-    const where =
+    // Build where clause: parentFolderId filter + optional assetId membership filter
+    const where: Record<string, unknown> =
       parentFolderId === 'root'
         ? { parentFolderId: null }
         : parentFolderId
           ? { parentFolderId }
           : {};
+
+    if (assetId) {
+      where.assets = { some: { assetId } };
+    }
 
     const folders = await prisma.folder.findMany({ where, select: folderSelect, orderBy: { name: 'asc' } });
     return reply.send(folders.map(formatFolder));

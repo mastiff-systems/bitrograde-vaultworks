@@ -15,7 +15,9 @@ import {
   type AssetVersion,
   type Tag,
 } from '../api/client.js';
+import { listFolderAssets } from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
+import { FolderPanel } from '../components/FolderPanel.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
@@ -76,6 +78,7 @@ function getUrlFilters() {
     sort: (p.get('sort') ?? 'newest') as SortKey,
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
+    folder: p.get('folder') ?? null,
   };
 }
 
@@ -87,6 +90,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
+  if (filters.folder) p.set('folder', filters.folder);
   const search = p.toString();
   history.pushState(null, '', search ? `?${search}` : window.location.pathname);
 }
@@ -794,6 +798,8 @@ export function AssetBrowser() {
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [sort, setSort] = useState<SortKey>(initial.sort);
+  // Active folder: null = show all assets, uuid = show folder assets
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(initial.folder);
 
   const categoryMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -844,6 +850,7 @@ export function AssetBrowser() {
       setSort(filters.sort);
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
+      setActiveFolderId(filters.folder);
     }
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -879,8 +886,8 @@ export function AssetBrowser() {
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
-  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
+    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
+  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId]);
 
 
   // Load tags
@@ -888,22 +895,27 @@ export function AssetBrowser() {
     listTags().then(setAllTags).catch(() => {});
   }, []);
 
-  // Load assets on filter change
+  // Load assets: branch on activeFolderId — folder view vs. all-assets view
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listFiles({
-      q: debouncedQuery || undefined,
-      // Pass single type to API; multi-type handled client-side below
-      assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      categoryId: selectedCategoryId ?? undefined,
-      subcategoryId: selectedSubcategoryId ?? undefined,
-    })
+
+    const fetch = activeFolderId
+      ? listFolderAssets(activeFolderId, { limit: 200 }).then((page) => page.assets)
+      : listFiles({
+          q: debouncedQuery || undefined,
+          // Pass single type to API; multi-type handled client-side below
+          assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
+          tags: selectedTags.length > 0 ? selectedTags : undefined,
+          categoryId: selectedCategoryId ?? undefined,
+          subcategoryId: selectedSubcategoryId ?? undefined,
+        });
+
+    fetch
       .then(setAssets)
       .catch(() => setError('Failed to load assets.'))
       .finally(() => setLoading(false));
-  }, [debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
+  }, [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -1073,6 +1085,9 @@ export function AssetBrowser() {
           </div>
         )}
       </aside>
+
+      {/* Folder sidebar */}
+      <FolderPanel activeFolderId={activeFolderId} onSelectFolder={setActiveFolderId} />
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

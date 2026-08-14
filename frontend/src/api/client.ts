@@ -128,6 +128,7 @@ export async function uploadFiles(
 export async function uploadWithMetadata(
   file: File,
   meta: {
+    customName?: string;
     categoryId?: string | null;
     subcategoryId?: string | null;
     license?: string | null;
@@ -140,7 +141,7 @@ export async function uploadWithMetadata(
   onProgress?: (pct: number) => void,
 ): Promise<Asset> {
   const form = new FormData();
-  form.append('files', file, file.name);
+  form.append('files', file, meta.customName ?? file.name);
   if (meta.categoryId) form.append('category_id', meta.categoryId);
   if (meta.subcategoryId) form.append('subcategory_id', meta.subcategoryId);
   if (meta.license) form.append('license', meta.license);

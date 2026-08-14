@@ -18,11 +18,11 @@ interface SettingField {
 }
 
 const S3_FIELDS: SettingField[] = [
-  { key: 's3_endpoint', label: 'Endpoint URL', placeholder: 'https://nyc3.digitaloceanspaces.com or http://localhost:9000', helpText: 'S3-compatible endpoint. Leave empty to use AWS default.' },
-  { key: 's3_bucket', label: 'Bucket Name', placeholder: 'vaultworks-assets' },
-  { key: 's3_region', label: 'Region', placeholder: 'us-east-1' },
   { key: 's3_access_key', label: 'Access Key', placeholder: 'your-access-key' },
-  { key: 's3_secret_key', label: 'Secret Key', placeholder: '••••••••', type: 'password', helpText: 'Leave unchanged to keep the existing secret key.' },
+  { key: 's3_secret_key', label: 'Access Secret', placeholder: '••••••••', type: 'password', helpText: 'Leave unchanged to keep the existing secret key.' },
+  { key: 's3_bucket', label: 'S3 Bucket', placeholder: 'vaultworks-assets' },
+  { key: 's3_endpoint', label: 'Endpoint URL', placeholder: 'https://nyc3.digitaloceanspaces.com or http://localhost:9000', helpText: 'S3-compatible endpoint. Leave empty to use AWS default.' },
+  { key: 's3_root_folder', label: 'Root Folder Name', placeholder: 'my-folder', helpText: 'All files will be stored under this prefix. Leave empty to store at the bucket root.' },
   { key: 's3_force_path_style', label: 'Force Path Style', placeholder: '', type: 'checkbox', helpText: 'Required for MinIO and some S3-compatible providers. Disable for AWS and DigitalOcean Spaces.' },
 ];
 

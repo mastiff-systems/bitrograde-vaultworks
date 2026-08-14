@@ -9,20 +9,32 @@ import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'stream';
 import { getS3Config } from '../db/settings.js';
 
-async function getClient(): Promise<{ client: S3Client; bucket: string }> {
+/**
+ * Prepend rootFolderPrefix to an object key.
+ * If prefix is empty/unset the key is returned unchanged (root-level storage).
+ * Trailing slashes on the prefix are stripped to avoid double-slash keys.
+ */
+function prefixedKey(prefix: string, key: string): string {
+  if (!prefix) return key;
+  return `${prefix.replace(/\/+$/, '')}/${key}`;
+}
+
+async function getClient(): Promise<{ client: S3Client; bucket: string; prefix: string }> {
   const cfg = await getS3Config();
   const client = new S3Client({
     endpoint: cfg.endpoint,
-    region: cfg.region,
+    // region is not user-configurable; fall back to env or SDK default.
+    // S3-compatible providers (MinIO, DigitalOcean Spaces) ignore this value.
+    region: process.env.S3_REGION || 'us-east-1',
     credentials: { accessKeyId: cfg.accessKey, secretAccessKey: cfg.secretKey },
     forcePathStyle: cfg.forcePathStyle,
   });
-  return { client, bucket: cfg.bucket };
+  return { client, bucket: cfg.bucket, prefix: cfg.rootFolderPrefix };
 }
 
 export async function uploadToS3(key: string, body: Buffer, contentType: string): Promise<void> {
-  const { client, bucket } = await getClient();
-  await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+  const { client, bucket, prefix } = await getClient();
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: prefixedKey(prefix, key), Body: body, ContentType: contentType }));
 }
 
 /**
@@ -35,10 +47,10 @@ export async function streamUploadToS3(
   body: Readable,
   contentType: string,
 ): Promise<void> {
-  const { client, bucket } = await getClient();
+  const { client, bucket, prefix } = await getClient();
   const upload = new Upload({
     client,
-    params: { Bucket: bucket, Key: key, Body: body, ContentType: contentType },
+    params: { Bucket: bucket, Key: prefixedKey(prefix, key), Body: body, ContentType: contentType },
     queueSize: 4,           // concurrent part uploads
     partSize: 5 * 1024 * 1024, // 5 MB (S3 minimum part size)
   });
@@ -46,17 +58,17 @@ export async function streamUploadToS3(
 }
 
 export async function deleteFromS3(key: string): Promise<void> {
-  const { client, bucket } = await getClient();
-  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  const { client, bucket, prefix } = await getClient();
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: prefixedKey(prefix, key) }));
 }
 
 export async function copyS3Object(sourceKey: string, destKey: string): Promise<void> {
-  const { client, bucket } = await getClient();
+  const { client, bucket, prefix } = await getClient();
   await client.send(
     new CopyObjectCommand({
       Bucket: bucket,
-      CopySource: `${bucket}/${sourceKey}`,
-      Key: destKey,
+      CopySource: `${bucket}/${prefixedKey(prefix, sourceKey)}`,
+      Key: prefixedKey(prefix, destKey),
     }),
   );
 }
@@ -64,8 +76,8 @@ export async function copyS3Object(sourceKey: string, destKey: string): Promise<
 export async function getS3ObjectStream(
   key: string,
 ): Promise<{ stream: Readable; contentType: string | undefined; contentLength: number | undefined }> {
-  const { client, bucket } = await getClient();
-  const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const { client, bucket, prefix } = await getClient();
+  const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: prefixedKey(prefix, key) }));
   return {
     stream: resp.Body as Readable,
     contentType: resp.ContentType,

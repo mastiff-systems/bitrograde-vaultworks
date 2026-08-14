@@ -31,6 +31,12 @@ export async function listFolders(params?: { parentFolderId?: string }): Promise
   return data;
 }
 
+/** List folders that contain the given asset (for the asset detail panel). */
+export async function listFoldersForAsset(assetId: string): Promise<Folder[]> {
+  const { data } = await api.get<Folder[]>('/api/folders', { params: { assetId } });
+  return data;
+}
+
 export async function createFolder(body: {
   name: string;
   description?: string;

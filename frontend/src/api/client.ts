@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const TOKEN_KEY = 'vaultworks_token';
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? '',
 });
 
@@ -71,15 +71,24 @@ export interface ListFilesParams {
   page?: number;
 }
 
-export interface PaginatedFilesResponse {
-  data: Asset[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
+/**
+ * Look up an asset by its exact original filename.
+ *
+ * Wraps `GET /api/files?exact_name=<name>` (added in MAS-342).
+ * The endpoint returns only `{ id, original_name }` per match — sufficient
+ * for drag-and-drop overwrite conflict detection (MAS-341).
+ *
+ * Returns the first matching asset or `null` when no match is found.
+ * Never throws on a 200 empty-list response.
+ */
+export async function findAssetByExactName(name: string): Promise<Pick<Asset, 'id' | 'original_name'> | null> {
+  const { data } = await api.get<Pick<Asset, 'id' | 'original_name'>[]>('/api/files', {
+    params: { exact_name: name },
+  });
+  return data.length > 0 ? data[0] : null;
 }
 
-export async function listFiles(params?: ListFilesParams): Promise<PaginatedFilesResponse> {
+export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   const p: Record<string, string> = {};
   if (params?.q) p.q = params.q;
   if (params?.assetType) p.assetType = params.assetType;
@@ -121,6 +130,7 @@ export async function uploadFiles(
 export async function uploadWithMetadata(
   file: File,
   meta: {
+    customName?: string;
     categoryId?: string | null;
     subcategoryId?: string | null;
     license?: string | null;
@@ -133,7 +143,7 @@ export async function uploadWithMetadata(
   onProgress?: (pct: number) => void,
 ): Promise<Asset> {
   const form = new FormData();
-  form.append('files', file, file.name);
+  form.append('files', file, meta.customName ?? file.name);
   if (meta.categoryId) form.append('category_id', meta.categoryId);
   if (meta.subcategoryId) form.append('subcategory_id', meta.subcategoryId);
   if (meta.license) form.append('license', meta.license);

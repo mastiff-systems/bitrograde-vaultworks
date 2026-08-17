@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import type { WizardState, WizardAction } from './useUploadWizard.js';
 import type { Category } from '../../api/categories.js';
-import { ALLOWED_LICENSES, MAX_DESCRIPTION_CHARS, MAX_TAGS, MAX_TAG_LENGTH } from './constants.js';
+import { ALLOWED_LICENSES, MAX_CUSTOM_NAME_CHARS, MAX_DESCRIPTION_CHARS, MAX_TAGS, MAX_TAG_LENGTH } from './constants.js';
 
 interface Props {
   state: WizardState;
@@ -39,8 +39,48 @@ export function Step2MetadataForm({ state, dispatch, categories, categoriesLoadi
     dispatch({ type: 'SET_METADATA', patch: { tags: metadata.tags.filter((t) => t !== name) } });
   }
 
+  // Derive validation state for customName
+  const customNameEmpty = state.customName.trim().length === 0;
+  const customNameTooLong = state.customName.length > MAX_CUSTOM_NAME_CHARS;
+  const customNameInvalid = customNameEmpty || customNameTooLong;
+
   return (
     <div className="space-y-5">
+      {/* File Name */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="label mb-0">File Name</label>
+          <span
+            className={`text-[10px] tabular-nums ${
+              customNameTooLong ? 'text-danger' : state.customName.length > MAX_CUSTOM_NAME_CHARS * 0.9 ? 'text-amber-400' : 'text-content-muted'
+            }`}
+          >
+            {state.customName.length} / {MAX_CUSTOM_NAME_CHARS}
+          </span>
+        </div>
+        <input
+          type="text"
+          className={`input ${customNameInvalid ? 'border-danger/60 focus:ring-danger/40' : ''}`}
+          value={state.customName}
+          maxLength={MAX_CUSTOM_NAME_CHARS}
+          placeholder={state.file?.name ?? 'Enter file name…'}
+          onChange={(e) => dispatch({ type: 'SET_CUSTOM_NAME', name: e.target.value })}
+          onBlur={() => {
+            // Restore to original filename if field was cleared (defensive UX)
+            if (state.customName.trim().length === 0 && state.file) {
+              dispatch({ type: 'SET_CUSTOM_NAME', name: state.file.name });
+            }
+          }}
+          aria-describedby="custom-name-hint"
+        />
+        {customNameEmpty && (
+          <p id="custom-name-hint" className="text-[10px] text-danger mt-1">File name is required.</p>
+        )}
+        {!customNameEmpty && customNameTooLong && (
+          <p id="custom-name-hint" className="text-[10px] text-danger mt-1">File name must be 255 characters or fewer.</p>
+        )}
+      </div>
+
       {/* Category */}
       <div>
         <label className="label">Category</label>

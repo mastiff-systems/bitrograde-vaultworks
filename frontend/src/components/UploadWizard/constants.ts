@@ -8,7 +8,8 @@ export const ALLOWED_LICENSES = [
   { value: 'Proprietary', label: 'Proprietary / All Rights Reserved' },
 ];
 
-export const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024;
+export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 export const MAX_DESCRIPTION_CHARS = 2000;
 export const MAX_TAGS = 20;
 export const MAX_TAG_LENGTH = 100;
+export const MAX_CUSTOM_NAME_CHARS = 255;

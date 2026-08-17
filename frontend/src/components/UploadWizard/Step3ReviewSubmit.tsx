@@ -45,7 +45,7 @@ export function Step3ReviewSubmit({ state, categories }: Props) {
       {/* File summary */}
       <div className="card p-4 bg-surface-1 space-y-0">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-content-muted mb-2">File</p>
-        <ReviewRow label="Name" value={file?.name} />
+        <ReviewRow label="Name" value={state.customName || file?.name} />
         <ReviewRow label="Size" value={file ? formatBytes(file.size) : null} />
         {state.detectedType && <ReviewRow label="Type" value={state.detectedType} />}
         {state.detectedDimensions && (

@@ -25,7 +25,11 @@ export function UploadWizard({ open, onClose, onComplete }: Props) {
 
   const isSubmitting = state.step === 'submitting';
   const isRetry = state.step === 'error';
-  const canGoNext = state.step === 'file' ? !!state.file : state.step === 'metadata';
+  const customNameValid = state.customName.trim().length > 0 && state.customName.length <= 255;
+  const canGoNext =
+    state.step === 'file' ? !!state.file :
+    state.step === 'metadata' ? customNameValid :
+    false;
   const canGoBack = state.step === 'metadata' || state.step === 'review' || state.step === 'error';
   const showNav = state.step !== 'done';
 

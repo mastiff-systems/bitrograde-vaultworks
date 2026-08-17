@@ -1,15 +1,14 @@
 import crypto from 'node:crypto';
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
-import { parseParams, parseBody } from '../lib/validate.js';
+import { copyS3Object, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
-import { authenticate } from '../auth/middleware.js';
-import { logAudit } from '../lib/audit.js';
-import { ZipArchive } from 'archiver';
+import { generateDuplicateName } from '../lib/filename.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -29,6 +28,7 @@ const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
 
 const FilesQuerySchema = z.object({
   q: z.string().optional(),
+  exact_name: z.string().optional(),
   tags: z.string().optional(),
   assetType: z.string().optional(),
   mimeType: z.string().optional(),
@@ -134,9 +134,20 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
     const params = query.data;
 
-    const { page, limit, tags: tagsParam, ...otherParams } = params;
-    const tagNames = tagsParam
-      ? tagsParam.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+    // Exact-name conflict lookup — used by drag-and-drop overwrite detection (MAS-342)
+    // Returns [{id, original_name}] for every asset whose originalName exactly matches
+    // (case-sensitive PostgreSQL =), or [] if none. Bypasses all other filters.
+    if (params.exact_name) {
+      const matches = await prisma.asset.findMany({
+        where: { originalName: params.exact_name },
+        select: { id: true, originalName: true },
+      });
+      return reply.send(matches.map((a) => ({ id: a.id, original_name: a.originalName })));
+    }
+
+    const limit = params.limit ?? 50;
+    const tagNames = params.tags
+      ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
       : [];
 
     if (params.q) {
@@ -497,285 +508,62 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(stream);
   });
 
-  const UpdateFileSchema = z.object({
-    name: z.string().min(1).optional(),
-    description: z.string().max(2000).nullable().optional(),
-    categoryId: z.string().uuid().nullable().optional(),
-    subcategoryId: z.string().uuid().nullable().optional(),
-    tags: z.array(z.string().min(1).max(100)).optional(),
-  });
+  // Creates a copy of an asset with a non-conflicting suffixed name.
+  // Returns the new asset record (same shape as GET /api/files/:id).
+  app.post<{ Params: { id: string } }>('/api/files/:id/duplicate', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
 
-  app.patch<{ Params: { id: string } }>(
-    '/api/files/:id',
-    {
-      preHandler: [authenticate],
-      schema: {
-        params: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
-        },
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            name: { type: 'string', minLength: 1 },
-            description: { type: ['string', 'null'], maxLength: 2000 },
-            categoryId: { type: ['string', 'null'], format: 'uuid' },
-            subcategoryId: { type: ['string', 'null'], format: 'uuid' },
-            tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 } },
-          },
-        },
+    // Fetch the source asset
+    const source = await prisma.asset.findUnique({
+      where: { id: params.id },
+      select: {
+        ...assetSelect,
+        storageKey: true,
+        mimeType: true,
       },
-    },
-    async (req, reply) => {
-      const params = parseParams(UuidParams, req.params, reply);
-      if (!params) return;
+    });
+    if (!source) return reply.status(404).send({ error: 'Not found' });
 
-      const body = parseBody(UpdateFileSchema, req.body, reply);
-      if (!body) return;
+    // Gather all existing names to avoid conflicts
+    const allNames = await prisma.asset.findMany({ select: { originalName: true } });
+    const existingNames = allNames.map((a) => a.originalName);
 
-      const existing = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true, uploadedBy: true } });
-      if (!existing) return reply.status(404).send({ error: 'Not found' });
+    // Derive the new name using the duplicate-suffix logic
+    const newName = generateDuplicateName(existingNames, source.originalName);
 
-      const { userId, role } = req.user;
-      if (role !== 'admin' && existing.uploadedBy !== userId) {
-        return reply.status(403).send({ error: 'Forbidden' });
-      }
+    // Copy the S3 object under a new key
+    const newId = uuidv4();
+    const storageKey = `assets/${newId}/${newName}`;
 
-      const { tags, ...fields } = body;
+    await copyS3Object(source.storageKey, storageKey);
 
-      const updateData: Prisma.AssetUpdateInput = {};
-      if (fields.name !== undefined) updateData.originalName = fields.name;
-      if (fields.description !== undefined) updateData.description = fields.description;
-      if (fields.categoryId !== undefined) {
-        updateData.category = fields.categoryId ? { connect: { id: fields.categoryId } } : { disconnect: true };
-      }
-      if (fields.subcategoryId !== undefined) {
-        updateData.subcategory = fields.subcategoryId ? { connect: { id: fields.subcategoryId } } : { disconnect: true };
-      }
-
-      if (tags !== undefined) {
-        await prisma.$transaction(async (tx) => {
-          const tagNames = [...new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
-          for (const name of tagNames) {
-            await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
-          }
-          const tagRecords = tagNames.length
-            ? await tx.tag.findMany({ where: { name: { in: tagNames } }, select: { id: true } })
-            : [];
-          await tx.assetTag.deleteMany({ where: { assetId: params.id } });
-          if (tagRecords.length > 0) {
-            await tx.assetTag.createMany({
-              data: tagRecords.map((t) => ({ assetId: params.id, tagId: t.id })),
-            });
-          }
-          await tx.asset.update({ where: { id: params.id }, data: updateData });
-        });
-      } else {
-        await prisma.asset.update({ where: { id: params.id }, data: updateData });
-      }
-
-      const updated = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
-      if (!updated) return reply.status(404).send({ error: 'Not found' });
-
-      logAudit({
-        prisma,
-        userId:    req.user.userId,
-        assetId:   params.id,
-        assetName: updated.originalName,
-        ipAddress: req.ip,
-        action:    'UPDATE_METADATA',
-        metadata:  { userAgent: req.headers['user-agent'] },
-      });
-
-      return reply.send(formatAsset(updated));
-    },
-  );
-
-  const BulkIdsSchema = z.object({
-    ids: z.array(z.string().uuid()).min(1).max(100),
-  });
-
-  app.post('/api/files/bulk-delete', {
-    preHandler: [authenticate],
-    schema: {
-      body: {
-        type: 'object',
-        required: ['ids'],
-        additionalProperties: false,
-        properties: {
-          ids: {
-            type: 'array',
-            items: { type: 'string', format: 'uuid' },
-            minItems: 1,
-            maxItems: 100,
-          },
-        },
+    // Persist the new asset, copying all metadata from the source
+    const newAsset = await prisma.asset.create({
+      data: {
+        id: newId,
+        originalName: newName,
+        mimeType: source.mimeType,
+        sizeBytes: source.sizeBytes,
+        storageKey,
+        assetType: source.assetType,
+        // Thumbnail is intentionally not copied — it is keyed to the source asset's path.
+        // A fresh thumbnail would require re-processing the image.
+        description: source.description,
+        categoryId: source.categoryId,
+        subcategoryId: source.subcategoryId,
+        license: source.license,
+        resolutionW: source.resolutionW,
+        resolutionH: source.resolutionH,
+        durationSeconds: source.durationSeconds,
       },
-    },
-    config: {
-      rateLimit: {
-        max: process.env.VITEST ? 10000 : 20,
-        timeWindow: '1 minute',
-      },
-    },
-  }, async (req, reply) => {
-    const body = parseBody(BulkIdsSchema, req.body, reply);
-    if (!body) return;
-
-    const { userId, role } = req.user;
-    const ids = [...new Set(body.ids)];
-
-    const assets = await prisma.asset.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
+      select: assetSelect,
     });
 
-    const deleted: string[] = [];
-    const errors: { id: string; reason: string }[] = [];
-
-    const authorizedAssets: typeof assets = [];
-    for (const id of ids) {
-      const asset = assets.find((a) => a.id === id);
-      if (!asset) { errors.push({ id, reason: 'Not found' }); continue; }
-      if (role !== 'admin' && asset.uploadedBy !== userId) { errors.push({ id, reason: 'Unauthorized' }); continue; }
-      authorizedAssets.push(asset);
-    }
-
-    for (const asset of authorizedAssets) {
-      try {
-        await prisma.asset.delete({ where: { id: asset.id } });
-      } catch (err) {
-        errors.push({ id: asset.id, reason: err instanceof Error ? err.message : 'Unknown error' });
-        continue;
-      }
-
-      // S3 delete: log warning on failure but still count asset as deleted (DB already gone)
-      try {
-        await deleteFromS3(asset.storageKey);
-        if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey).catch(() => {});
-      } catch (err) {
-        req.log.warn({ assetId: asset.id, err }, 'S3 delete failed after DB delete — orphaned object');
-      }
-
-      logAudit({
-        prisma,
-        userId,
-        assetId:   null,
-        assetName: asset.originalName,
-        ipAddress: req.ip,
-        action:    'DELETE',
-        metadata:  { userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
-      });
-
-      deleted.push(asset.id);
-    }
-
-    return reply.send({ deleted, errors });
+    return reply.status(201).send(formatAsset(newAsset));
   });
 
-  app.post('/api/files/bulk-download', {
-    preHandler: [authenticate],
-    schema: {
-      body: {
-        type: 'object',
-        required: ['ids'],
-        additionalProperties: false,
-        properties: {
-          ids: {
-            type: 'array',
-            items: { type: 'string', format: 'uuid' },
-            minItems: 1,
-            maxItems: 100,
-          },
-        },
-      },
-    },
-    config: {
-      rateLimit: {
-        max: process.env.VITEST ? 10000 : 10,
-        timeWindow: '1 minute',
-      },
-    },
-  }, async (req, reply) => {
-    const body = parseBody(BulkIdsSchema, req.body, reply);
-    if (!body) return;
-
-    const { userId, role } = req.user;
-    const ids = [...new Set(body.ids)];
-
-    const assets = await prisma.asset.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, storageKey: true, originalName: true, uploadedBy: true },
-    });
-
-    if (role !== 'admin') {
-      for (const asset of assets) {
-        if (asset.uploadedBy !== userId) {
-          return reply.status(403).send({ error: 'Forbidden: you do not own all requested assets' });
-        }
-      }
-    }
-
-    reply.hijack();
-    reply.raw.setHeader('Content-Type', 'application/zip');
-    reply.raw.setHeader('Content-Disposition', 'attachment; filename=assets.zip');
-
-    const archive = new ZipArchive({ zlib: { level: 6 } });
-    archive.pipe(reply.raw);
-    archive.on('error', (err) => reply.raw.destroy(err));
-
-    const nameCounts = new Map<string, number>();
-    for (const asset of assets) {
-      const { stream } = await getS3ObjectStream(asset.storageKey);
-      const count = nameCounts.get(asset.originalName) ?? 0;
-      nameCounts.set(asset.originalName, count + 1);
-      let archiveName: string;
-      if (count === 0) {
-        archiveName = asset.originalName;
-      } else {
-        const dotIdx = asset.originalName.lastIndexOf('.');
-        archiveName = dotIdx === -1
-          ? `${asset.originalName} (${count})`
-          : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
-      }
-      archive.append(stream, { name: archiveName });
-
-      logAudit({
-        prisma,
-        userId,
-        assetId:   asset.id,
-        assetName: asset.originalName,
-        ipAddress: req.ip,
-        action:    'DOWNLOAD',
-        metadata:  { userAgent: req.headers['user-agent'], bulk: true },
-      });
-    }
-
-    archive.finalize();
-  });
-
-  app.delete<{ Params: { id: string } }>('/api/files/:id', {
-    preHandler: [authenticate],
-    schema: {
-      params: {
-        type: 'object',
-        required: ['id'],
-        properties: {
-          id: { type: 'string', format: 'uuid' },
-        },
-      },
-    },
-    config: {
-      rateLimit: {
-        max: process.env.VITEST ? 10000 : 10,
-        timeWindow: '1 minute',
-      },
-    },
-  }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

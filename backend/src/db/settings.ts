@@ -3,13 +3,13 @@ import { prisma } from './client.js';
 export interface S3Config {
   endpoint: string;
   bucket: string;
-  region: string;
+  rootFolderPrefix: string;
   accessKey: string;
   secretKey: string;
   forcePathStyle: boolean;
 }
 
-const S3_KEYS = ['s3_endpoint', 's3_bucket', 's3_region', 's3_access_key', 's3_secret_key', 's3_force_path_style'] as const;
+const S3_KEYS = ['s3_endpoint', 's3_bucket', 's3_root_folder', 's3_access_key', 's3_secret_key', 's3_force_path_style'] as const;
 
 let cache: Record<string, string> | null = null;
 let cacheAt = 0;
@@ -38,13 +38,13 @@ export async function getS3Config(): Promise<S3Config> {
   return {
     endpoint: s['s3_endpoint'] || env('S3_ENDPOINT'),
     bucket: s['s3_bucket'] || env('S3_BUCKET'),
-    region: s['s3_region'] || env('S3_REGION') || 'us-east-1',
+    // rootFolderPrefix is optional; empty string means store at bucket root
+    rootFolderPrefix: s['s3_root_folder'] ?? env('S3_ROOT_FOLDER'),
     accessKey: s['s3_access_key'] || env('S3_ACCESS_KEY'),
     secretKey: s['s3_secret_key'] || env('S3_SECRET_KEY'),
+    // forcePathStyle defaults to false (unchecked) unless explicitly set to 'true'
     forcePathStyle:
-      s['s3_force_path_style'] != null
-        ? s['s3_force_path_style'] === 'true'
-        : env('S3_FORCE_PATH_STYLE') === 'true',
+      s['s3_force_path_style'] === 'true' || env('S3_FORCE_PATH_STYLE') === 'true',
   };
 }
 

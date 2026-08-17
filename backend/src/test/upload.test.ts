@@ -6,6 +6,15 @@ import { prisma } from '../db/client.js';
 
 vi.mock('../storage/s3.js', () => ({
   uploadToS3: vi.fn().mockResolvedValue(undefined),
+  // Drain the stream so the multipart parser can move on to the next part,
+  // which is what the real S3 Upload class does when it reads the body.
+  streamUploadToS3: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+    new Promise<void>((resolve, reject) => {
+      body.resume();
+      body.on('end', resolve);
+      body.on('error', reject);
+    }),
+  ),
   deleteFromS3: vi.fn().mockResolvedValue(undefined),
   getS3ObjectStream: vi.fn().mockResolvedValue({
     stream: Buffer.from(''),
@@ -127,5 +136,77 @@ describe('POST /api/upload', () => {
       .attach('files', Buffer.from('data'), { filename: 'x.txt', contentType: 'text/plain' });
 
     expect(res.status).toBe(401);
+  });
+
+  // MAS-349: keep-both auto-rename
+  describe('auto-rename on duplicate filename (keep-both path)', () => {
+    it('renames duplicate to -Copy variant on second upload', async () => {
+      // First upload — no conflict, name unchanged
+      const first = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('v1'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+      expect(first.status).toBe(201);
+      expect(first.body[0].original_name).toBe('photo.jpg');
+
+      // Second upload — same filename, should be renamed to photo-Copy.jpg
+      const second = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('v2'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+      expect(second.status).toBe(201);
+      expect(second.body[0].original_name).toBe('photo-Copy.jpg');
+    });
+
+    it('renames to (2) variant when -Copy is also taken', async () => {
+      // Upload original, then -Copy, then the same name again → should get (2)
+      for (const name of ['photo.jpg', 'photo-Copy.jpg']) {
+        await request(app.server)
+          .post('/api/upload')
+          .set('Authorization', `Bearer ${token}`)
+          .attach('files', Buffer.from('data'), { filename: name, contentType: 'image/jpeg' });
+      }
+
+      const third = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('v3'), { filename: 'photo.jpg', contentType: 'image/jpeg' });
+      expect(third.status).toBe(201);
+      expect(third.body[0].original_name).toBe('photo (2).jpg');
+    });
+
+    it('renames two same-named files within a single batch upload', async () => {
+      // Both arrive in the same multipart request — second should get -Copy
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('a'), { filename: 'doc.txt', contentType: 'text/plain' })
+        .attach('files', Buffer.from('b'), { filename: 'doc.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveLength(2);
+      const names = res.body.map((r: { original_name: string }) => r.original_name);
+      expect(names).toContain('doc.txt');
+      expect(names).toContain('doc-Copy.txt');
+    });
+
+    it('persists the renamed asset to the database with the resolved name', async () => {
+      // Seed an existing asset
+      await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('original'), { filename: 'asset.png', contentType: 'image/png' });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('duplicate'), { filename: 'asset.png', contentType: 'image/png' });
+
+      expect(res.status).toBe(201);
+      const id = res.body[0].id;
+      const record = await prisma.asset.findUnique({ where: { id } });
+      expect(record).not.toBeNull();
+      expect(record!.originalName).toBe('asset-Copy.png');
+    });
   });
 });

@@ -11,9 +11,7 @@ import { adminRoutes } from './routes/admin.js';
 import { notificationsRoutes } from './routes/notifications.js';
 import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
-import { collectionsRoutes } from './routes/collections.js';
-import { shareRoutes } from './routes/share.js';
-import { auditRoutes } from './routes/audit.js';
+import { foldersRoutes } from './routes/folders.js';
 import { authenticate } from './auth/middleware.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
@@ -58,7 +56,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   });
 
   await app.register(multipart, {
-    limits: { fileSize: 500 * 1024 * 1024, files: 10 },
+    limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES ?? 5 * 1024 * 1024 * 1024), files: 10 },
   });
 
   app.addHook('preHandler', async (req, reply) => {
@@ -75,9 +73,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(notificationsRoutes);
   await app.register(versionsRoutes);
   await app.register(categoriesRoutes);
-  await app.register(collectionsRoutes);
-  await app.register(shareRoutes);
-  await app.register(auditRoutes);
+  await app.register(foldersRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

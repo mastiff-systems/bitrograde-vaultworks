@@ -1,49 +1,35 @@
 #!/usr/bin/env bash
-# deploy-staging.sh — pull develop, build, migrate, reload staging (port 3001)
-# Staging dir: /home/mastiff/development/bitrograde-vaultworks
-# PM2 app:     vaultworks  (legacy name kept; see ecosystem.staging.cjs for new restarts)
+# Deploy staging environment (port 3001) from the main repo.
+# Self-hosted runner executes this via the CI workflow on pushes to develop.
 set -euo pipefail
 
-REPO_DIR="/home/mastiff/development/bitrograde-vaultworks"
-ENV_FILE="$REPO_DIR/.env.staging"
-LOG_FILE="/tmp/vaultworks-staging-deploy.log"
-PM2="$HOME/.npm-global/bin/pm2"
+STAGING_DIR="/home/mastiff/development/bitrograde-vaultworks"
+ENV_FILE="$STAGING_DIR/.env.staging"
 
-exec > >(tee -a "$LOG_FILE") 2>&1
-echo "=== Staging deploy started at $(date) ==="
+echo "[deploy-staging] Pulling latest develop..."
+git -C "$STAGING_DIR" fetch origin develop
+git -C "$STAGING_DIR" reset --hard origin/develop
 
-cd "$REPO_DIR"
+echo "[deploy-staging] Installing backend dependencies..."
+pnpm install --frozen-lockfile --dir "$STAGING_DIR/backend"
 
-echo "--- git pull (develop → staging) ---"
-git fetch origin
-git checkout develop 2>/dev/null || git checkout -b develop origin/develop
-git reset --hard origin/develop
+echo "[deploy-staging] Running database migrations..."
+cd "$STAGING_DIR" && env $(grep -v '^#' "$ENV_FILE" | xargs) \
+  pnpm --dir "$STAGING_DIR/backend" exec prisma migrate deploy \
+  --schema "$STAGING_DIR/backend/prisma/schema.prisma"
 
-echo "--- backend deps + build ---"
-cd "$REPO_DIR/backend"
-pnpm install --frozen-lockfile
-pnpm run build
+echo "[deploy-staging] Building backend..."
+pnpm --dir "$STAGING_DIR/backend" run build
 
-echo "--- frontend deps + build ---"
-cd "$REPO_DIR/frontend"
-pnpm install --frozen-lockfile
-pnpm run build
+echo "[deploy-staging] Installing frontend dependencies..."
+pnpm install --frozen-lockfile --dir "$STAGING_DIR/frontend"
 
-echo "--- db migrations ---"
-cd "$REPO_DIR/backend"
-set -a; source "$ENV_FILE"; set +a
-pnpm exec prisma migrate deploy
+echo "[deploy-staging] Building frontend..."
+cd "$STAGING_DIR/frontend" && \
+  env $(grep -v '^#' "$ENV_FILE" | grep '^VITE_' | xargs) \
+  pnpm --dir "$STAGING_DIR/frontend" run build
 
-echo "--- pm2 reload staging ---"
-set -a; source "$ENV_FILE"; set +a
-if "$PM2" list | grep -q 'vaultworks-staging'; then
-  "$PM2" reload vaultworks-staging
-elif "$PM2" list | grep -q '^vaultworks '; then
-  "$PM2" reload vaultworks
-else
-  cd "$REPO_DIR"
-  "$PM2" start ecosystem.staging.cjs
-fi
-"$PM2" save
+echo "[deploy-staging] Reloading PM2 process..."
+pm2 reload vaultworks-staging --update-env
 
-echo "=== Staging deploy complete at $(date) ==="
+echo "[deploy-staging] Done."

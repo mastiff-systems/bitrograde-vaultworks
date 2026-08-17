@@ -6,6 +6,7 @@ import { listCategories, type Category } from '../../api/categories.js';
 export interface WizardState {
   step: 'file' | 'metadata' | 'review' | 'submitting' | 'done' | 'error';
   file: File | null;
+  customName: string;
   detectedType: string | null;
   detectedDimensions: { w: number; h: number } | null;
   detectedDuration: number | null;
@@ -28,6 +29,7 @@ export type WizardAction =
   | { type: 'GO_BACK' }
   | { type: 'SET_CATEGORY'; categoryId: string | null }
   | { type: 'SET_METADATA'; patch: Partial<WizardState['metadata']> }
+  | { type: 'SET_CUSTOM_NAME'; name: string }
   | { type: 'SUBMIT_START' }
   | { type: 'SUBMIT_PROGRESS'; pct: number }
   | { type: 'SUBMIT_SUCCESS'; asset: Asset }
@@ -46,6 +48,7 @@ const initialMetadata = {
 const initialState: WizardState = {
   step: 'file',
   file: null,
+  customName: '',
   detectedType: null,
   detectedDimensions: null,
   detectedDuration: null,
@@ -61,12 +64,15 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
       return {
         ...state,
         file: action.file,
+        customName: action.file.name,
         detectedType: action.detectedType,
         detectedDimensions: action.detectedDimensions,
         detectedDuration: action.detectedDuration,
       };
     case 'REMOVE_FILE':
-      return { ...state, file: null, detectedType: null, detectedDimensions: null, detectedDuration: null };
+      return { ...state, file: null, customName: '', detectedType: null, detectedDimensions: null, detectedDuration: null };
+    case 'SET_CUSTOM_NAME':
+      return { ...state, customName: action.name };
     case 'GO_NEXT': {
       if (state.step === 'file' && state.file) return { ...state, step: 'metadata' };
       if (state.step === 'metadata') return { ...state, step: 'review' };
@@ -203,6 +209,7 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
       const asset = await uploadWithMetadata(
         state.file,
         {
+          customName: state.customName || state.file.name,
           categoryId: state.metadata.categoryId,
           subcategoryId: state.metadata.subcategoryId,
           license: state.metadata.license,

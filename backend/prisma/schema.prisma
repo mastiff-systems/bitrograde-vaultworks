@@ -15,10 +15,7 @@ model User {
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   notifications Notification[]
   assetVersions AssetVersion[]
-  assets        Asset[]
-  auditLogs     AuditLog[]
-  collections   Collection[]
-  shareLinks    ShareLink[]
+  folders       Folder[]       @relation("FolderCreator")
 
   @@map("users")
 }
@@ -70,10 +67,7 @@ model Asset {
   tags            AssetTag[]
   notifications   Notification[]
   versions        AssetVersion[]
-  auditLogs       AuditLog[]
-  collections     CollectionAsset[]
-  shareLinks      ShareLink[]
-  uploader        User?          @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  folders         FolderAsset[]
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
 
@@ -147,78 +141,33 @@ model Setting {
   @@map("settings")
 }
 
-enum AuditAction {
-  UPLOAD
-  DOWNLOAD
-  VIEW
-  UPDATE
-  UPDATE_METADATA
-  DELETE
-  SHARE
-  REVOKE_SHARE
+model Folder {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String
+  description     String?
+  createdByUserId String?  @map("created_by_user_id") @db.Uuid
+  parentFolderId  String?  @map("parent_folder_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  @@map("audit_action")
+  createdBy User?         @relation("FolderCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  parent    Folder?       @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Cascade)
+  children  Folder[]      @relation("FolderChildren")
+  assets    FolderAsset[]
+
+  @@index([createdByUserId])
+  @@index([parentFolderId])
+  @@map("folders")
 }
 
-model AuditLog {
-  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String?     @map("user_id") @db.Uuid
-  assetId   String?     @map("asset_id") @db.Uuid
-  action    AuditAction
-  assetName String?     @map("asset_name")
-  ipAddress String?     @map("ip_address")
-  details   Json        @default("{}") @map("details")
-  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+model FolderAsset {
+  folderId String @map("folder_id") @db.Uuid
+  assetId  String @map("asset_id") @db.Uuid
 
-  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
-  asset Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  folder Folder @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  asset  Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
+  @@id([folderId, assetId])
   @@index([assetId])
-  @@index([userId])
-  @@index([action])
-  @@index([createdAt(sort: Desc)])
-  @@index([assetId, createdAt(sort: Desc)])
-  @@index([userId, createdAt(sort: Desc)])
-  @@map("audit_logs")
-}
-
-model Collection {
-  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name        String
-  description String?
-  createdBy   String            @map("created_by") @db.Uuid
-  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  user        User              @relation(fields: [createdBy], references: [id])
-  assets      CollectionAsset[]
-
-  @@index([createdBy])
-  @@map("collections")
-}
-
-model CollectionAsset {
-  collectionId String     @map("collection_id") @db.Uuid
-  assetId      String     @map("asset_id") @db.Uuid
-  addedAt      DateTime   @default(now()) @map("added_at") @db.Timestamptz(6)
-  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
-  asset        Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
-
-  @@id([collectionId, assetId])
-  @@index([collectionId])
-  @@index([assetId])
-  @@map("collection_assets")
-}
-
-model ShareLink {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  token           String    @unique
-  assetId         String    @map("asset_id") @db.Uuid
-  asset           Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  createdByUserId String?   @map("created_by_user_id") @db.Uuid
-  createdBy       User?     @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(6)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  @@unique([assetId])
-  @@map("share_links")
+  @@map("folder_assets")
 }

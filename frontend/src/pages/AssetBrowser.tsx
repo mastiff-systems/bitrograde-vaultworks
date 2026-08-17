@@ -24,12 +24,15 @@ import {
   type ShareLink,
 } from '../api/client.js';
 import {
-  listCollections,
-  createCollection,
-  addAssetsToCollection,
-  type Collection,
-} from '../api/collections.js';
+  listFolderAssets,
+  listFolders,
+  listFoldersForAsset,
+  addAssetsToFolder,
+  removeAssetFromFolder,
+  type Folder,
+} from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
+import { FolderPanel } from '../components/FolderPanel.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
@@ -97,6 +100,7 @@ function getUrlFilters() {
     sort: (p.get('sort') ?? 'newest') as SortKey,
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
+    folder: p.get('folder') ?? null,
   };
 }
 
@@ -108,6 +112,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
+  if (filters.folder) p.set('folder', filters.folder);
   const search = p.toString();
   history.pushState(null, '', search ? `?${search}` : window.location.pathname);
 }
@@ -242,10 +247,7 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
-  onAddToCollection,
-  selectionMode,
-  selected,
-  onToggleSelect,
+  onRemoveFromFolder,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -253,10 +255,8 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
-  onAddToCollection?: () => void;
-  selectionMode?: boolean;
-  selected?: boolean;
-  onToggleSelect?: (id: string) => void;
+  /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
+  onRemoveFromFolder?: () => void;
 }) {
   const palette = (name: string) => tagPalette(name);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -342,15 +342,15 @@ function AssetCard({
                     </svg>
                     Details
                   </button>
-                  {onAddToCollection && (
+                  {onRemoveFromFolder && (
                     <button
-                      className="w-full text-left px-3 py-2 text-sm text-content-secondary hover:text-content-primary hover:bg-surface-3 transition-colors flex items-center gap-2"
-                      onClick={() => { setMenuOpen(false); onAddToCollection(); }}
+                      className="w-full text-left px-3 py-2 text-sm text-danger hover:text-danger hover:bg-surface-3 transition-colors flex items-center gap-2"
+                      onClick={() => { setMenuOpen(false); onRemoveFromFolder(); }}
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v8.25A2.25 2.25 0 004.5 16.5h15a2.25 2.25 0 002.25-2.25V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h18M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2m3 0v12a2 2 0 01-2 2H7a2 2 0 01-2-2V7h14z" />
                       </svg>
-                      Add to Collection
+                      Remove from folder
                     </button>
                   )}
                 </div>
@@ -711,74 +711,53 @@ function AssetDetailModal({
   const [sharingOpen, setSharingOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
 
-  const [editingMeta, setEditingMeta] = useState(false);
-  const [editForm, setEditForm] = useState({
-    name: asset.original_name,
-    description: asset.description ?? '',
-    categoryId: asset.category_id ?? '',
-    subcategoryId: asset.subcategory_id ?? '',
-    tags: asset.tags?.map((t) => t.name) ?? [],
-  });
-  const [editTagInput, setEditTagInput] = useState('');
-  const [savingMeta, setSavingMeta] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveFieldErrors, setSaveFieldErrors] = useState<Record<string, string[]>>({});
+  // ── Folder membership state ─────────────────────────────────────────────────
+  const [assetFolders, setAssetFolders] = useState<Folder[]>([]);
+  const [allFolders, setAllFolders] = useState<Folder[]>([]);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [folderPickerSearch, setFolderPickerSearch] = useState('');
+  const [addingToFolder, setAddingToFolder] = useState(false);
 
-  const subcategoriesForEdit = categories.find((c) => c.id === editForm.categoryId)?.subcategories ?? [];
+  useEffect(() => {
+    listFoldersForAsset(asset.id).then(setAssetFolders).catch(() => {});
+    listFolders().then(setAllFolders).catch(() => {});
+  }, [asset.id]);
 
-  function startEdit() {
-    setEditForm({
-      name: asset.original_name,
-      description: asset.description ?? '',
-      categoryId: asset.category_id ?? '',
-      subcategoryId: asset.subcategory_id ?? '',
-      tags: asset.tags?.map((t) => t.name) ?? [],
-    });
-    setEditTagInput('');
-    setSaveError(null);
-    setSaveFieldErrors({});
-    setEditingMeta(true);
-  }
-
-  function addEditTag() {
-    const name = editTagInput.trim().toLowerCase();
-    if (name && !editForm.tags.includes(name)) {
-      setEditForm((f) => ({ ...f, tags: [...f.tags, name] }));
-    }
-    setEditTagInput('');
-  }
-
-  function removeEditTag(name: string) {
-    setEditForm((f) => ({ ...f, tags: f.tags.filter((t) => t !== name) }));
-  }
-
-  async function handleSaveMeta() {
-    if (!editForm.name.trim()) { setSaveError('Name is required'); return; }
-    setSavingMeta(true);
-    setSaveError(null);
-    setSaveFieldErrors({});
+  const handleRemoveFromFolderInModal = async (folderId: string) => {
     try {
-      const updated = await updateFile(asset.id, {
-        name: editForm.name.trim(),
-        description: editForm.description.trim() || null,
-        categoryId: editForm.categoryId || null,
-        subcategoryId: editForm.subcategoryId || null,
-        tags: editForm.tags,
-      });
-      onUpdate(updated);
-      setEditingMeta(false);
-    } catch (err: unknown) {
-      const data = (err as { response?: { data?: { error?: string; fields?: Record<string, string[]> } } })?.response?.data;
-      const fieldErrs = data?.fields;
-      if (fieldErrs && Object.keys(fieldErrs).length > 0) {
-        setSaveFieldErrors(fieldErrs);
-      } else {
-        setSaveError(data?.error ?? 'Save failed. Please try again.');
-      }
-    } finally {
-      setSavingMeta(false);
+      await removeAssetFromFolder(folderId, asset.id);
+      setAssetFolders((prev) => prev.filter((f) => f.id !== folderId));
+    } catch (err) {
+      console.error('Failed to remove asset from folder', err);
     }
-  }
+  };
+
+  const handleAddToFolder = async (folderId: string) => {
+    if (addingToFolder) return;
+    setAddingToFolder(true);
+    try {
+      await addAssetsToFolder(folderId, [asset.id]);
+      // Add the folder to the asset's folder list optimistically
+      const folder = allFolders.find((f) => f.id === folderId);
+      if (folder && !assetFolders.some((f) => f.id === folderId)) {
+        setAssetFolders((prev) => [...prev, folder]);
+      }
+      setShowFolderPicker(false);
+      setFolderPickerSearch('');
+    } catch (err) {
+      console.error('Failed to add asset to folder', err);
+    } finally {
+      setAddingToFolder(false);
+    }
+  };
+
+  // Folders available to add (not already containing this asset)
+  const addableFolders = allFolders.filter(
+    (f) => !assetFolders.some((af) => af.id === f.id),
+  ).filter(
+    (f) => folderPickerSearch.trim() === '' || f.name.toLowerCase().includes(folderPickerSearch.toLowerCase()),
+  );
+  // ── End folder state ─────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!editingTags) setPendingTags(asset.tags?.map((t) => t.name) ?? []);
@@ -1150,6 +1129,82 @@ function AssetDetailModal({
             )}
           </div>}
 
+          {/* Folders */}
+          <div>
+            <div className="flex items-center justify-between mb-2.5">
+              <span className="label mb-0">Folders</span>
+              <button
+                onClick={() => { setShowFolderPicker((v) => !v); setFolderPickerSearch(''); }}
+                className="text-xs text-accent-light hover:text-accent transition-colors"
+              >
+                Add to folder
+              </button>
+            </div>
+
+            {/* Folder picker */}
+            {showFolderPicker && (
+              <div className="mb-2 card bg-surface-1 p-2 space-y-1">
+                <input
+                  autoFocus
+                  className="input py-1 text-xs w-full mb-1"
+                  placeholder="Search folders…"
+                  value={folderPickerSearch}
+                  onChange={(e) => setFolderPickerSearch(e.target.value)}
+                />
+                {allFolders.length === 0 ? (
+                  <p className="text-xs text-content-muted px-1 py-1">No folders yet — create one in the sidebar.</p>
+                ) : addableFolders.length === 0 ? (
+                  <p className="text-xs text-content-muted px-1 py-1">Asset is already in all matching folders.</p>
+                ) : (
+                  <div className="max-h-36 overflow-y-auto space-y-0.5">
+                    {addableFolders.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => handleAddToFolder(f.id)}
+                        disabled={addingToFolder}
+                        className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-surface-3 transition-colors text-content-secondary hover:text-content-primary flex items-center justify-between"
+                      >
+                        <span className="truncate">{f.name}</span>
+                        <span className="text-content-muted ml-2 flex-shrink-0">{f.asset_count}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowFolderPicker(false)}
+                  className="text-xs text-content-muted hover:text-content-secondary transition-colors mt-1"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Assigned folders as removable chips */}
+            <div className="flex flex-wrap gap-1.5 min-h-6">
+              {assetFolders.length === 0 ? (
+                <span className="text-xs text-content-muted italic">No folders — click "Add to folder" to assign</span>
+              ) : (
+                assetFolders.map((f) => (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-surface-3 text-content-secondary"
+                  >
+                    {f.name}
+                    <button
+                      onClick={() => handleRemoveFromFolderInModal(f.id)}
+                      className="opacity-60 hover:opacity-100 ml-0.5"
+                      aria-label={`Remove from folder ${f.name}`}
+                    >
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+          </div>
+
           {/* Version history */}
           {!editingMeta && (
           <div>
@@ -1481,6 +1536,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   const upload = useUpload();
   const [sort, setSort] = useState<SortKey>(initial.sort);
+  // Active folder: null = show all assets, uuid = show folder assets
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(initial.folder);
 
   const categoryMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -1625,6 +1682,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       setSort(filters.sort);
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
+      setActiveFolderId(filters.folder);
     }
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -1660,8 +1718,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, exts: selectedExts, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId });
-  }, [debouncedQuery, selectedExts, selectedTags, sort, selectedCategoryId, selectedSubcategoryId]);
+    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
+  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId]);
 
 
   // Load tags
@@ -1669,43 +1727,27 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     listTags().then(setAllTags).catch(() => {});
   }, []);
 
-  // Available file extensions computed from loaded assets (dynamic per taxonomy context)
-  const availableExts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const a of assets) {
-      const ext = getExtension(a.original_name);
-      counts[ext] = (counts[ext] ?? 0) + 1;
-    }
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([ext, count]) => ({ ext, count }));
-  }, [assets]);
-
-  // Reset to page 1 whenever filters change
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
-
-  // Load assets on filter/page change
+  // Load assets: branch on activeFolderId — folder view vs. all-assets view
   useEffect(() => {
     setLoading(true);
     setError(null);
-    listFiles({
-      q: debouncedQuery || undefined,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      categoryId: selectedCategoryId ?? undefined,
-      subcategoryId: selectedSubcategoryId ?? undefined,
-      page,
-      limit: PAGE_LIMIT,
-    })
-      .then((result) => {
-        setAssets(result.data);
-        setTotal(result.total);
-        setTotalPages(result.totalPages);
-      })
+
+    const fetch = activeFolderId
+      ? listFolderAssets(activeFolderId, { limit: 200 }).then((page) => page.assets)
+      : listFiles({
+          q: debouncedQuery || undefined,
+          // Pass single type to API; multi-type handled client-side below
+          assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
+          tags: selectedTags.length > 0 ? selectedTags : undefined,
+          categoryId: selectedCategoryId ?? undefined,
+          subcategoryId: selectedSubcategoryId ?? undefined,
+        });
+
+    fetch
+      .then(setAssets)
       .catch(() => setError('Failed to load assets.'))
       .finally(() => setLoading(false));
-  }, [debouncedQuery, selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, page]);
+  }, [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -1783,6 +1825,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setAssets((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     setDetailAsset(updated);
     listTags().then(setAllTags).catch(() => {});
+  }
+
+  /** Remove asset from the active folder view; optimistic — no reload needed. */
+  async function handleRemoveFromFolder(assetId: string) {
+    if (!activeFolderId) return;
+    try {
+      await removeAssetFromFolder(activeFolderId, assetId);
+      setAssets((prev) => prev.filter((a) => a.id !== assetId));
+    } catch (err) {
+      console.error('Failed to remove asset from folder', err);
+    }
   }
 
   const sortOptions = debouncedQuery
@@ -1899,6 +1952,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           </div>
         )}
       </aside>
+
+      {/* Folder sidebar */}
+      <FolderPanel activeFolderId={activeFolderId} onSelectFolder={setActiveFolderId} />
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -2084,47 +2140,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
-                  onAddToCollection={() => openAddToCollection(asset.id)}
-                  selectionMode={selectionMode}
-                  selected={selectedIds.has(asset.id)}
-                  onToggleSelect={toggleSelect}
-                />
-              ))}
-            </div>
-          )}
-
-          {!loading && displayed.length > 0 && viewMode === 'list' && (
-            <div className="card overflow-hidden">
-              {/* List header */}
-              <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface-1 text-[10px] font-semibold uppercase tracking-widest text-content-muted">
-                {selectionMode && (
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.size === displayed.length && displayed.length > 0}
-                    onChange={toggleSelectAll}
-                    className="w-4 h-4 rounded cursor-pointer accent-violet-500 flex-shrink-0"
-                    aria-label="Select all"
-                  />
-                )}
-                <div className="w-10 flex-shrink-0" />
-                <div className="flex-1">Name</div>
-                <div className="hidden md:block w-40">Tags</div>
-                <div className="hidden sm:block w-16 text-right">Size</div>
-                <div className="hidden lg:block w-24 text-right">Date</div>
-                <div className="w-16" />
-              </div>
-              {displayed.map((asset) => (
-                <AssetListRow
-                  key={asset.id}
-                  asset={asset}
-                  categoryName={asset.category_id ? categoryMap[asset.category_id] : undefined}
-                  onTagClick={toggleTag}
-                  activeTagFilters={selectedTags}
-                  onClick={() => setPreviewAsset(asset)}
-                  onDetails={() => setDetailAsset(asset)}
-                  selectionMode={selectionMode}
-                  selected={selectedIds.has(asset.id)}
-                  onToggleSelect={toggleSelect}
+                  onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
                 />
               ))}
             </div>

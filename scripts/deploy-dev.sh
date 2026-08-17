@@ -1,47 +1,39 @@
 #!/usr/bin/env bash
-# deploy-dev.sh — pull develop branch, build, migrate, reload dev (port 3002)
-# Dev dir: /home/mastiff/development/bitrograde-vaultworks-dev
-# PM2 app: vaultworks-dev
+# Deploy dev environment (port 3002) from the bitrograde-vaultworks-dev worktree.
+# Self-hosted runner executes this via the CI workflow on pushes to develop.
 set -euo pipefail
 
-REPO_DIR="/home/mastiff/development/bitrograde-vaultworks-dev"
-ENV_FILE="$REPO_DIR/.env"
-LOG_FILE="/tmp/vaultworks-dev-deploy.log"
-PM2="$HOME/.npm-global/bin/pm2"
+DEV_DIR="/home/mastiff/development/bitrograde-vaultworks-dev"
+ENV_FILE="$DEV_DIR/.env"
 
-exec > >(tee -a "$LOG_FILE") 2>&1
-echo "=== Dev deploy started at $(date) ==="
+echo "[deploy-dev] Pulling latest develop..."
+git -C "$DEV_DIR" fetch origin develop
+git -C "$DEV_DIR" reset --hard origin/develop
 
-cd "$REPO_DIR"
+echo "[deploy-dev] Installing backend dependencies..."
+pnpm install --frozen-lockfile --dir "$DEV_DIR/backend"
 
-echo "--- git pull (develop) ---"
-git fetch origin
-git checkout develop 2>/dev/null || git checkout -b develop origin/develop
-git reset --hard origin/develop
+echo "[deploy-dev] Running database migrations..."
+cd "$DEV_DIR" && env $(grep -v '^#' "$ENV_FILE" | xargs) \
+  pnpm --dir "$DEV_DIR/backend" exec prisma migrate deploy \
+  --schema "$DEV_DIR/backend/prisma/schema.prisma"
 
-echo "--- backend deps + build ---"
-cd "$REPO_DIR/backend"
-pnpm install --frozen-lockfile
-pnpm run build
+echo "[deploy-dev] Building backend..."
+pnpm --dir "$DEV_DIR/backend" run build
 
-echo "--- frontend deps + build ---"
-cd "$REPO_DIR/frontend"
-pnpm install --frozen-lockfile
-pnpm run build
+echo "[deploy-dev] Installing frontend dependencies..."
+pnpm install --frozen-lockfile --dir "$DEV_DIR/frontend"
 
-echo "--- db migrations ---"
-cd "$REPO_DIR/backend"
-set -a; source "$ENV_FILE"; set +a
-pnpm exec prisma migrate deploy
+echo "[deploy-dev] Building frontend..."
+cd "$DEV_DIR/frontend" && \
+  env $(grep -v '^#' "$ENV_FILE" | grep '^VITE_' | xargs) \
+  pnpm --dir "$DEV_DIR/frontend" run build
 
-echo "--- pm2 reload dev ---"
-set -a; source "$ENV_FILE"; set +a
-if "$PM2" list | grep -q 'vaultworks-dev'; then
-  "$PM2" reload vaultworks-dev
-else
-  cd "/home/mastiff/development/bitrograde-vaultworks"
-  "$PM2" start ecosystem.dev.cjs
-fi
-"$PM2" save
+echo "[deploy-dev] Reloading PM2 process..."
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+pm2 reload vaultworks-dev --update-env
 
-echo "=== Dev deploy complete at $(date) ==="
+echo "[deploy-dev] Done."

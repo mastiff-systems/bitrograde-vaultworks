@@ -88,7 +88,7 @@ export function Step1FilePicker({ state, onSelectFile, onRemoveFile }: Props) {
             </div>
             <div>
               <p className="text-sm text-content-secondary font-medium">Drag & drop a file here</p>
-              <p className="text-xs text-content-muted mt-0.5">or click to browse · max 500 MB</p>
+              <p className="text-xs text-content-muted mt-0.5">or click to browse · max 5 GB</p>
             </div>
           </div>
         )}
@@ -96,7 +96,7 @@ export function Step1FilePicker({ state, onSelectFile, onRemoveFile }: Props) {
 
       {isTooLarge && (
         <div className="px-4 py-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
-          File exceeds the 500 MB limit. Please choose a smaller file.
+          File exceeds the 5 GB limit. Please choose a smaller file.
         </div>
       )}
 

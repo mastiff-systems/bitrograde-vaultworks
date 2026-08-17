@@ -1,26 +1,76 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { uploadFiles } from '../api/client.js';
+import { findAssetByExactName, uploadFiles, uploadVersion } from '../api/client.js';
 import type { Asset } from '../api/client.js';
+import { OverwriteConfirmDialog } from './OverwriteConfirmDialog.js';
+import type { ConflictResolution } from './OverwriteConfirmDialog.js';
+
+const OVERWRITE_PREF_KEY = 'vaultworks_overwrite_pref';
+
+/** A dropped file that collides with an existing asset's filename. */
+interface ConflictEntry {
+  file: File;
+  existingId: string;
+}
 
 interface Props {
   onUploaded: (assets: Asset[]) => void;
+  /** Called after all overwrite versions succeed. Lets the parent refresh the asset list. */
+  onVersionsCreated?: () => void;
 }
 
-export function DropZone({ onUploaded }: Props) {
+export function DropZone({ onUploaded, onVersionsCreated }: Props) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const onDrop = useCallback(
-    async (acceptedFiles: File[]) => {
-      if (!acceptedFiles.length) return;
+  // Non-empty while the overwrite-confirm dialog is open
+  const [conflicts, setConflicts] = useState<ConflictEntry[]>([]);
+  const [pendingNonConflicts, setPendingNonConflicts] = useState<File[]>([]);
+
+  // Set to true when "don't ask again" is clicked; pref is committed only on upload success
+  const pendingPrefSave = useRef(false);
+
+  // ── Shared upload executor ───────────────────────────────────────────────────
+
+  /**
+   * Route files to the correct upload call and notify onUploaded.
+   * - overwriteEntries → uploadVersion() (existing asset receives a new version)
+   * - freshFiles       → uploadFiles()   (new uploads or keep-both duplicates;
+   *                                       MAS-336 auto-renames on collision)
+   */
+  const executeUploads = useCallback(
+    async (overwriteEntries: ConflictEntry[], freshFiles: File[]) => {
       setUploading(true);
-      setError(null);
       setProgress(0);
       try {
-        const assets = await uploadFiles(acceptedFiles, setProgress);
-        onUploaded(assets);
+        // Fix 2: clear stale error banner at the start of every attempt
+        setError(null);
+
+        const allAssets: Asset[] = [];
+
+        // New / keep-both files — one batched multipart request
+        if (freshFiles.length > 0) {
+          const uploaded = await uploadFiles(freshFiles, setProgress);
+          allAssets.push(...uploaded);
+        }
+
+        // Overwrite — upload a new version for each conflicting asset
+        if (overwriteEntries.length > 0) {
+          await Promise.all(
+            overwriteEntries.map((e) => uploadVersion(e.existingId, e.file)),
+          );
+          // Fix 1: notify parent so it can refresh overwritten assets
+          onVersionsCreated?.();
+        }
+
+        // Fix 3: persist "don't ask again" only after a successful upload
+        if (pendingPrefSave.current) {
+          localStorage.setItem(OVERWRITE_PREF_KEY, 'always');
+          pendingPrefSave.current = false;
+        }
+
+        onUploaded(allAssets);
       } catch {
         setError('Upload failed. Check your connection and try again.');
       } finally {
@@ -28,13 +78,106 @@ export function DropZone({ onUploaded }: Props) {
         setProgress(0);
       }
     },
-    [onUploaded],
+    [onUploaded, onVersionsCreated],
   );
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
+  // ── Dialog callbacks ─────────────────────────────────────────────────────────
+
+  const handleResolve = useCallback(
+    async (decisions: Record<string, ConflictResolution>) => {
+      const overwriteEntries = conflicts.filter(
+        (c) => decisions[c.file.name] === 'overwrite',
+      );
+      const keepBothFiles = conflicts
+        .filter((c) => decisions[c.file.name] !== 'overwrite')
+        .map((c) => c.file);
+
+      // Snapshot pending list before clearing state
+      const fresh = pendingNonConflicts;
+      setConflicts([]);
+      setPendingNonConflicts([]);
+
+      await executeUploads(overwriteEntries, [...fresh, ...keepBothFiles]);
+    },
+    [conflicts, pendingNonConflicts, executeUploads],
+  );
+
+  const handleCancel = useCallback(() => {
+    setConflicts([]);
+    setPendingNonConflicts([]);
+  }, []);
+
+  // ── Drop handler ─────────────────────────────────────────────────────────────
+
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      if (!acceptedFiles.length) return;
+      setError(null);
+
+      // 1. Check localStorage preference — skip dialog if 'always'
+      const pref = localStorage.getItem(OVERWRITE_PREF_KEY);
+
+      // 2. Run exact-name conflict checks in parallel for all dropped files
+      setUploading(true);
+      setProgress(0);
+      let conflicting: ConflictEntry[];
+      let nonConflicting: File[];
+      try {
+        const checkResults = await Promise.all(
+          acceptedFiles.map(async (file) => {
+            const existing = await findAssetByExactName(file.name);
+            return { file, existingId: existing?.id ?? null };
+          }),
+        );
+        // Type-safe narrowing after filter
+        conflicting = checkResults
+          .filter((r): r is { file: File; existingId: string } => r.existingId !== null)
+          .map((r) => ({ file: r.file, existingId: r.existingId }));
+        nonConflicting = checkResults
+          .filter((r) => r.existingId === null)
+          .map((r) => r.file);
+      } catch {
+        setError('Could not check for conflicts. Try again.');
+        setUploading(false);
+        return;
+      }
+
+      // 3. Conflicts found and preference is not 'always' → open dialog
+      if (conflicting.length > 0 && pref !== 'always') {
+        setUploading(false);
+        setPendingNonConflicts(nonConflicting);
+        setConflicts(conflicting);
+        return;
+      }
+
+      // 4. No dialog needed — route directly
+      //    - pref === 'always': overwrite all conflicting files silently
+      //    - no conflicts:      upload everything fresh
+      await executeUploads(conflicting, nonConflicting);
+    },
+    [executeUploads],
+  );
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
+  const isDialogOpen = conflicts.length > 0;
+  const isDisabled = uploading || isDialogOpen;
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    disabled: isDisabled,
+  });
 
   return (
     <div style={{ marginBottom: 24 }}>
+      {isDialogOpen && (
+        <OverwriteConfirmDialog
+          conflicts={conflicts.map((c) => c.file.name)}
+          onResolve={handleResolve}
+          onCancel={handleCancel}
+          onNeverAsk={() => { pendingPrefSave.current = true; }}
+        />
+      )}
       <div
         {...getRootProps()}
         style={{
@@ -42,7 +185,7 @@ export function DropZone({ onUploaded }: Props) {
           borderRadius: 8,
           padding: '32px 24px',
           textAlign: 'center',
-          cursor: 'pointer',
+          cursor: isDisabled ? 'default' : 'pointer',
           background: isDragActive ? '#1a2a3a' : '#1a1a1a',
           color: '#ccc',
           transition: 'all 0.2s',

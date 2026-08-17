@@ -38,6 +38,12 @@ import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { useUpload } from '../contexts/UploadContext.js';
+import {
+  type Collection,
+  listCollections,
+  addAssetsToCollection,
+  createCollection,
+} from '../api/collections.js';
 
 // --- Helpers ---
 
@@ -97,6 +103,7 @@ function getUrlFilters() {
     q: p.get('q') ?? '',
     exts: p.getAll('ext'),
     tags: p.getAll('tag'),
+    types: p.getAll('type'),
     sort: (p.get('sort') ?? 'newest') as SortKey,
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
@@ -109,6 +116,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.q) p.set('q', filters.q);
   filters.exts.forEach((e) => p.append('ext', e));
   filters.tags.forEach((t) => p.append('tag', t));
+  (filters.types ?? []).forEach((t) => p.append('type', t));
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
@@ -248,6 +256,9 @@ function AssetCard({
   onClick,
   onDetails,
   onRemoveFromFolder,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -257,6 +268,9 @@ function AssetCard({
   onDetails: () => void;
   /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
   onRemoveFromFolder?: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const palette = (name: string) => tagPalette(name);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -758,6 +772,75 @@ function AssetDetailModal({
     (f) => folderPickerSearch.trim() === '' || f.name.toLowerCase().includes(folderPickerSearch.toLowerCase()),
   );
   // ── End folder state ─────────────────────────────────────────────────────────
+
+  // ── Edit metadata state ──────────────────────────────────────────────────────
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: asset.original_name,
+    description: asset.description ?? '',
+    categoryId: asset.category_id ?? '',
+    subcategoryId: asset.subcategory_id ?? '',
+    tags: asset.tags?.map((t) => t.name) ?? [],
+  });
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveFieldErrors, setSaveFieldErrors] = useState<Record<string, string[]>>({});
+  const [editTagInput, setEditTagInput] = useState('');
+
+  const subcategoriesForEdit = useMemo(() => {
+    const cat = categories.find((c) => c.id === editForm.categoryId);
+    return cat?.subcategories ?? [];
+  }, [categories, editForm.categoryId]);
+
+  function startEdit() {
+    setEditForm({
+      name: asset.original_name,
+      description: asset.description ?? '',
+      categoryId: asset.category_id ?? '',
+      subcategoryId: asset.subcategory_id ?? '',
+      tags: asset.tags?.map((t) => t.name) ?? [],
+    });
+    setSaveError(null);
+    setSaveFieldErrors({});
+    setEditingMeta(true);
+  }
+
+  function addEditTag() {
+    const name = editTagInput.trim().toLowerCase();
+    if (name && !editForm.tags.includes(name)) {
+      setEditForm((f) => ({ ...f, tags: [...f.tags, name] }));
+    }
+    setEditTagInput('');
+  }
+
+  function removeEditTag(name: string) {
+    setEditForm((f) => ({ ...f, tags: f.tags.filter((t) => t !== name) }));
+  }
+
+  async function handleSaveMeta() {
+    const errors: Record<string, string[]> = {};
+    if (!editForm.name.trim()) errors.name = ['Name is required'];
+    if (Object.keys(errors).length > 0) { setSaveFieldErrors(errors); return; }
+    setSavingMeta(true);
+    setSaveError(null);
+    setSaveFieldErrors({});
+    try {
+      const updated = await updateFile(asset.id, {
+        name: editForm.name.trim(),
+        description: editForm.description.trim() || null,
+        categoryId: editForm.categoryId || null,
+        subcategoryId: editForm.subcategoryId || null,
+        tags: editForm.tags,
+      });
+      onUpdate(updated);
+      setEditingMeta(false);
+    } catch {
+      setSaveError('Failed to save changes. Please try again.');
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+  // ── End edit metadata state ──────────────────────────────────────────────────
 
   useEffect(() => {
     if (!editingTags) setPendingTags(asset.tags?.map((t) => t.name) ?? []);
@@ -1531,6 +1614,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [debouncedQuery, setDebouncedQuery] = useState(initial.q);
   const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
@@ -1718,7 +1802,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
+    pushUrlFilters({ q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
   }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId]);
 
 
@@ -1762,6 +1846,15 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     }
     return sortAssets(result, sort);
   }, [assets, selectedExts, selectedCategoryId, selectedSubcategoryId, sort]);
+
+  const availableExts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of assets) {
+      const ext = getExtension(a.original_name);
+      if (ext) counts[ext] = (counts[ext] ?? 0) + 1;
+    }
+    return Object.entries(counts).map(([ext, count]) => ({ ext, count })).sort((a, b) => b.count - a.count);
+  }, [assets]);
 
   const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
 
@@ -2141,6 +2234,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
                   onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
             </div>

@@ -42,6 +42,14 @@ export interface Asset {
   duration_seconds?: number | null;
 }
 
+interface PaginatedFilesResponse {
+  data: Asset[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export interface AssetVersion {
   id: string;
   version_number: number;
@@ -100,7 +108,7 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.page) p.page = String(params.page);
   if (params?.tags?.length) p.tags = params.tags.join(',');
   const { data } = await api.get<PaginatedFilesResponse>('/api/files', { params: p });
-  return data;
+  return data.data;
 }
 
 export async function listTags(): Promise<Tag[]> {

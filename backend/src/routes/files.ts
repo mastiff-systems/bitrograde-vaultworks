@@ -9,6 +9,7 @@ import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { generateDuplicateName } from '../lib/filename.js';
+import { logAudit } from '../lib/audit.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -146,6 +147,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const limit = params.limit ?? 50;
+    const page  = params.page  ?? 1;
     const tagNames = params.tags
       ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
       : [];

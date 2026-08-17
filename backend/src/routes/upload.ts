@@ -7,6 +7,7 @@ import { prisma } from '../db/client.js';
 import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
+import { logAudit } from '../lib/audit.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),

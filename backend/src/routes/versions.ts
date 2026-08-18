@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { uploadToS3, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -122,8 +122,9 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'A file is required' });
     }
 
+    const storage = await getStorageProvider();
     const newStorageKey = `assets/${params.id}/versions/${Date.now()}_${uploadFilename}`;
-    await uploadToS3(newStorageKey, uploadBuffer, uploadMime);
+    await storage.upload(newStorageKey, uploadBuffer, uploadMime);
 
     const maxVersionRecord = await prisma.assetVersion.findFirst({
       where: { assetId: params.id },
@@ -183,7 +184,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
         return version;
       });
     } catch (err) {
-      await deleteFromS3(newStorageKey).catch(() => {});
+      await storage.delete(newStorageKey).catch(() => {});
       throw err;
     }
 
@@ -233,7 +234,8 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });
 
-      const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
+      const storage = await getStorageProvider();
+      const { stream, contentType, contentLength } = await storage.download(version.storageKey);
 
       const filename = encodeURIComponent(`v${version.versionNumber}_${version.asset.originalName}`);
 

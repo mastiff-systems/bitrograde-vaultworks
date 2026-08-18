@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { copyS3Object, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -400,7 +400,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset) return reply.status(404).send({ error: 'Not found' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.storageKey);
 
     const mime = contentType ?? asset.mimeType ?? 'application/octet-stream';
     const filename = encodeURIComponent(asset.originalName);
@@ -458,7 +459,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset) return reply.status(404).send({ error: 'Not found' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.storageKey);
 
     reply.header('Content-Type', contentType ?? asset.mimeType ?? 'application/octet-stream');
     if (contentLength) reply.header('Content-Length', contentLength);
@@ -502,7 +504,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset || !asset.thumbnailKey) return reply.status(404).send({ error: 'No thumbnail available' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.thumbnailKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.thumbnailKey);
 
     reply.header('Content-Type', contentType ?? 'image/webp');
     if (contentLength) reply.header('Content-Length', contentLength);
@@ -538,7 +541,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const newId = uuidv4();
     const storageKey = `assets/${newId}/${newName}`;
 
-    await copyS3Object(source.storageKey, storageKey);
+    const storage = await getStorageProvider();
+    await storage.copy(source.storageKey, storageKey);
 
     // Persist the new asset, copying all metadata from the source
     const newAsset = await prisma.asset.create({
@@ -580,10 +584,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
+    const storage = await getStorageProvider();
     try {
       await prisma.asset.delete({ where: { id: params.id } });
-      await deleteFromS3(existing.storageKey);
-      if (existing.thumbnailKey) await deleteFromS3(existing.thumbnailKey);
+      await storage.delete(existing.storageKey);
+      if (existing.thumbnailKey) await storage.delete(existing.thumbnailKey);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         return reply.status(404).send({ error: 'Not found' });

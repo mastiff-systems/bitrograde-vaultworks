@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Transform } from 'stream';
 import sharp from 'sharp';
 import { prisma } from '../db/client.js';
-import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit } from '../lib/audit.js';
@@ -80,6 +80,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       },
     },
   }, async (req, reply) => {
+    const storage = await getStorageProvider();
     const parts = req.parts();
     const uploaded: object[] = [];
 
@@ -115,7 +116,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       if (!filenameResult.success) {
         part.file.resume();
         // Clean up any S3 objects we already streamed before erroring out.
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({
           error: 'Invalid filename',
           fields: { filename: filenameResult.error.issues.map((i) => i.message) },
@@ -159,10 +160,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         part.file.pipe(counter);
 
         try {
-          await streamUploadToS3(storageKey, counter, mime);
+          await storage.streamUpload(storageKey, counter, mime);
         } catch (err) {
           // Clean up already-completed streamed uploads before propagating.
-          await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+          await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
           throw err;
         }
 
@@ -178,7 +179,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const rawMeta = coerceMeta(fields);
     const metaResult = UploadMetaSchema.safeParse(rawMeta);
     if (!metaResult.success) {
-      await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+      await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
       const fieldErrors: Record<string, string[]> = {};
       for (const issue of metaResult.error.issues) {
         const key = issue.path.join('.') || '_';
@@ -192,18 +193,18 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     if (meta.category_id) {
       const cat = await prisma.category.findUnique({ where: { id: meta.category_id }, select: { id: true } });
       if (!cat) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'category_id does not exist' });
       }
     }
     if (meta.subcategory_id) {
       const sub = await prisma.subcategory.findUnique({ where: { id: meta.subcategory_id }, select: { id: true, categoryId: true } });
       if (!sub) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'subcategory_id does not exist' });
       }
       if (meta.category_id && sub.categoryId !== meta.category_id) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'subcategory_id does not belong to category_id' });
       }
     }
@@ -226,7 +227,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       const storageKey = `assets/${id}/${resolvedName}`;
       const assetType = detectAssetType(resolvedName, mime);
 
-      await uploadToS3(storageKey, buffer, mime);
+      await storage.upload(storageKey, buffer, mime);
 
       let thumbnailKey: string | undefined;
       if (assetType === 'image' || assetType === 'sprite') {
@@ -234,7 +235,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         if (thumbBuffer) {
           thumbnailKey = `assets/${id}/thumbnail.webp`;
           try {
-            await uploadToS3(thumbnailKey, thumbBuffer, 'image/webp');
+            await storage.upload(thumbnailKey, thumbBuffer, 'image/webp');
           } catch {
             thumbnailKey = undefined;
           }
@@ -294,8 +295,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           }
         }
       } catch (err) {
-        await deleteFromS3(storageKey).catch(() => {});
-        if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
+        await storage.delete(storageKey).catch(() => {});
+        if (thumbnailKey) await storage.delete(thumbnailKey).catch(() => {});
         throw err;
       }
 
@@ -416,8 +417,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           }
         }
       } catch (err) {
-        // S3 object already exists; clean it up to avoid orphans.
-        await deleteFromS3(storageKey).catch(() => {});
+        // Storage object already exists; clean it up to avoid orphans.
+        await storage.delete(storageKey).catch(() => {});
         throw err;
       }
 

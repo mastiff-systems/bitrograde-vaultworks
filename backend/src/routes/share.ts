@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { getS3ObjectStream } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { parseBody, parseParams } from '../lib/validate.js';
 import { authenticate } from '../auth/middleware.js';
 import { logAudit } from '../lib/audit.js';
@@ -112,7 +112,8 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'Not found' });
     }
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(link.asset.storageKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(link.asset.storageKey);
 
     const mime = contentType ?? link.asset.mimeType ?? 'application/octet-stream';
     const filename = encodeURIComponent(link.asset.originalName);

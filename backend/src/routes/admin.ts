@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Prisma, AuditAction } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getAllSettings, upsertSettings } from '../db/settings.js';
+import { invalidateStorageCache } from '../storage/index.js';
 import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
 
@@ -77,6 +78,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
 
     await upsertSettings(updates);
+    invalidateStorageCache();
     const updated = await getAllSettings();
     return reply.send(maskSecrets(updated));
   });

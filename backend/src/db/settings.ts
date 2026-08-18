@@ -1,4 +1,5 @@
 import { prisma } from './client.js';
+import path from 'path';
 
 export interface S3Config {
   endpoint: string;
@@ -10,6 +11,8 @@ export interface S3Config {
 }
 
 const S3_KEYS = ['s3_endpoint', 's3_bucket', 's3_root_folder', 's3_access_key', 's3_secret_key', 's3_force_path_style'] as const;
+const DISK_KEYS = ['disk_storage_path'] as const;
+const STORAGE_KEYS = ['storage_type'] as const;
 
 let cache: Record<string, string> | null = null;
 let cacheAt = 0;
@@ -48,6 +51,17 @@ export async function getS3Config(): Promise<S3Config> {
   };
 }
 
+export interface DiskConfig {
+  storagePath: string;
+}
+
+export async function getDiskConfig(): Promise<DiskConfig> {
+  const s = await getAllSettings();
+  return {
+    storagePath: s['disk_storage_path'] || process.env.DISK_STORAGE_PATH || path.join(process.cwd(), 'uploads'),
+  };
+}
+
 export async function upsertSettings(updates: Record<string, string>): Promise<void> {
   const entries = Object.entries(updates);
   if (!entries.length) return;
@@ -64,4 +78,4 @@ export async function upsertSettings(updates: Record<string, string>): Promise<v
   invalidateSettingsCache();
 }
 
-export { S3_KEYS };
+export { S3_KEYS, DISK_KEYS, STORAGE_KEYS };

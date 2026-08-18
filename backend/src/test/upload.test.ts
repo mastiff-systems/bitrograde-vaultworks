@@ -4,23 +4,29 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  // Drain the stream so the multipart parser can move on to the next part,
-  // which is what the real S3 Upload class does when it reads the body.
-  streamUploadToS3: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
-    new Promise<void>((resolve, reject) => {
-      body.resume();
-      body.on('end', resolve);
-      body.on('error', reject);
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    // Drain the stream so the multipart parser can advance to the next part,
+    // mimicking what the real S3 Upload does when it consumes the body.
+    streamUpload: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+      new Promise<void>((resolve, reject) => {
+        body.resume();
+        body.on('end', resolve);
+        body.on('error', reject);
+      }),
+    ),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from(''),
+      contentType: 'application/octet-stream',
+      contentLength: 0,
     }),
-  ),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from(''),
-    contentType: 'application/octet-stream',
-    contentLength: 0,
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 // Minimal valid 1×1 RGB PNG for thumbnail generation testing

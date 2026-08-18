@@ -4,18 +4,26 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'text/plain',
-    contentLength: 12,
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'text/plain',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;
 let token: string;
+let userId: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -31,6 +39,7 @@ beforeEach(async () => {
     .post('/api/auth/register')
     .send({ email: 'fileuser@example.com', password: 'password123' });
   token = res.body.token;
+  userId = res.body.user.id;
 });
 
 describe('GET /api/files', () => {
@@ -307,11 +316,13 @@ describe('GET /api/files?q= (fuzzy search)', () => {
 
 describe('DELETE /api/files/:id', () => {
   it('deletes asset and returns 204', async () => {
+    // Must set uploadedBy so the delete permission check passes for non-admin users.
     const asset = await prisma.asset.create({
       data: {
         originalName: 'delete-me.txt',
         storageKey: 'assets/del/delete-me.txt',
         assetType: 'other',
+        uploadedBy: userId,
       },
     });
 
@@ -325,14 +336,20 @@ describe('DELETE /api/files/:id', () => {
     expect(check).toBeNull();
   });
 
-  it('deletes thumbnail from S3 when present', async () => {
-    const { deleteFromS3 } = await import('../storage/s3.js');
+  it('deletes thumbnail when present', async () => {
+    // Access the mock provider's delete spy via the mocked module.
+    const { getStorageProvider } = await import('../storage/index.js');
+    const provider = await (getStorageProvider as ReturnType<typeof vi.fn>)();
+    const deleteMock = provider.delete as ReturnType<typeof vi.fn>;
+    deleteMock.mockClear();
+
     const asset = await prisma.asset.create({
       data: {
         originalName: 'img.png',
         storageKey: 'assets/img/img.png',
         thumbnailKey: 'assets/img/thumbnail.webp',
         assetType: 'image',
+        uploadedBy: userId,
       },
     });
 
@@ -340,7 +357,7 @@ describe('DELETE /api/files/:id', () => {
       .delete(`/api/files/${asset.id}`)
       .set('Authorization', `Bearer ${token}`);
 
-    expect(deleteFromS3).toHaveBeenCalledWith('assets/img/thumbnail.webp');
+    expect(deleteMock).toHaveBeenCalledWith('assets/img/thumbnail.webp');
   });
 
   it('returns 404 when deleting non-existent asset', async () => {

@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { AdminSettings } from './Settings.js';
 import { AdminUsers } from './Users.js';
 import { TaxonomyManager } from './TaxonomyManager.js';
+import { StorageSettings } from './StorageSettings.js';
 
-type AdminTab = 'settings' | 'taxonomy' | 'users';
+type AdminTab = 'settings' | 'storage' | 'taxonomy' | 'users';
 
 const TABS: { id: AdminTab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
+  { id: 'storage', label: 'Storage' },
   { id: 'taxonomy', label: 'Taxonomy' },
   { id: 'users', label: 'Users' },
 ];
@@ -50,6 +52,7 @@ export function AdminPanel({ onNavigateToAsset: _onNavigateToAsset, onNavigateTo
       {/* Tab content */}
       <div className="flex-1 overflow-auto">
         {tab === 'settings' && <AdminSettings />}
+        {tab === 'storage' && <StorageSettings />}
         {tab === 'taxonomy' && <TaxonomyManager />}
         {tab === 'users' && <AdminUsers />}
       </div>

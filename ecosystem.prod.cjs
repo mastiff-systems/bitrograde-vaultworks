@@ -26,6 +26,17 @@ module.exports = {
         AUTH_PROVIDER: 'local',
         JWT_SECRET: process.env.JWT_SECRET,
         JWT_EXPIRY: '24h',
+        // SMTP — primary config is DB-driven (Admin → Settings → Email).
+        // Set these in the system environment only if you need an env-var
+        // fallback before the UI is configured (see .env.example for details).
+        ...(process.env.SMTP_HOST ? {
+          SMTP_HOST: process.env.SMTP_HOST,
+          SMTP_PORT: process.env.SMTP_PORT,
+          SMTP_USER: process.env.SMTP_USER,
+          SMTP_PASS: process.env.SMTP_PASS,
+          SMTP_FROM: process.env.SMTP_FROM,
+          SMTP_ENCRYPTION: process.env.SMTP_ENCRYPTION,
+        } : {}),
       },
     },
   ],

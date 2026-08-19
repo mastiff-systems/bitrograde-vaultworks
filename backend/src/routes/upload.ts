@@ -190,12 +190,19 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const meta = metaResult.data;
 
     // Validate category/subcategory FK references if provided
+    const mismatchedAssetIds = new Set<string>();
+    let categoryMimeRestrictions: string[] = [];
+
     if (meta.category_id) {
-      const cat = await prisma.category.findUnique({ where: { id: meta.category_id }, select: { id: true } });
+      const cat = await prisma.category.findUnique({
+        where: { id: meta.category_id },
+        select: { id: true, allowedMimeTypes: true },
+      });
       if (!cat) {
         await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'category_id does not exist' });
       }
+      categoryMimeRestrictions = cat.allowedMimeTypes ?? [];
     }
     if (meta.subcategory_id) {
       const sub = await prisma.subcategory.findUnique({ where: { id: meta.subcategory_id }, select: { id: true, categoryId: true } });
@@ -226,6 +233,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       const id = uuidv4();
       const storageKey = `assets/${id}/${resolvedName}`;
       const assetType = detectAssetType(resolvedName, mime);
+
+      if (categoryMimeRestrictions.length > 0 && !categoryMimeRestrictions.includes(mime)) {
+        mismatchedAssetIds.add(id);
+      }
 
       await storage.upload(storageKey, buffer, mime);
 
@@ -366,6 +377,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     for (const sf of streamedFiles) {
       const { id, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes } = sf;
 
+      if (categoryMimeRestrictions.length > 0 && !categoryMimeRestrictions.includes(mime)) {
+        mismatchedAssetIds.add(id);
+      }
+
       let asset;
       let tagRecords: Array<{ id: string; name: string }> = [];
       try {
@@ -472,6 +487,16 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       })();
     }
 
-    return reply.status(201).send(uploaded);
+    if (mismatchedAssetIds.size > 0) {
+      reply.header('X-Category-Mismatch', 'true');
+    }
+
+    const response = uploaded.map((a: any) =>
+      mismatchedAssetIds.has(a.id)
+        ? { ...a, category_mismatch_warning: true }
+        : a
+    );
+
+    return reply.status(201).send(response);
   });
 }

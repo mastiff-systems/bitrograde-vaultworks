@@ -8,7 +8,7 @@ import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
 
 const MASKED = '••••••••';
-const SECRET_KEYS = new Set(['s3_secret_key']);
+const SECRET_KEYS = new Set(['s3_secret_key', 'smtp_password']);
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid ID') });
 

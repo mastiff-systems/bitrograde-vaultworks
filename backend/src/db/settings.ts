@@ -14,6 +14,9 @@ const S3_KEYS = ['s3_endpoint', 's3_bucket', 's3_root_folder', 's3_access_key', 
 const DISK_KEYS = ['disk_storage_path'] as const;
 const STORAGE_KEYS = ['storage_type'] as const;
 
+export const SMTP_KEYS = ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_address', 'smtp_encryption'] as const;
+export type SmtpKey = typeof SMTP_KEYS[number];
+
 let cache: Record<string, string> | null = null;
 let cacheAt = 0;
 const CACHE_TTL = 30_000;
@@ -79,3 +82,4 @@ export async function upsertSettings(updates: Record<string, string>): Promise<v
 }
 
 export { S3_KEYS, DISK_KEYS, STORAGE_KEYS };
+

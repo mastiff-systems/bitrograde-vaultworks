@@ -1,15 +1,26 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { signToken } from '../auth/tokens.js';
 import { authenticate } from '../auth/middleware.js';
 import { parseBody } from '../lib/validate.js';
+import { sendEmail } from '../services/email.service.js';
 
 const RegisterSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+const ForgotPasswordBody = z.object({
+  email: z.string().email('Invalid email address'),
+});
+
+const ResetPasswordBody = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8),
 });
 
 const LoginSchema = z.object({
@@ -108,5 +119,75 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/auth/me', { preHandler: [authenticate] }, async (req, reply) => {
     return reply.send(req.user);
+  });
+
+  // POST /api/auth/forgot-password
+  app.post('/api/auth/forgot-password', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const body = parseBody(ForgotPasswordBody, req.body, reply);
+    if (!body) return;
+
+    const email = body.email.trim().toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true } });
+
+    if (user) {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordResetToken: tokenHash,
+          passwordResetExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        },
+      });
+
+      const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: 'Password reset',
+          text: `Reset your password: ${appUrl}/reset-password?token=${rawToken}\nThis link expires in 1 hour.`,
+        });
+      } catch {
+        // swallow SMTP errors — do not leak config status
+      }
+    }
+
+    return reply.send({ message: 'If that email exists, a reset link has been sent.' });
+  });
+
+  // POST /api/auth/reset-password
+  app.post('/api/auth/reset-password', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const body = parseBody(ResetPasswordBody, req.body, reply);
+    if (!body) return;
+
+    const tokenHash = crypto.createHash('sha256').update(body.token).digest('hex');
+    const user = await prisma.user.findFirst({
+      where: { passwordResetToken: tokenHash },
+      select: { id: true, passwordResetExpiresAt: true },
+    });
+
+    if (!user) {
+      return reply.status(400).send({ error: 'Invalid or expired reset token' });
+    }
+
+    if (!user.passwordResetExpiresAt || user.passwordResetExpiresAt < new Date()) {
+      return reply.status(400).send({ error: 'Invalid or expired reset token' });
+    }
+
+    const newHash = await bcrypt.hash(body.password, 12);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: newHash,
+        passwordResetToken: null,
+        passwordResetExpiresAt: null,
+      },
+    });
+
+    return reply.send({ message: 'Password has been reset.' });
   });
 }

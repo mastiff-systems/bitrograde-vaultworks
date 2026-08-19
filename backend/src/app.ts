@@ -12,10 +12,18 @@ import { notificationsRoutes } from './routes/notifications.js';
 import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { foldersRoutes } from './routes/folders.js';
+import { smtpSettingsRoutes } from './routes/smtp-settings.js';
 import { authenticate } from './auth/middleware.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
-const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login', '/api/notifications/stream'];
+const AUTH_SKIP = [
+  '/health',
+  '/api/auth/register',
+  '/api/auth/login',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/notifications/stream',
+];
 const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/download$/;
 // Public share download route — unauthenticated by design
 const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
@@ -67,6 +75,7 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
 
   await app.register(authRoutes);
   await app.register(adminRoutes);
+  await app.register(smtpSettingsRoutes);
   await app.register(uploadRoutes);
   await app.register(filesRoutes);
   await app.register(tagsRoutes);

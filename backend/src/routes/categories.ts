@@ -42,6 +42,7 @@ function formatCategory(c: {
   id: string;
   name: string;
   slug: string;
+  allowedMimeTypes: string[];
   createdAt: Date;
   updatedAt: Date;
   subcategories: { id: string; name: string; slug: string; _count: { assets: number } }[];
@@ -51,6 +52,7 @@ function formatCategory(c: {
     id: c.id,
     name: c.name,
     slug: c.slug,
+    allowed_mime_types: c.allowedMimeTypes,
     created_at: c.createdAt,
     updated_at: c.updatedAt,
     asset_count: c._count.assets,
@@ -82,6 +84,7 @@ const categorySelect = {
   id: true,
   name: true,
   slug: true,
+  allowedMimeTypes: true,
   createdAt: true,
   updatedAt: true,
   subcategories: {

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { WizardState, WizardAction } from './useUploadWizard.js';
 import type { Category } from '../../api/categories.js';
 import { ALLOWED_LICENSES, MAX_CUSTOM_NAME_CHARS, MAX_DESCRIPTION_CHARS, MAX_TAGS, MAX_TAG_LENGTH } from './constants.js';
@@ -24,6 +24,22 @@ export function Step2MetadataForm({ state, dispatch, categories, categoriesLoadi
 
   const selectedCategory = categories.find((c) => c.id === metadata.categoryId);
   const subcategories = selectedCategory?.subcategories ?? [];
+
+  // Auto-select category when file MIME matches and no category is chosen yet
+  const fileMime = state.file?.type ?? null;
+  useEffect(() => {
+    if (metadata.categoryId || !fileMime || categories.length === 0) return;
+    const match = categories.find((c) => c.allowed_mime_types.includes(fileMime));
+    if (match) dispatch({ type: 'SET_CATEGORY', categoryId: match.id });
+  }, [categories, fileMime]);
+
+  // Mismatch: selected category has MIME restrictions and file doesn't satisfy them
+  const categoryMimeTypes = selectedCategory?.allowed_mime_types ?? [];
+  const isMismatch =
+    categoryMimeTypes.length > 0 && fileMime !== null && !categoryMimeTypes.includes(fileMime);
+  const suggestedCategory = isMismatch
+    ? categories.find((c) => c.id !== metadata.categoryId && c.allowed_mime_types.includes(fileMime))
+    : null;
 
   function addTag(raw: string) {
     const names = raw
@@ -87,17 +103,25 @@ export function Step2MetadataForm({ state, dispatch, categories, categoriesLoadi
         {categoriesError ? (
           <p className="text-xs text-amber-400">{categoriesError} — category fields disabled.</p>
         ) : (
-          <select
-            className="input"
-            value={metadata.categoryId ?? ''}
-            disabled={categoriesLoading}
-            onChange={(e) => dispatch({ type: 'SET_CATEGORY', categoryId: e.target.value || null })}
-          >
-            <option value="">{categoriesLoading ? 'Loading…' : 'No category'}</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+          <>
+            <select
+              className="input"
+              value={metadata.categoryId ?? ''}
+              disabled={categoriesLoading}
+              onChange={(e) => dispatch({ type: 'SET_CATEGORY', categoryId: e.target.value || null })}
+            >
+              <option value="">{categoriesLoading ? 'Loading…' : 'No category'}</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            {isMismatch && (
+              <p className="text-xs text-amber-400 mt-1.5">
+                Warning: This file type may not belong in {selectedCategory!.name}.
+                {suggestedCategory && <> Consider using <strong>{suggestedCategory.name}</strong> instead.</>}
+              </p>
+            )}
+          </>
         )}
       </div>
 

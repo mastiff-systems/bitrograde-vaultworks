@@ -32,7 +32,6 @@ const MINIO_SETTINGS: Record<string, string> = {
   s3_bucket: 'vaultworks-assets',
   s3_access_key: 'vaultworks',
   s3_secret_key: 'vaultworks123',
-  s3_force_path_style: 'true',
   s3_root_folder: '',
 };
 

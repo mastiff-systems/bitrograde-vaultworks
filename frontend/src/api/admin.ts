@@ -86,6 +86,30 @@ export interface AuditLogsResponse {
   totalPages: number;
 }
 
+export interface SmtpSettings {
+  smtp_host: string;
+  smtp_port: string;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_from_address: string;
+  smtp_encryption: string;
+}
+
+export async function fetchSmtpSettings(): Promise<SmtpSettings> {
+  const { data } = await api.get<SmtpSettings>('/api/settings/smtp');
+  return data;
+}
+
+export async function updateSmtpSettings(settings: Partial<SmtpSettings>): Promise<SmtpSettings> {
+  const { data } = await api.post<SmtpSettings>('/api/settings/smtp', settings);
+  return data;
+}
+
+export async function sendTestEmail(): Promise<{ success: boolean; error?: string }> {
+  const { data } = await api.post<{ success: boolean; error?: string }>('/api/settings/smtp/test');
+  return data;
+}
+
 export async function fetchAuditLogs(filters: AuditLogsFilters = {}): Promise<AuditLogsResponse> {
   const params = new URLSearchParams();
   if (filters.action)    params.set('action',    filters.action);

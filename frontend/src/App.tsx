@@ -7,6 +7,7 @@ import { AdminPanel } from './pages/admin/AdminPanel.js';
 import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { ProfilePage } from './pages/Profile.js';
 import { Collections } from './pages/Collections.js';
+import { ResetPassword } from './pages/ResetPassword.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
 import { UploadProvider } from './contexts/UploadContext.js';
@@ -50,6 +51,20 @@ export function App() {
 
   if (window.location.pathname === '/auth/callback') {
     return <KeycloakCallback />;
+  }
+
+  if (window.location.pathname === '/reset-password') {
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get('token') ?? '';
+    return (
+      <ResetPassword
+        token={resetToken}
+        onDone={() => {
+          window.history.replaceState(null, '', '/');
+          window.location.reload();
+        }}
+      />
+    );
   }
 
   if (!token) return <LoginPage />;

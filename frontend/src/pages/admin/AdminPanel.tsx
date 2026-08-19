@@ -3,12 +3,14 @@ import { AdminSettings } from './Settings.js';
 import { AdminUsers } from './Users.js';
 import { TaxonomyManager } from './TaxonomyManager.js';
 import { StorageSettings } from './StorageSettings.js';
+import { EmailSettings } from './EmailSettings.js';
 
-type AdminTab = 'settings' | 'storage' | 'taxonomy' | 'users';
+type AdminTab = 'settings' | 'storage' | 'email' | 'taxonomy' | 'users';
 
 const TABS: { id: AdminTab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
   { id: 'storage', label: 'Storage' },
+  { id: 'email', label: 'Email' },
   { id: 'taxonomy', label: 'Taxonomy' },
   { id: 'users', label: 'Users' },
 ];
@@ -53,6 +55,7 @@ export function AdminPanel({ onNavigateToAsset: _onNavigateToAsset, onNavigateTo
       <div className="flex-1 overflow-auto">
         {tab === 'settings' && <AdminSettings />}
         {tab === 'storage' && <StorageSettings />}
+        {tab === 'email' && <EmailSettings />}
         {tab === 'taxonomy' && <TaxonomyManager />}
         {tab === 'users' && <AdminUsers />}
       </div>

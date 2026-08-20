@@ -280,6 +280,38 @@ describe('DELETE /api/categories/:categoryId/subcategories/:id', () => {
   });
 });
 
+// --- allowed_mime_types on GET /api/categories (MAS-429) ---
+
+describe('GET /api/categories - allowed_mime_types field', () => {
+  it('includes allowed_mime_types as an empty array when none are set', async () => {
+    await prisma.category.create({ data: { name: 'Empty', slug: 'empty' } });
+
+    const res = await request(app.server)
+      .get('/api/categories')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body[0].allowed_mime_types)).toBe(true);
+    expect(res.body[0].allowed_mime_types).toEqual([]);
+  });
+
+  it('returns the correct allowed_mime_types for a category seeded with MIME restrictions', async () => {
+    const videoMimes = ['video/mp4', 'video/webm', 'video/quicktime'];
+    await prisma.category.create({
+      data: { name: 'Video', slug: 'video', allowedMimeTypes: videoMimes },
+    });
+
+    const res = await request(app.server)
+      .get('/api/categories')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const videoCat = res.body.find((c: { name: string }) => c.name === 'Video');
+    expect(videoCat).toBeDefined();
+    expect(videoCat.allowed_mime_types).toEqual(videoMimes);
+  });
+});
+
 // --- GET /api/files with taxonomy filters ---
 
 describe('GET /api/files taxonomy filters', () => {

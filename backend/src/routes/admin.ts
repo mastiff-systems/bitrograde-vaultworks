@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
 import { Prisma, AuditAction } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getAllSettings, upsertSettings } from '../db/settings.js';
@@ -16,6 +17,12 @@ const SettingsBody = z.record(z.string(), z.string());
 
 const UserRoleBody = z.object({
   role: z.enum(['admin', 'user'], { message: 'role must be "admin" or "user"' }),
+});
+
+const CreateUserBody = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  role: z.enum(['admin', 'user']).default('user'),
 });
 
 function maskSecrets(settings: Record<string, string>): Record<string, string> {
@@ -90,6 +97,48 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       orderBy: { createdAt: 'asc' },
     });
     return reply.send(users.map((u) => ({ id: u.id, email: u.email, role: u.role, created_at: u.createdAt })));
+  });
+
+  // POST /api/admin/users
+  app.post('/api/admin/users', {
+    ...opts,
+    schema: {
+      body: {
+        type: 'object',
+        required: ['email', 'password'],
+        additionalProperties: false,
+        properties: {
+          email: { type: 'string', format: 'email' },
+          password: { type: 'string', minLength: 8 },
+          role: { type: 'string', enum: ['admin', 'user'] },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(CreateUserBody, req.body, reply);
+    if (!body) return;
+
+    const email = body.email.trim().toLowerCase();
+    const passwordHash = await bcrypt.hash(body.password, 12);
+
+    try {
+      const user = await prisma.user.create({
+        data: { email, passwordHash, role: body.role, mustChangePassword: true },
+        select: { id: true, email: true, role: true, mustChangePassword: true, createdAt: true },
+      });
+      return reply.status(201).send({
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        created_at: user.createdAt,
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return reply.status(409).send({ error: 'Email already registered' });
+      }
+      throw err;
+    }
   });
 
   // PATCH /api/admin/users/:id/role

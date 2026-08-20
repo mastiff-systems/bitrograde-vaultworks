@@ -15,6 +15,7 @@ model User {
   createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   passwordResetToken     String?        @map("password_reset_token") @db.Text
   passwordResetExpiresAt DateTime?      @map("password_reset_expires_at") @db.Timestamptz(6)
+  mustChangePassword     Boolean        @default(false) @map("must_change_password")
   notifications Notification[]
   assetVersions AssetVersion[]
   folders       Folder[]       @relation("FolderCreator")

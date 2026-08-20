@@ -215,4 +215,85 @@ describe('POST /api/upload', () => {
       expect(record!.originalName).toBe('asset-Copy.png');
     });
   });
+
+  // --- MIME type category mismatch (MAS-429) ---
+
+  describe('MIME type category mismatch warnings', () => {
+    it('returns X-Category-Mismatch: true header when file MIME is not in the category allowed list', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'VideoOnly', slug: 'video-only', allowedMimeTypes: ['video/mp4', 'video/webm'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('audio-data'), { filename: 'track.mp3', contentType: 'audio/mpeg' });
+
+      expect(res.status).toBe(201);
+      expect(res.headers['x-category-mismatch']).toBe('true');
+    });
+
+    it('does not return X-Category-Mismatch header when file MIME matches the category allowed list', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'AudioOnly', slug: 'audio-only', allowedMimeTypes: ['audio/mpeg', 'audio/wav'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('audio-data'), { filename: 'track.mp3', contentType: 'audio/mpeg' });
+
+      expect(res.status).toBe(201);
+      expect(res.headers['x-category-mismatch']).toBeUndefined();
+    });
+
+    it('upload with MIME mismatch still returns 201 with the asset record', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'DocsOnly', slug: 'docs-only', allowedMimeTypes: ['application/pdf'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'readme.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0].id).toBeTruthy();
+      expect(res.body[0].original_name).toBe('readme.txt');
+    });
+
+    it('sets category_mismatch_warning: true on the mismatched asset in the response body', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'ScriptsOnly', slug: 'scripts-only', allowedMimeTypes: ['application/javascript'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'note.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].category_mismatch_warning).toBe(true);
+    });
+
+    it('does not set category_mismatch_warning when MIME matches', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'TextOnly', slug: 'text-only', allowedMimeTypes: ['text/plain'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'note.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].category_mismatch_warning).toBeUndefined();
+    });
+  });
 });

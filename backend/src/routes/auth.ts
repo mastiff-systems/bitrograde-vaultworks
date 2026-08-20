@@ -107,7 +107,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, passwordHash: true, role: true },
+      select: { id: true, email: true, passwordHash: true, role: true, mustChangePassword: true },
     });
 
     const dummyHash = '$2a$12$invalidhashpadding.............';
@@ -120,11 +120,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const token = signToken({ userId: user.id, email: user.email, role: user.role as 'admin' | 'user' });
-    return reply.send({ token, user: { id: user.id, email: user.email, role: user.role } });
+    return reply.send({ token, user: { id: user.id, email: user.email, role: user.role, mustChangePassword: user.mustChangePassword } });
   });
 
   app.get('/api/auth/me', { preHandler: [authenticate] }, async (req, reply) => {
-    return reply.send(req.user);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { mustChangePassword: true },
+    });
+    return reply.send({ ...req.user, mustChangePassword: user?.mustChangePassword ?? false });
   });
 
   // POST /api/auth/forgot-password

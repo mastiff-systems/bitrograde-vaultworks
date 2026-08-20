@@ -31,6 +31,12 @@ const LoginSchema = z.object({
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   if ((process.env.AUTH_PROVIDER ?? 'local') !== 'local') return;
 
+  // Warn at startup if APP_URL is not HTTPS in production — reset links would be sent over HTTP
+  const _startupAppUrl = process.env.APP_URL ?? 'http://localhost:5173';
+  if (process.env.NODE_ENV === 'production' && !_startupAppUrl.startsWith('https://')) {
+    app.log.warn('APP_URL is not HTTPS in production — reset links will use HTTP');
+  }
+
   app.post('/api/auth/register', {
     schema: {
       body: {
@@ -128,6 +134,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const body = parseBody(ForgotPasswordBody, req.body, reply);
     if (!body) return;
 
+    const MIN_RESPONSE_MS = 300;
+    const start = Date.now();
+
     const email = body.email.trim().toLowerCase();
     const user = await prisma.user.findUnique({ where: { email }, select: { id: true, email: true } });
 
@@ -143,6 +152,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       });
 
       const appUrl = process.env.APP_URL ?? 'http://localhost:5173';
+      if (process.env.NODE_ENV === 'production' && !appUrl.startsWith('https://')) {
+        app.log.warn('APP_URL is not HTTPS in production — reset links will use HTTP');
+      }
       try {
         await sendEmail({
           to: user.email,
@@ -153,6 +165,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         // swallow SMTP errors — do not leak config status
       }
     }
+
+    const elapsed = Date.now() - start;
+    if (elapsed < MIN_RESPONSE_MS) await new Promise(r => setTimeout(r, MIN_RESPONSE_MS - elapsed));
 
     return reply.send({ message: 'If that email exists, a reset link has been sent.' });
   });

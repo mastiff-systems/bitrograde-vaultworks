@@ -107,6 +107,28 @@ describe('POST /api/auth/forgot-password', () => {
     expect(user?.passwordResetToken).toBe(expectedHash);
   });
 
+  it('timing: both registered and unregistered emails respond in >= 300ms', async () => {
+    await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'timing@example.com', password: 'password123' });
+
+    const t0 = Date.now();
+    await request(app.server)
+      .post('/api/auth/forgot-password')
+      .send({ email: 'timing@example.com' });
+    const existingMs = Date.now() - t0;
+
+    const t1 = Date.now();
+    await request(app.server)
+      .post('/api/auth/forgot-password')
+      .send({ email: 'nobody-timing@example.com' });
+    const missingMs = Date.now() - t1;
+
+    expect(existingMs).toBeGreaterThanOrEqual(290);
+    expect(missingMs).toBeGreaterThanOrEqual(290);
+    expect(Math.abs(existingMs - missingMs)).toBeLessThan(200);
+  }, 5000);
+
   it('token expires after 1 hour: reset attempt fails when expiry is in the past', async () => {
     await request(app.server)
       .post('/api/auth/register')

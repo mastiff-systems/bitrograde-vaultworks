@@ -23,6 +23,11 @@ const ResetPasswordBody = z.object({
   password: z.string().min(8),
 });
 
+const ChangePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
 const LoginSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
@@ -129,6 +134,42 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       select: { mustChangePassword: true },
     });
     return reply.send({ ...req.user, mustChangePassword: user?.mustChangePassword ?? false });
+  });
+
+  // POST /api/auth/change-password
+  app.post('/api/auth/change-password', {
+    config: {
+      rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' },
+    },
+    preHandler: [authenticate],
+  }, async (req, reply) => {
+    const body = parseBody(ChangePasswordBody, req.body, reply);
+    if (!body) return;
+
+    if (body.newPassword === body.currentPassword) {
+      return reply.status(400).send({ error: 'New password must differ from current password' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { passwordHash: true },
+    });
+    if (!user) {
+      return reply.status(401).send({ error: 'Invalid credentials' });
+    }
+
+    const valid = await bcrypt.compare(body.currentPassword, user.passwordHash);
+    if (!valid) {
+      return reply.status(401).send({ error: 'Current password is incorrect' });
+    }
+
+    const newHash = await bcrypt.hash(body.newPassword, 12);
+    await prisma.user.update({
+      where: { id: req.user.userId },
+      data: { passwordHash: newHash, mustChangePassword: false },
+    });
+
+    return reply.send({ message: 'Password changed.' });
   });
 
   // POST /api/auth/forgot-password

@@ -17,6 +17,7 @@ import { collectionsRoutes } from './routes/collections.js';
 import { shareRoutes } from './routes/share.js';
 import { auditRoutes } from './routes/audit.js';
 import { authenticate } from './auth/middleware.js';
+import { prisma } from './db/client.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
 const AUTH_SKIP = [
@@ -27,6 +28,9 @@ const AUTH_SKIP = [
   '/api/auth/reset-password',
   '/api/notifications/stream',
 ];
+
+// Paths exempt from the mustChangePassword 403 gate (routes the user needs to change their password)
+const MUST_CHANGE_PW_EXEMPT = new Set(['/api/auth/me', '/api/auth/change-password']);
 const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/download$/;
 // Public share download route — unauthenticated by design
 const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
@@ -74,6 +78,18 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
     const path = req.url.split('?')[0];
     if (!path.startsWith('/api/') || AUTH_SKIP.includes(path) || ASSET_MEDIA_RE.test(path) || SHARE_TOKEN_RE.test(path)) return;
     await authenticate(req, reply);
+    if (reply.sent) return;
+
+    // Enforce mustChangePassword: block protected endpoints until the user changes their password
+    if (!MUST_CHANGE_PW_EXEMPT.has(path)) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { mustChangePassword: true },
+      });
+      if (user?.mustChangePassword) {
+        return reply.status(403).send({ error: 'Password change required' });
+      }
+    }
   });
 
   await app.register(authRoutes);

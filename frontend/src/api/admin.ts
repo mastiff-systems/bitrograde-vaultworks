@@ -47,6 +47,17 @@ export async function updateUserRole(id: string, role: 'admin' | 'user'): Promis
   return data;
 }
 
+export interface CreateUserPayload {
+  email: string;
+  password: string;
+  role: 'admin' | 'user';
+}
+
+export async function createUser(payload: CreateUserPayload): Promise<AdminUser> {
+  const { data } = await api.post<AdminUser>('/api/admin/users', payload);
+  return data;
+}
+
 export type AuditAction =
   | 'UPLOAD'
   | 'DOWNLOAD'

@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client'
 import { Prisma } from '@prisma/client'
 
-export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'UPDATE_METADATA' | 'DELETE' | 'SHARE' | 'REVOKE_SHARE'
+export type AuditAction = 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'UPDATE_METADATA' | 'DELETE' | 'SHARE' | 'REVOKE_SHARE' | 'USER_CREATED'
 
 export interface AuditParams {
   prisma: PrismaClient

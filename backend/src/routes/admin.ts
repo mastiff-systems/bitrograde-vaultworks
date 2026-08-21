@@ -7,6 +7,7 @@ import { getAllSettings, upsertSettings } from '../db/settings.js';
 import { invalidateStorageCache } from '../storage/index.js';
 import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
+import { logAudit } from '../lib/audit.js';
 
 const MASKED = '••••••••';
 const SECRET_KEYS = new Set(['s3_secret_key', 'smtp_password']);
@@ -126,6 +127,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         data: { email, passwordHash, role: body.role, mustChangePassword: true },
         select: { id: true, email: true, role: true, mustChangePassword: true, createdAt: true },
       });
+
+      logAudit({
+        prisma,
+        userId: req.user.userId,
+        action: 'USER_CREATED',
+        metadata: { createdUserId: user.id, role: user.role },
+      });
+
       return reply.status(201).send({
         id: user.id,
         email: user.email,
@@ -191,7 +200,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const AuditLogsQuerySchema = z.object({
     assetId:  z.string().uuid().optional(),
     userId:   z.string().uuid().optional(),
-    action:   z.enum(['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE']).optional(),
+    action:   z.enum(['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE', 'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'USER_CREATED']).optional(),
     from:     z.string().datetime().optional(),
     to:       z.string().datetime().optional(),
     limit:    z.coerce.number().int().min(1).max(200).default(50),
@@ -208,7 +217,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         properties: {
           assetId: { type: 'string', format: 'uuid' },
           userId:  { type: 'string', format: 'uuid' },
-          action:  { type: 'string', enum: ['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE'] },
+          action:  { type: 'string', enum: ['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE', 'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'USER_CREATED'] },
           from:    { type: 'string', format: 'date-time' },
           to:      { type: 'string', format: 'date-time' },
           limit:   { type: 'integer', minimum: 1, maximum: 200, default: 50 },

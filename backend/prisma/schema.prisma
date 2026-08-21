@@ -196,6 +196,7 @@ enum AuditAction {
   SHARE
   REVOKE_SHARE
   UPDATE_METADATA
+  USER_CREATED
 
   @@map("audit_action")
 }

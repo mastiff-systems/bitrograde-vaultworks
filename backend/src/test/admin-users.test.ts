@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
+import { prisma } from '../db/client.js';
 
 let app: FastifyInstance;
 let adminToken: string;
@@ -107,6 +108,25 @@ describe('POST /api/admin/users', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already registered/i);
+  });
+
+  it('writes a USER_CREATED audit log entry on successful user creation', async () => {
+    const res = await request(app.server)
+      .post('/api/admin/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ email: 'audited@example.com', password: 'validpass123' });
+
+    expect(res.status).toBe(201);
+
+    // Allow the fire-and-forget audit write to complete
+    await new Promise((r) => setTimeout(r, 50));
+
+    const log = await prisma.auditLog.findFirst({
+      where: { action: 'USER_CREATED' },
+    });
+
+    expect(log).not.toBeNull();
+    expect((log!.details as Record<string, unknown>).createdUserId).toBe(res.body.id);
   });
 });
 

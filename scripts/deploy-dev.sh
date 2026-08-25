@@ -3,6 +3,11 @@
 # Self-hosted runner executes this via the CI workflow on pushes to develop.
 set -euo pipefail
 
+# Prevent concurrent runs (CI + webhook can both fire on the same push)
+LOCK_FILE="/tmp/vaultworks-dev-deploy.lock"
+exec 200>"$LOCK_FILE"
+flock -x -w 600 200 || { echo "[deploy-dev] Lock timeout after 10 minutes, aborting"; exit 1; }
+
 DEV_DIR="/home/mastiff/development/bitrograde-vaultworks-dev"
 ENV_FILE="$DEV_DIR/.env"
 

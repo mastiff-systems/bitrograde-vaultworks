@@ -1,0 +1,60 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  deploy-prod:
+    name: Deploy → Production (port 3000)
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, production]
+    timeout-minutes: 15
+    environment: production
+
+    steps:
+      - name: Run production deploy script
+        run: bash /home/mastiff/development/bitrograde-vaultworks/scripts/deploy-prod.sh
+
+      - name: Verify production health
+        run: |
+          sleep 3
+          curl -sf http://localhost:3000/health | grep -q '"status":"ok"'
+          echo "Production health check passed"
+
+  deploy-staging:
+    name: Deploy → Staging (port 3001)
+    if: github.ref == 'refs/heads/develop'
+    runs-on: [self-hosted, linux, production]
+    timeout-minutes: 15
+    environment: staging
+
+    steps:
+      - name: Run staging deploy script
+        run: bash /home/mastiff/development/bitrograde-vaultworks/scripts/deploy-staging.sh
+
+      - name: Verify staging health
+        run: |
+          sleep 3
+          curl -sf http://localhost:3001/health | grep -q '"status":"ok"'
+          echo "Staging health check passed"
+
+  deploy-dev:
+    name: Deploy → Dev (port 3002)
+    if: github.ref == 'refs/heads/develop'
+    runs-on: [self-hosted, linux, production]
+    timeout-minutes: 15
+    needs: deploy-staging
+    environment: dev
+
+    steps:
+      - name: Run dev deploy script
+        run: bash /home/mastiff/development/bitrograde-vaultworks/scripts/deploy-dev.sh
+
+      - name: Verify dev health
+        run: |
+          sleep 3
+          curl -sf http://localhost:3002/health | grep -q '"status":"ok"'
+          echo "Dev health check passed"

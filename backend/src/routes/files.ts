@@ -1007,13 +1007,20 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    const { userId, role } = req.user;
+
     // Step 1: Fetch current asset (trashed only) — need storageKey/thumbnailKey for S3 moves.
     // assetSelect does not include internal S3 fields, so we fetch them separately here.
     const existing = await prisma.asset.findFirst({
       where: { id: params.id, deletedAt: { not: null } },
-      select: { originalName: true, storageKey: true, thumbnailKey: true },
+      select: { originalName: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
     });
     if (!existing) return reply.status(404).send({ error: 'Not found or not in trash' });
+
+    // Ownership check: only admin or the uploader can restore (mirrors the soft-delete handler)
+    if (role !== 'admin' && existing.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     // Step 2: Compute restore keys
     const restoreKey = `assets/${params.id}/${existing.originalName}`;
@@ -1078,6 +1085,24 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    const { userId, role } = req.user;
+
+    // Step 1: Fetch BEFORE deleting. Purge is irreversible, so the ownership check
+    // must run while the row still exists — deleting first destroys the very data
+    // the check depends on (and the asset itself) for unauthorized callers.
+    const existing = await prisma.asset.findFirst({
+      where: { id: params.id, deletedAt: { not: null } },
+      select: { uploadedBy: true },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Not found or not in trash' });
+
+    // Step 2: Ownership check: only admin or the uploader can purge (mirrors the soft-delete handler)
+    if (role !== 'admin' && existing.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    // Step 3: Delete. The where clause still re-asserts deletedAt so a concurrent
+    // restore between the fetch and here cannot purge a live asset.
     let assetForS3: { storageKey: string; thumbnailKey: string | null; originalName: string };
     try {
       // Only allow purging assets that are already in the trash

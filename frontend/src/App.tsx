@@ -3,6 +3,7 @@ import { LoginPage } from './components/LoginPage.js';
 import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
 import { AssetBrowser } from './pages/AssetBrowser.js';
+import { ProfilePage } from './pages/Profile.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminUsers } from './pages/admin/Users.js';
 import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
@@ -24,6 +25,7 @@ function AppShell() {
   return (
     <Layout page={page} onNavigate={handleNavigate}>
       {page === 'dashboard' && <AssetBrowser />}
+      {page === 'profile' && <ProfilePage />}
       {page === 'admin-settings' && user?.role === 'admin' && <AdminSettings />}
       {page === 'admin-users' && user?.role === 'admin' && <AdminUsers />}
       {page === 'admin-taxonomy' && user?.role === 'admin' && <TaxonomyManager />}

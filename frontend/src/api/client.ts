@@ -40,6 +40,12 @@ export interface Asset {
   resolution_w?: number | null;
   resolution_h?: number | null;
   duration_seconds?: number | null;
+  // File audit metadata (populated by GET /api/files/:id only)
+  created_by_name?: string | null;
+  created_by_email?: string | null;
+  updated_by_name?: string | null;
+  updated_by_email?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AssetVersion {
@@ -203,4 +209,35 @@ export function streamUrl(id: string): string {
 
 export function thumbnailUrl(id: string): string {
   return withToken(`/api/files/${id}/thumbnail`);
+}
+
+// ── Profile API ───────────────────────────────────────────────────────────────
+
+export interface UserProfile {
+  userId: string;
+  email: string;
+  role: 'admin' | 'user';
+  firstName: string | null;
+  lastName: string | null;
+}
+
+/** Fetch the current user's profile (GET /api/auth/me). */
+export async function getProfile(): Promise<UserProfile> {
+  const { data } = await api.get<UserProfile>('/api/auth/me');
+  return data;
+}
+
+/** Update the current user's first/last name (PATCH /api/auth/profile). */
+export async function updateProfile(payload: {
+  firstName?: string | null;
+  lastName?: string | null;
+}): Promise<UserProfile> {
+  const { data } = await api.patch<UserProfile>('/api/auth/profile', payload);
+  return data;
+}
+
+/** Fetch a single asset by ID — includes attribution fields not in the list response. */
+export async function getAsset(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
 }

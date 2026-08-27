@@ -4,7 +4,7 @@ import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { NotificationBell } from './NotificationBell.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
-type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy';
+type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy' | 'profile';
 
 interface Props {
   page: Page;
@@ -49,6 +49,21 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
               <p className="text-xs font-medium text-content-primary truncate">{user?.email}</p>
               <p className="text-[10px] text-content-muted capitalize">{user?.role}</p>
             </div>
+
+            {/* My Profile — available to all users */}
+            <button
+              onClick={() => { setOpen(false); onNavigate('profile'); }}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                page === 'profile'
+                  ? 'text-accent bg-accent/5'
+                  : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+              </svg>
+              My Profile
+            </button>
 
             {isAdmin && (
               <>

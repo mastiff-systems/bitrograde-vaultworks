@@ -11,6 +11,7 @@ import {
   downloadUrl,
   thumbnailUrl,
   versionDownloadUrl,
+  getAsset,
   type Asset,
   type AssetVersion,
   type Tag,
@@ -212,6 +213,7 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
+  onDelete,
   onRemoveFromFolder,
 }: {
   asset: Asset;
@@ -220,6 +222,7 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  onDelete?: () => void;
   /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
   onRemoveFromFolder?: () => void;
 }) {
@@ -515,6 +518,11 @@ function VersionHistory({ assetId }: { assetId: string }) {
 
 // --- Asset Detail Modal ---
 
+/** Returns "First Last" if either name part exists, otherwise falls back to the email. */
+function resolveAttribution(name: string | null | undefined, email: string | null | undefined): string | null {
+  return name?.trim() || email?.trim() || null;
+}
+
 function AssetDetailModal({
   asset,
   onClose,
@@ -532,6 +540,12 @@ function AssetDetailModal({
   const [savingTags, setSavingTags] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // Full asset detail (includes attribution fields not in list response)
+  const [fullAsset, setFullAsset] = useState<Asset | null>(null);
+  useEffect(() => {
+    getAsset(asset.id).then(setFullAsset).catch(() => {});
+  }, [asset.id]);
 
   // ── Folder membership state ─────────────────────────────────────────────────
   const [assetFolders, setAssetFolders] = useState<Folder[]>([]);
@@ -699,6 +713,30 @@ function AssetDetailModal({
               <div className="label">MIME type</div>
               <div className="text-content-primary font-mono text-xs">{asset.mime_type ?? '—'}</div>
             </div>
+            {/* Attribution — populated from GET /api/files/:id */}
+            {fullAsset && (
+              <>
+                <div className="col-span-2">
+                  <div className="label">Uploaded by</div>
+                  <div className="text-content-primary text-xs">
+                    {resolveAttribution(fullAsset.created_by_name, fullAsset.created_by_email) ?? '—'}
+                  </div>
+                </div>
+                {fullAsset.updated_by_name || fullAsset.updated_by_email ? (
+                  <div className="col-span-2">
+                    <div className="label">Last updated by</div>
+                    <div className="text-content-primary text-xs">
+                      {resolveAttribution(fullAsset.updated_by_name, fullAsset.updated_by_email)}
+                      {fullAsset.updated_at && (
+                        <span className="text-content-muted ml-1.5">
+                          · {formatDate(fullAsset.updated_at)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
           {asset.description && (

@@ -869,7 +869,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   // its S3 objects to the trash/ prefix so live and trashed objects are distinguishable.
   // The 30-day auto-purge job (trashPurge.ts) uses storageKey from the DB, so keeping
   // the DB in sync here is all that is needed for purge to work correctly.
-  app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/files/:id', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

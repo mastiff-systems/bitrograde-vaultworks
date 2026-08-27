@@ -11,6 +11,7 @@ import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { foldersRoutes } from './routes/folders.js';
 import { authenticate } from './auth/middleware.js';
+import { startTrashPurgeJob } from './jobs/trashPurge.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
 const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login', '/api/notifications/stream'];
@@ -45,6 +46,8 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(foldersRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
+
+  startTrashPurgeJob();
 
   return app;
 }

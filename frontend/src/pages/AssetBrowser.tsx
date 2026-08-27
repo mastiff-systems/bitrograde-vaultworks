@@ -87,10 +87,11 @@ function getUrlFilters() {
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
     folder: p.get('folder') ?? null,
+    preview: p.get('preview') ?? null,
   };
 }
 
-function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
+function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = false) {
   const p = new URLSearchParams();
   if (filters.q) p.set('q', filters.q);
   filters.types.forEach((t) => p.append('type', t));
@@ -99,8 +100,14 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
   if (filters.folder) p.set('folder', filters.folder);
+  if (filters.preview) p.set('preview', filters.preview);
   const search = p.toString();
-  history.pushState(null, '', search ? `?${search}` : window.location.pathname);
+  const url = search ? `?${search}` : window.location.pathname;
+  if (replace) {
+    history.replaceState(null, '', url);
+  } else {
+    history.pushState(null, '', url);
+  }
 }
 
 // --- Types ---
@@ -1020,6 +1027,8 @@ export function AssetBrowser() {
 
   // Track popstate restores to avoid pushing a duplicate history entry
   const isRestoringFromHistory = useRef(false);
+  // Track whether the component has mounted so we use replaceState on first render
+  const didMountRef = useRef(false);
 
   // Restore filter state on browser back/forward
   useEffect(() => {
@@ -1034,10 +1043,17 @@ export function AssetBrowser() {
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
       setActiveFolderId(filters.folder);
+      // Restore preview asset from URL: fast-path lookup in already-loaded list
+      if (filters.preview) {
+        const found = assets.find((a) => a.id === filters.preview) ?? null;
+        setPreviewAsset(found);
+      } else {
+        setPreviewAsset(null);
+      }
     }
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [assets]);
 
   // Restore category/subcategory from URL once categories are loaded
   const urlRestoredRef = useRef(false);
@@ -1063,14 +1079,22 @@ export function AssetBrowser() {
     if (!debouncedQuery && sort === 'relevance') setSort('newest');
   }, [debouncedQuery]);
 
-  // Sync URL (skip during popstate restores to avoid creating a duplicate forward entry)
+  // Sync URL (skip during popstate restores to avoid creating a duplicate forward entry).
+  // On mount, use replaceState so we don't push a duplicate entry when the URL already contains ?folder=abc etc.
   useEffect(() => {
     if (isRestoringFromHistory.current) {
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
-  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId]);
+    const isMount = !didMountRef.current;
+    didMountRef.current = true;
+    pushUrlFilters(
+      { q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort,
+        category: selectedCategoryId, subcategory: selectedSubcategoryId,
+        folder: activeFolderId, preview: previewAsset?.id ?? null },
+      isMount, // replaceState on first render, pushState on subsequent filter changes
+    );
+  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
 
 
   // Load tags
@@ -1475,7 +1499,17 @@ export function AssetBrowser() {
         <FileViewer
           asset={previewAsset}
           assets={displayed}
-          onClose={() => setPreviewAsset(null)}
+          onClose={() => {
+            setPreviewAsset(null);
+            // Remove ?preview= from URL without adding a history entry so that
+            // pressing Back after an explicit close does not re-open the viewer.
+            pushUrlFilters(
+              { q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort,
+                category: selectedCategoryId, subcategory: selectedSubcategoryId,
+                folder: activeFolderId, preview: null },
+              true, // replaceState
+            );
+          }}
           onOpenDetails={() => {
             setDetailAsset(previewAsset);
             setPreviewAsset(null);

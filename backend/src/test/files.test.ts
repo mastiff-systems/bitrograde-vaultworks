@@ -382,6 +382,239 @@ describe('DELETE /api/files/:id', () => {
   });
 });
 
+// MAS-608: ownership enforcement on the three destructive/restorative file routes.
+//
+// NOTE ON TEST SETUP: the outer beforeEach registers fileuser@example.com FIRST after
+// cleanDb, and the register route makes the first user an admin. So `token`/`userId`
+// are an ADMIN identity — which is why the pre-existing DELETE tests above pass the
+// ownership check regardless of uploadedBy. Every 403 case below therefore needs a
+// second, non-admin user (`otherToken`), and uses `userId` (the admin) as the victim
+// owner so the caller is neither admin nor owner.
+describe('ownership checks on delete/restore/purge (MAS-608)', () => {
+  let otherToken: string;
+  let otherUserId: string;
+
+  beforeEach(async () => {
+    const res = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'attacker@example.com', password: 'password123' });
+    expect(res.body.user.role).toBe('user'); // guards the admin-is-first-user assumption
+    otherToken = res.body.token;
+    otherUserId = res.body.user.id;
+  });
+
+  // Creates an asset already in the trash, owned by `owner`.
+  async function createTrashedAsset(owner: string, name = 'victim.txt') {
+    return prisma.asset.create({
+      data: {
+        originalName: name,
+        storageKey: `trash/x/${name}`,
+        assetType: 'other',
+        uploadedBy: owner,
+        deletedAt: new Date(),
+        deletedBy: owner,
+      },
+    });
+  }
+
+  describe('DELETE /api/files/:id (soft-delete)', () => {
+    it('returns 403 for a non-admin, non-owner and leaves the asset untrashed', async () => {
+      const asset = await prisma.asset.create({
+        data: {
+          originalName: 'not-yours.txt',
+          storageKey: 'assets/ny/not-yours.txt',
+          assetType: 'other',
+          uploadedBy: userId, // owned by the admin, not the caller
+        },
+      });
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: 'Forbidden' });
+
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check?.deletedAt).toBeNull();
+    });
+
+    it('allows the owner (non-admin) to soft-delete their own asset', async () => {
+      const asset = await prisma.asset.create({
+        data: {
+          originalName: 'mine.txt',
+          storageKey: 'assets/mine/mine.txt',
+          assetType: 'other',
+          uploadedBy: otherUserId,
+        },
+      });
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(204);
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check?.deletedAt).not.toBeNull();
+    });
+  });
+
+  describe('POST /api/files/:id/restore', () => {
+    it('returns 403 for a non-admin, non-owner and leaves the asset in the trash', async () => {
+      const asset = await createTrashedAsset(userId);
+
+      const res = await request(app.server)
+        .post(`/api/files/${asset.id}/restore`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: 'Forbidden' });
+
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check?.deletedAt).not.toBeNull();
+    });
+
+    it('allows the owner (non-admin) to restore their own asset', async () => {
+      const asset = await createTrashedAsset(otherUserId, 'mine-trashed.txt');
+
+      const res = await request(app.server)
+        .post(`/api/files/${asset.id}/restore`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(asset.id);
+
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check?.deletedAt).toBeNull();
+    });
+
+    it('allows an admin to restore another user\'s asset', async () => {
+      const asset = await createTrashedAsset(otherUserId, 'theirs-trashed.txt');
+
+      const res = await request(app.server)
+        .post(`/api/files/${asset.id}/restore`)
+        .set('Authorization', `Bearer ${token}`); // admin
+
+      expect(res.status).toBe(200);
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check?.deletedAt).toBeNull();
+    });
+
+    it('returns 404 (not 403) for an asset that is not in the trash', async () => {
+      const asset = await prisma.asset.create({
+        data: {
+          originalName: 'live.txt',
+          storageKey: 'assets/live/live.txt',
+          assetType: 'other',
+          uploadedBy: userId,
+        },
+      });
+
+      const res = await request(app.server)
+        .post(`/api/files/${asset.id}/restore`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for a missing asset', async () => {
+      const res = await request(app.server)
+        .post('/api/files/00000000-0000-0000-0000-000000000000/restore')
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('DELETE /api/files/:id/purge', () => {
+    // This is the core regression test: the pre-fix handler called prisma.asset.delete
+    // unconditionally, so the row was already destroyed before any check could run.
+    it('returns 403 for a non-admin, non-owner AND the asset row still exists', async () => {
+      const asset = await createTrashedAsset(userId, 'purge-me.txt');
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}/purge`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ error: 'Forbidden' });
+
+      // The whole point of the bug: an unauthorized caller must not destroy the row.
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check).not.toBeNull();
+      expect(check?.deletedAt).not.toBeNull();
+    });
+
+    it('does not delete storage objects on a 403', async () => {
+      const { getStorageProvider } = await import('../storage/index.js');
+      const provider = await (getStorageProvider as ReturnType<typeof vi.fn>)();
+      const deleteMock = provider.delete as ReturnType<typeof vi.fn>;
+      deleteMock.mockClear();
+
+      const asset = await createTrashedAsset(userId, 'keep-bytes.txt');
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}/purge`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(403);
+      expect(deleteMock).not.toHaveBeenCalled();
+    });
+
+    it('allows the owner (non-admin) to purge their own asset', async () => {
+      const asset = await createTrashedAsset(otherUserId, 'my-purge.txt');
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}/purge`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(204);
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check).toBeNull();
+    });
+
+    it('allows an admin to purge another user\'s asset', async () => {
+      const asset = await createTrashedAsset(otherUserId, 'their-purge.txt');
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}/purge`)
+        .set('Authorization', `Bearer ${token}`); // admin
+
+      expect(res.status).toBe(204);
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check).toBeNull();
+    });
+
+    it('returns 404 (not 403) for an asset that is not in the trash', async () => {
+      const asset = await prisma.asset.create({
+        data: {
+          originalName: 'live2.txt',
+          storageKey: 'assets/live2/live2.txt',
+          assetType: 'other',
+          uploadedBy: userId,
+        },
+      });
+
+      const res = await request(app.server)
+        .delete(`/api/files/${asset.id}/purge`)
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(404);
+      // A live asset must survive a 404 purge attempt.
+      const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+      expect(check).not.toBeNull();
+    });
+
+    it('returns 404 for a missing asset', async () => {
+      const res = await request(app.server)
+        .delete('/api/files/00000000-0000-0000-0000-000000000000/purge')
+        .set('Authorization', `Bearer ${otherToken}`);
+
+      expect(res.status).toBe(404);
+    });
+  });
+});
+
 describe('GET /api/files query validation', () => {
   it('returns 400 when categoryId is not a valid UUID', async () => {
     const res = await request(app.server)

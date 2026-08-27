@@ -6,6 +6,7 @@ import { prisma } from '../db/client.js';
 import { signToken } from '../auth/tokens.js';
 import { authenticate } from '../auth/middleware.js';
 import { parseBody } from '../lib/validate.js';
+import { logAudit, AuditAction } from '../lib/audit.js';
 
 const RegisterSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -15,6 +16,11 @@ const RegisterSchema = z.object({
 const LoginSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
+});
+
+const UpdateProfileSchema = z.object({
+  firstName: z.string().max(100).nullable().optional(),
+  lastName: z.string().max(100).nullable().optional(),
 });
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -67,10 +73,61 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const token = signToken({ userId: user.id, email: user.email, role: user.role as 'admin' | 'user' });
+
+    void logAudit({
+      userId: user.id,
+      action: AuditAction.LOGIN,
+      ipAddress: req.ip,
+    });
+
     return reply.send({ token, user: { id: user.id, email: user.email, role: user.role } });
   });
 
+  app.post('/api/auth/logout', { preHandler: [authenticate] }, async (req, reply) => {
+    void logAudit({
+      userId: req.user.userId,
+      action: AuditAction.LOGOUT,
+      ipAddress: req.ip,
+    });
+    return reply.status(204).send();
+  });
+
   app.get('/api/auth/me', { preHandler: [authenticate] }, async (req, reply) => {
-    return reply.send(req.user);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { id: true, email: true, role: true, firstName: true, lastName: true },
+    });
+    if (!user) {
+      return reply.status(404).send({ error: 'User not found' });
+    }
+    return reply.send({
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    });
+  });
+
+  app.patch('/api/auth/profile', { preHandler: [authenticate] }, async (req, reply) => {
+    const body = parseBody(UpdateProfileSchema, req.body, reply);
+    if (!body) return;
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.userId },
+      data: {
+        ...(body.firstName !== undefined && { firstName: body.firstName }),
+        ...(body.lastName !== undefined && { lastName: body.lastName }),
+      },
+      select: { id: true, email: true, role: true, firstName: true, lastName: true },
+    });
+
+    return reply.send({
+      userId: updated.id,
+      email: updated.email,
+      role: updated.role,
+      firstName: updated.firstName,
+      lastName: updated.lastName,
+    });
   });
 }

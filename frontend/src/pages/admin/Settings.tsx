@@ -1,12 +1,19 @@
-import { useEffect, useState } from 'react';
-import { fetchSettings, updateSettings, fetchStats } from '../../api/admin.js';
-import type { AdminStats } from '../../api/admin.js';
+import { useEffect, useState, useCallback } from 'react';
+import { fetchSettings, updateSettings, fetchStats, fetchAuditLogs, fetchAuditUsers } from '../../api/admin.js';
+import type { AdminStats, AuditLogEntry, AuditLogsParams, AuditAction, AuditUser } from '../../api/admin.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
   if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`;
   if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
   return `${(b / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 interface SettingField {
@@ -26,6 +33,273 @@ const S3_FIELDS: SettingField[] = [
   { key: 's3_force_path_style', label: 'Force Path Style', placeholder: '', type: 'checkbox', helpText: 'Required for MinIO and some S3-compatible providers. Disable for AWS and DigitalOcean Spaces.' },
 ];
 
+const ACTION_BADGE: Record<string, string> = {
+  UPLOAD: 'bg-success/10 text-success',
+  DELETE: 'bg-danger/10 text-danger',
+  UPDATE: 'bg-accent/10 text-accent-light',
+  UPDATE_METADATA: 'bg-accent/10 text-accent-light',
+  RESTORE: 'bg-accent/10 text-accent-light',
+  LOGIN: 'bg-surface-3 text-content-secondary',
+  LOGOUT: 'bg-surface-3 text-content-secondary',
+};
+
+function actionLabel(action: AuditAction): string {
+  const map: Record<AuditAction, string> = {
+    UPLOAD: 'Upload', DOWNLOAD: 'Download', VIEW: 'View', UPDATE: 'Update',
+    DELETE: 'Delete', SHARE: 'Share', REVOKE_SHARE: 'Revoke share',
+    UPDATE_METADATA: 'Update metadata', LOGIN: 'Login', LOGOUT: 'Logout', RESTORE: 'Restore',
+  };
+  return map[action] ?? action;
+}
+
+const AUDIT_ACTIONS: AuditAction[] = [
+  'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE',
+  'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'LOGIN', 'LOGOUT', 'RESTORE',
+];
+
+const ACTIVITY_ACTIONS: AuditAction[] = ['LOGIN', 'LOGOUT', 'UPLOAD', 'DELETE', 'RESTORE', 'UPDATE_METADATA', 'UPDATE'];
+
+// ─── Log Table ──────────────────────────────────────────────────────────────
+
+function ActionBadge({ action }: { action: AuditAction }) {
+  const cls = ACTION_BADGE[action] ?? 'bg-surface-3 text-content-muted';
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>
+      {actionLabel(action)}
+    </span>
+  );
+}
+
+interface LogTableProps {
+  mode: 'audit' | 'activity';
+}
+
+function LogTable({ mode }: LogTableProps) {
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [actionFilter, setActionFilter] = useState<AuditAction | ''>('');
+  const [userFilter, setUserFilter] = useState('');
+  const [users, setUsers] = useState<AuditUser[]>([]);
+
+  const hasFilter = fromDate || toDate || actionFilter || (mode === 'activity' && userFilter);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params: AuditLogsParams = { page };
+      if (fromDate) params.from = fromDate;
+      if (toDate) params.to = toDate;
+      if (actionFilter) params.action = actionFilter;
+      if (mode === 'activity' && userFilter) params.userId = userFilter;
+      const res = await fetchAuditLogs(params);
+      setLogs(res.logs);
+      setTotal(res.total);
+      setTotalPages(res.totalPages);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [page, fromDate, toDate, actionFilter, userFilter, mode]);
+
+  useEffect(() => {
+    if (mode === 'activity') {
+      fetchAuditUsers().then(setUsers).catch(() => {});
+    }
+  }, [mode]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const reset = () => {
+    setFromDate('');
+    setToDate('');
+    setActionFilter('');
+    setUserFilter('');
+    setPage(1);
+  };
+
+  const actions = mode === 'activity' ? ACTIVITY_ACTIONS : AUDIT_ACTIONS;
+
+  return (
+    <div>
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div>
+          <div className="label">From</div>
+          <input
+            type="date"
+            className="input text-sm py-1.5"
+            value={fromDate}
+            onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+          />
+        </div>
+        <div>
+          <div className="label">To</div>
+          <input
+            type="date"
+            className="input text-sm py-1.5"
+            value={toDate}
+            onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+          />
+        </div>
+        {mode === 'activity' && (
+          <div>
+            <div className="label">User</div>
+            <select
+              className="input text-sm py-1.5"
+              value={userFilter}
+              onChange={(e) => { setUserFilter(e.target.value); setPage(1); }}
+            >
+              <option value="">All users</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>{u.name ?? u.email}</option>
+              ))}
+            </select>
+          </div>
+        )}
+        <div>
+          <div className="label">Action</div>
+          <select
+            className="input text-sm py-1.5"
+            value={actionFilter}
+            onChange={(e) => { setActionFilter(e.target.value as AuditAction | ''); setPage(1); }}
+          >
+            <option value="">All actions</option>
+            {actions.map((a) => (
+              <option key={a} value={a}>{actionLabel(a)}</option>
+            ))}
+          </select>
+        </div>
+        {hasFilter && (
+          <button onClick={reset} className="btn-ghost btn-sm self-end">
+            Reset filters
+          </button>
+        )}
+        <span className="text-xs text-content-muted self-end ml-auto">{total} results</span>
+      </div>
+
+      {/* Table */}
+      <div className="table-wrapper">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              {mode === 'activity' ? <th>Actor</th> : <th>User</th>}
+              <th>Action</th>
+              <th>File / Target</th>
+              <th>IP / Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="py-12 text-center">
+                  <div className="flex items-center justify-center">
+                    <div className="w-5 h-5 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
+                  </div>
+                </td>
+              </tr>
+            ) : logs.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-12 text-center">
+                  <svg className="w-10 h-10 text-content-muted mx-auto mb-3" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                  <p className="text-sm text-content-secondary font-medium">No log entries found</p>
+                  {hasFilter && <p className="text-xs text-content-muted mt-1">Try adjusting the filters.</p>}
+                </td>
+              </tr>
+            ) : logs.map((log) => (
+              <tr key={log.id} className="hover:bg-surface-1 cursor-default">
+                <td className="text-xs text-content-muted tabular-nums whitespace-nowrap">
+                  {formatDate(log.created_at)}
+                </td>
+                <td className="text-sm text-content-primary">
+                  {mode === 'activity' ? (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-6 h-6 rounded-full bg-accent/20 text-accent-light text-[10px] flex items-center justify-center flex-shrink-0 font-semibold">
+                        {(log.user_name ?? log.user_email ?? '?')[0].toUpperCase()}
+                      </span>
+                      {log.user_name ?? log.user_email ?? '—'}
+                    </span>
+                  ) : (
+                    log.user_email ?? '—'
+                  )}
+                </td>
+                <td><ActionBadge action={log.action} /></td>
+                <td className="text-sm text-content-secondary max-w-[200px] truncate">
+                  {log.asset_name ?? '—'}
+                </td>
+                <td className="text-xs text-content-muted font-mono">
+                  {log.ip_address ?? '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 mt-3">
+          <button
+            className="btn-ghost btn-sm"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            ← Prev
+          </button>
+          <span className="text-xs text-content-muted">Page {page} of {totalPages}</span>
+          <button
+            className="btn-ghost btn-sm"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Logs Tab ──────────────────────────────────────────────────────────────
+
+function LogsTab() {
+  const [subTab, setSubTab] = useState<'audit' | 'activity'>('audit');
+
+  return (
+    <div>
+      {/* Sub-tabs */}
+      <div className="flex items-center gap-1.5 mb-6">
+        {(['audit', 'activity'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setSubTab(t)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-all border ${
+              subTab === t
+                ? 'bg-accent/10 text-accent border-accent/30'
+                : 'text-content-secondary border-border/60 bg-surface-1 hover:text-content-primary'
+            }`}
+          >
+            {t === 'audit' ? 'Audit Logs' : 'Activity Logs'}
+          </button>
+        ))}
+      </div>
+
+      <LogTable key={subTab} mode={subTab} />
+    </div>
+  );
+}
+
+// ─── Main Component ─────────────────────────────────────────────────────────
+
 export function AdminSettings() {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -33,6 +307,7 @@ export function AdminSettings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'storage' | 'logs'>('storage');
 
   useEffect(() => {
     Promise.all([fetchSettings(), fetchStats()])
@@ -73,7 +348,7 @@ export function AdminSettings() {
 
       {/* Stats row */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3 mb-8">
+        <div className="grid grid-cols-4 gap-3 mb-6">
           <div className="stat-card">
             <span className="stat-label">Total Users</span>
             <span className="stat-value">{stats.users}</span>
@@ -93,15 +368,32 @@ export function AdminSettings() {
         </div>
       )}
 
+      {/* Tab bar */}
+      <div className="flex items-center gap-0.5 border-b border-border mb-6">
+        {(['storage', 'logs'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2.5 text-sm font-medium transition-all border-b-2 -mb-px ${
+              activeTab === tab
+                ? 'border-accent text-accent'
+                : 'border-transparent text-content-secondary hover:text-content-primary'
+            }`}
+          >
+            {tab === 'storage' ? 'Storage' : 'Logs'}
+          </button>
+        ))}
+      </div>
+
       {loading && (
         <div className="flex items-center justify-center py-24">
           <div className="w-6 h-6 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
         </div>
       )}
 
-      {!loading && (
+      {/* Storage tab */}
+      {!loading && activeTab === 'storage' && (
         <div className="max-w-2xl">
-          {/* S3 Storage section */}
           <div className="card p-6 mb-6">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center">
@@ -174,6 +466,9 @@ export function AdminSettings() {
           </div>
         </div>
       )}
+
+      {/* Logs tab */}
+      {!loading && activeTab === 'logs' && <LogsTab />}
     </div>
   );
 }

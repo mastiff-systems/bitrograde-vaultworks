@@ -46,3 +46,59 @@ export async function updateUserRole(id: string, role: 'admin' | 'user'): Promis
   const { data } = await api.patch<AdminUser>(`/api/admin/users/${id}/role`, { role });
   return data;
 }
+
+export type AuditAction =
+  | 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE'
+  | 'SHARE' | 'REVOKE_SHARE' | 'UPDATE_METADATA'
+  | 'LOGIN' | 'LOGOUT' | 'RESTORE';
+
+export interface AuditLogEntry {
+  id: string;
+  action: AuditAction;
+  asset_id: string | null;
+  asset_name: string | null;
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  ip_address: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AuditLogsResponse {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  logs: AuditLogEntry[];
+}
+
+export interface AuditLogsParams {
+  page?: number;
+  action?: AuditAction;
+  userId?: string;
+  from?: string;
+  to?: string;
+}
+
+export async function fetchAuditLogs(params?: AuditLogsParams): Promise<AuditLogsResponse> {
+  const p: Record<string, string> = {};
+  if (params?.page) p.page = String(params.page);
+  if (params?.action) p.action = params.action;
+  if (params?.userId) p.userId = params.userId;
+  if (params?.from) p.from = params.from;
+  if (params?.to) p.to = params.to;
+  const { data } = await api.get<AuditLogsResponse>('/api/admin/audit-logs', { params: p });
+  return data;
+}
+
+export interface AuditUser {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+export async function fetchAuditUsers(): Promise<AuditUser[]> {
+  const { data } = await api.get<AuditUser[]>('/api/admin/audit-users');
+  return data;
+}

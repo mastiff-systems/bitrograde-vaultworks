@@ -8,6 +8,7 @@ import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { generateDuplicateName } from '../lib/filename.js';
+import { logAudit, AuditAction } from '../lib/audit.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -101,7 +102,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     // (case-sensitive PostgreSQL =), or [] if none. Bypasses all other filters.
     if (params.exact_name) {
       const matches = await prisma.asset.findMany({
-        where: { originalName: params.exact_name },
+        where: { originalName: params.exact_name, deletedAt: null },
         select: { id: true, originalName: true },
       });
       return reply.send(matches.map((a) => ({ id: a.id, original_name: a.originalName })));
@@ -148,12 +149,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
       // Phase 1: ranked ID list via pg_trgm similarity + ILIKE fallback
       // Ranking: name match (1) > tag match (2) > description match (3)
+      // Soft-deleted assets are excluded: AND a.deleted_at IS NULL
       const rankedIds = await prisma.$queryRaw<{ id: string }[]>`
         SELECT a.id
         FROM assets a
         LEFT JOIN asset_tags jat ON jat.asset_id = a.id
         LEFT JOIN tags t ON t.id = jat.tag_id
-        WHERE (
+        WHERE a.deleted_at IS NULL
+        AND (
           similarity(a.original_name, ${q}) > 0.3
           OR a.original_name ILIKE ${like}
           OR a.description ILIKE ${like}
@@ -178,7 +181,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
       // Phase 2: fetch full asset data (including all tags) for matched IDs
       const assets = await prisma.asset.findMany({
-        where: { id: { in: ids } },
+        where: { id: { in: ids }, deletedAt: null },
         select: assetSelect,
       });
 
@@ -191,8 +194,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(sorted.map(formatAsset));
     }
 
-    // No query: standard filtered list
-    const conditions: Prisma.AssetWhereInput[] = [];
+    // No query: standard filtered list — exclude soft-deleted assets
+    const conditions: Prisma.AssetWhereInput[] = [{ deletedAt: null }];
 
     if (params.assetType) {
       conditions.push({ assetType: params.assetType });
@@ -213,7 +216,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       conditions.push({ tags: { some: { tag: { name } } } });
     }
 
-    const where: Prisma.AssetWhereInput = conditions.length > 0 ? { AND: conditions } : {};
+    const where: Prisma.AssetWhereInput = { AND: conditions };
 
     const assets = await prisma.asset.findMany({
       where,
@@ -228,9 +231,61 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
-    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
+    const asset = await prisma.asset.findUnique({
+      where: { id: params.id },
+      select: {
+        ...assetSelect,
+        uploadedBy: true,
+        deletedAt: true,
+        uploader: { select: { firstName: true, lastName: true, email: true } },
+      },
+    });
     if (!asset) return reply.status(404).send({ error: 'Not found' });
-    return reply.send(formatAsset(asset));
+    // Trashed assets are not accessible through the normal file endpoint
+    if (asset.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
+
+    // Resolve uploader display name
+    let createdByName: string | null = null;
+    let createdByEmail: string | null = null;
+    if (asset.uploader) {
+      const parts = [asset.uploader.firstName, asset.uploader.lastName].filter(Boolean);
+      createdByName = parts.length > 0 ? parts.join(' ') : null;
+      createdByEmail = asset.uploader.email;
+    }
+
+    // Most recent update event for this asset from audit_logs
+    const lastUpdate = await prisma.auditLog.findFirst({
+      where: {
+        assetId: params.id,
+        action: { in: [AuditAction.UPDATE, AuditAction.UPDATE_METADATA, AuditAction.RESTORE] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { userName: true, userId: true, createdAt: true },
+    });
+
+    let updatedByName: string | null = null;
+    let updatedByEmail: string | null = null;
+    let updatedAt: Date | null = null;
+    if (lastUpdate) {
+      updatedByName = lastUpdate.userName ?? null;
+      if (!updatedByName && lastUpdate.userId) {
+        const u = await prisma.user.findUnique({
+          where: { id: lastUpdate.userId },
+          select: { email: true },
+        });
+        updatedByEmail = u?.email ?? null;
+      }
+      updatedAt = lastUpdate.createdAt;
+    }
+
+    return reply.send({
+      ...formatAsset(asset),
+      created_by_name: createdByName,
+      created_by_email: createdByEmail,
+      updated_by_name: updatedByName,
+      updated_by_email: updatedByEmail,
+      updated_at: updatedAt,
+    });
   });
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
@@ -243,9 +298,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const asset = await prisma.asset.findUnique({
       where: { id: params.id },
-      select: { storageKey: true, originalName: true, mimeType: true },
+      select: { storageKey: true, originalName: true, mimeType: true, deletedAt: true },
     });
-    if (!asset) return reply.status(404).send({ error: 'Not found' });
+    if (!asset || asset.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
 
     const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
 
@@ -269,9 +324,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const asset = await prisma.asset.findUnique({
       where: { id: params.id },
-      select: { storageKey: true, mimeType: true },
+      select: { storageKey: true, mimeType: true, deletedAt: true },
     });
-    if (!asset) return reply.status(404).send({ error: 'Not found' });
+    if (!asset || asset.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
 
     const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
 
@@ -291,9 +346,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const asset = await prisma.asset.findUnique({
       where: { id: params.id },
-      select: { thumbnailKey: true },
+      select: { thumbnailKey: true, deletedAt: true },
     });
-    if (!asset || !asset.thumbnailKey) return reply.status(404).send({ error: 'No thumbnail available' });
+    if (!asset || asset.deletedAt !== null || !asset.thumbnailKey) return reply.status(404).send({ error: 'No thumbnail available' });
 
     const { stream, contentType, contentLength } = await getS3ObjectStream(asset.thumbnailKey);
 
@@ -309,19 +364,23 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
-    // Fetch the source asset
+    // Fetch the source asset — cannot duplicate a trashed asset
     const source = await prisma.asset.findUnique({
       where: { id: params.id },
       select: {
         ...assetSelect,
         storageKey: true,
         mimeType: true,
+        deletedAt: true,
       },
     });
-    if (!source) return reply.status(404).send({ error: 'Not found' });
+    if (!source || source.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
 
-    // Gather all existing names to avoid conflicts
-    const allNames = await prisma.asset.findMany({ select: { originalName: true } });
+    // Gather all existing (non-deleted) names to avoid conflicts
+    const allNames = await prisma.asset.findMany({
+      where: { deletedAt: null },
+      select: { originalName: true },
+    });
     const existingNames = allNames.map((a) => a.originalName);
 
     // Derive the new name using the duplicate-suffix logic
@@ -358,23 +417,137 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send(formatAsset(newAsset));
   });
 
+  // Soft-delete: marks the asset as trashed (sets deleted_at/deleted_by).
+  // Does NOT remove the S3 object — that happens in the 30-day auto-purge job
+  // or via the explicit DELETE /api/files/:id/purge endpoint.
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    let asset: { originalName: string };
     try {
-      const asset = await prisma.asset.delete({
-        where: { id: params.id },
-        select: { storageKey: true, thumbnailKey: true },
+      asset = await prisma.asset.update({
+        where: { id: params.id, deletedAt: null },
+        data: { deletedAt: new Date(), deletedBy: req.user.userId },
+        select: { originalName: true },
       });
-      await deleteFromS3(asset.storageKey);
-      if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
         return reply.status(404).send({ error: 'Not found' });
       }
       throw err;
     }
+
+    void logAudit({
+      userId: req.user.userId,
+      action: AuditAction.DELETE,
+      assetId: params.id,
+      assetName: asset.originalName,
+      ipAddress: req.ip,
+    });
+
+    return reply.status(204).send();
+  });
+
+  // Returns all soft-deleted assets for the current user's company, ordered by deletion date.
+  app.get('/api/trash', async (req, reply) => {
+    const assets = await prisma.asset.findMany({
+      where: { deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
+      select: {
+        id: true,
+        originalName: true,
+        mimeType: true,
+        sizeBytes: true,
+        thumbnailKey: true,
+        deletedAt: true,
+        deletedBy: true,
+        storageKey: true,
+        assetType: true,
+      },
+    });
+
+    return reply.send(
+      assets.map((a) => ({
+        id: a.id,
+        original_name: a.originalName,
+        mime_type: a.mimeType,
+        size_bytes: a.sizeBytes !== null ? Number(a.sizeBytes) : null,
+        asset_type: a.assetType,
+        thumbnail_key: a.thumbnailKey,
+        deleted_at: a.deletedAt,
+        deleted_by: a.deletedBy,
+        storage_key: a.storageKey,
+      })),
+    );
+  });
+
+  // Restores a soft-deleted asset: clears deleted_at and deleted_by, logs RESTORE.
+  app.post<{ Params: { id: string } }>('/api/files/:id/restore', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
+    let asset: { originalName: string } & AssetSelect;
+    try {
+      asset = await prisma.asset.update({
+        where: { id: params.id, deletedAt: { not: null } },
+        data: { deletedAt: null, deletedBy: null },
+        select: { ...assetSelect, originalName: true },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        return reply.status(404).send({ error: 'Not found or not in trash' });
+      }
+      throw err;
+    }
+
+    void logAudit({
+      userId: req.user.userId,
+      action: AuditAction.RESTORE,
+      assetId: params.id,
+      assetName: asset.originalName,
+      ipAddress: req.ip,
+    });
+
+    return reply.status(200).send(formatAsset(asset));
+  });
+
+  // Hard-deletes an asset: removes the DB record AND the S3 object(s).
+  // Requires the asset to already be soft-deleted (in the trash).
+  // Use this to permanently purge a trashed asset before the 30-day auto-purge window.
+  app.delete<{ Params: { id: string } }>('/api/files/:id/purge', async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
+    let assetForS3: { storageKey: string; thumbnailKey: string | null; originalName: string };
+    try {
+      // Only allow purging assets that are already in the trash
+      assetForS3 = await prisma.asset.delete({
+        where: { id: params.id, deletedAt: { not: null } },
+        select: { storageKey: true, thumbnailKey: true, originalName: true },
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        return reply.status(404).send({ error: 'Not found or not in trash' });
+      }
+      throw err;
+    }
+
+    void logAudit({
+      userId: req.user.userId,
+      action: AuditAction.DELETE,
+      assetId: params.id,
+      assetName: assetForS3.originalName,
+      ipAddress: req.ip,
+    });
+
+    // Await S3 deletions so failures are surfaced to the caller instead of silently orphaning objects.
+    // S3 DeleteObject is idempotent — returns success for non-existent keys.
+    await deleteFromS3(assetForS3.storageKey);
+    if (assetForS3.thumbnailKey) {
+      await deleteFromS3(assetForS3.thumbnailKey);
+    }
+
     return reply.status(204).send();
   });
 }

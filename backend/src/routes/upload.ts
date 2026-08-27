@@ -7,6 +7,7 @@ import { prisma } from '../db/client.js';
 import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
+import { logAudit, AuditAction } from '../lib/audit.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
@@ -252,6 +253,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             resolutionW: meta.resolution_w,
             resolutionH: meta.resolution_h,
             durationSeconds: meta.duration_seconds,
+            uploadedBy: req.user.userId,
           },
           select: {
             id: true,
@@ -289,6 +291,14 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
         throw err;
       }
+
+      void logAudit({
+        userId: req.user.userId,
+        action: AuditAction.UPLOAD,
+        assetId: asset.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+      });
 
       uploaded.push({
         id: asset.id,
@@ -364,6 +374,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             resolutionW: meta.resolution_w,
             resolutionH: meta.resolution_h,
             durationSeconds: meta.duration_seconds,
+            uploadedBy: req.user.userId,
           },
           select: {
             id: true,
@@ -401,6 +412,14 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         await deleteFromS3(storageKey).catch(() => {});
         throw err;
       }
+
+      void logAudit({
+        userId: req.user.userId,
+        action: AuditAction.UPLOAD,
+        assetId: asset.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+      });
 
       uploaded.push({
         id: asset.id,

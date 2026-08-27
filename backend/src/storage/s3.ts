@@ -1,3 +1,10 @@
+/**
+ * @deprecated MAS-602 — do NOT import from this module in production code.
+ * These helpers talk straight to S3 and ignore the storage_type setting, which
+ * breaks deployments running on disk storage. Use getStorageProvider() from
+ * './index.js' instead. This file survives only because several test files
+ * still vi.mock it; delete it once those mocks are removed.
+ */
 import {
   S3Client,
   PutObjectCommand,

@@ -3,6 +3,7 @@ import path from 'path';
 import type { Readable } from 'stream';
 import { createReadStream } from 'fs';
 import { getDiskConfig } from '../db/settings.js';
+import { StorageNotFoundError } from './provider.js';
 import type { StorageProvider } from './provider.js';
 
 export class DiskStorageProvider implements StorageProvider {
@@ -96,6 +97,31 @@ export class DiskStorageProvider implements StorageProvider {
       await fs.copyFile(src, dest);
     } catch (err) {
       console.error(`[disk] copy failed: sourceKey=${sourceKey} destKey=${destKey} error=${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  async move(sourceKey: string, destKey: string): Promise<void> {
+    const basePath = await this.getBasePath();
+    const src = this.resolvePath(basePath, sourceKey);
+    const dest = this.resolvePath(basePath, destKey);
+    try {
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.rename(src, dest);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        throw new StorageNotFoundError(sourceKey, err);
+      }
+      if (code === 'EXDEV') {
+        // Cross-device rename not supported — fall back to copy + best-effort unlink
+        await this.copy(sourceKey, destKey);
+        await fs.unlink(src).catch((unlinkErr) => {
+          console.error(`[disk] move: failed to delete source "${sourceKey}" after copy:`, unlinkErr);
+        });
+        return;
+      }
+      console.error(`[disk] move failed: sourceKey=${sourceKey} destKey=${destKey} error=${(err as Error).message}`);
       throw err;
     }
   }

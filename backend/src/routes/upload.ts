@@ -2,12 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Transform } from 'stream';
-import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
+import { generateThumbnail } from '../lib/thumbnail.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
@@ -58,17 +58,6 @@ function detectAssetType(filename: string, mime: string): string {
   if (SCRIPT_EXTS.has(ext)) return 'script';
   if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
   return 'other';
-}
-
-async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
-  try {
-    return await sharp(buffer)
-      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toBuffer();
-  } catch {
-    return null;
-  }
 }
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {

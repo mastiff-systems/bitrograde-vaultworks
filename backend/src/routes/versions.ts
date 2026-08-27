@@ -1,22 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
-
-async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
-  try {
-    return await sharp(buffer)
-      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toBuffer();
-  } catch {
-    return null;
-  }
-}
+import { generateThumbnail } from '../lib/thumbnail.js';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }

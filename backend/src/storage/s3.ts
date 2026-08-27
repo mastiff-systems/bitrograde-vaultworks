@@ -73,6 +73,20 @@ export async function copyS3Object(sourceKey: string, destKey: string): Promise<
   );
 }
 
+/**
+ * Move an S3 object by copying to destKey then deleting sourceKey.
+ * Throws if the copy fails (nothing has changed).
+ * Delete of the source is best-effort: a failure leaves an orphaned object at sourceKey
+ * but the DB will already point to destKey, so it will not be served or re-used.
+ * The orphan is recoverable by an operator and does not block downstream work.
+ */
+export async function moveS3Object(sourceKey: string, destKey: string): Promise<void> {
+  await copyS3Object(sourceKey, destKey);
+  await deleteFromS3(sourceKey).catch((err) => {
+    console.error(`[s3] moveS3Object: failed to delete source "${sourceKey}" after copy:`, err);
+  });
+}
+
 export async function getS3ObjectStream(
   key: string,
 ): Promise<{ stream: Readable; contentType: string | undefined; contentLength: number | undefined }> {

@@ -168,6 +168,40 @@ export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
 
+/**
+ * Permanently purge a trashed asset — removes DB record and S3 objects.
+ * The asset must already be in the trash (soft-deleted) before calling this.
+ * Calls DELETE /api/files/:id/purge.
+ */
+export async function purgeFile(id: string): Promise<void> {
+  await api.delete(`/api/files/${id}/purge`);
+}
+
+/** Restore a trashed asset back to the active library. Calls POST /api/files/:id/restore. */
+export async function restoreFile(id: string): Promise<Asset> {
+  const { data } = await api.post<Asset>(`/api/files/${id}/restore`);
+  return data;
+}
+
+/** A trashed asset as returned by GET /api/trash. */
+export interface TrashedAsset {
+  id: string;
+  original_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  asset_type: '3d' | 'audio' | 'image' | 'other';
+  thumbnail_key: string | null;
+  deleted_at: string;
+  deleted_by: string | null;
+  storage_key: string;
+}
+
+/** Fetch all soft-deleted assets from the trash. Calls GET /api/trash. */
+export async function listTrashedFiles(): Promise<TrashedAsset[]> {
+  const { data } = await api.get<TrashedAsset[]>('/api/trash');
+  return data;
+}
+
 export async function listVersions(assetId: string): Promise<AssetVersion[]> {
   const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);
   return data;

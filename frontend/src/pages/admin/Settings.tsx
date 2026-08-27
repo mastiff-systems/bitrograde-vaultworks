@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { fetchSettings, updateSettings, fetchStats, fetchAuditLogs, fetchAuditUsers } from '../../api/admin.js';
 import type { AdminStats, AuditLogEntry, AuditLogsParams, AuditAction, AuditUser } from '../../api/admin.js';
+import { listTrashedFiles, purgeFile, restoreFile } from '../../api/client.js';
+import type { TrashedAsset } from '../../api/client.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -298,6 +300,167 @@ function LogsTab() {
   );
 }
 
+// ─── Trash Tab ──────────────────────────────────────────────────────────────
+
+function TrashTab() {
+  const [items, setItems] = useState<TrashedAsset[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await listTrashedFiles();
+      setItems(data);
+    } catch {
+      setError('Failed to load trash. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function handleRestore(item: TrashedAsset) {
+    if (actionInProgress) return;
+    setActionInProgress(item.id);
+    try {
+      await restoreFile(item.id);
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+    } catch {
+      setError(`Failed to restore "${item.original_name}".`);
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  async function handlePurge(item: TrashedAsset) {
+    if (actionInProgress) return;
+    if (!confirm(`Permanently delete "${item.original_name}"? This removes it from S3 and cannot be undone.`)) return;
+    setActionInProgress(item.id);
+    try {
+      await purgeFile(item.id);
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+    } catch {
+      setError(`Failed to permanently delete "${item.original_name}".`);
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-xs text-content-muted">
+          Files moved to trash are automatically purged after 30 days. You can restore or permanently delete them here.
+        </p>
+        <button onClick={load} disabled={loading} className="btn-ghost btn-sm text-xs flex-shrink-0 ml-4">
+          <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">{error}</div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="w-6 h-6 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <svg className="w-12 h-12 text-content-muted mb-3" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+          </svg>
+          <p className="text-sm text-content-secondary font-medium">Trash is empty</p>
+          <p className="text-xs text-content-muted mt-1">Deleted files will appear here.</p>
+        </div>
+      ) : (
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Size</th>
+                <th>Deleted</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => {
+                const busy = actionInProgress === item.id;
+                return (
+                  <tr key={item.id} className="hover:bg-surface-1">
+                    <td>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm text-content-primary truncate max-w-[260px]" title={item.original_name}>
+                          {item.original_name}
+                        </span>
+                        <span className="badge bg-surface-3 text-content-muted flex-shrink-0 text-[10px]">
+                          {item.asset_type}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="text-xs text-content-muted tabular-nums whitespace-nowrap">
+                      {item.size_bytes != null ? formatBytes(item.size_bytes) : '—'}
+                    </td>
+                    <td className="text-xs text-content-muted tabular-nums whitespace-nowrap">
+                      {formatDate(item.deleted_at)}
+                    </td>
+                    <td className="text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleRestore(item)}
+                          disabled={!!actionInProgress}
+                          className="btn-ghost btn-sm text-xs"
+                          title="Restore to library"
+                        >
+                          {busy ? (
+                            <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                              </svg>
+                              Restore
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handlePurge(item)}
+                          disabled={!!actionInProgress}
+                          className="btn-ghost btn-sm text-xs text-danger hover:text-danger"
+                          title="Permanently delete from S3"
+                        >
+                          {busy ? (
+                            <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                              </svg>
+                              Delete permanently
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export function AdminSettings() {
@@ -307,7 +470,7 @@ export function AdminSettings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'storage' | 'logs'>('storage');
+  const [activeTab, setActiveTab] = useState<'storage' | 'logs' | 'trash'>('storage');
 
   useEffect(() => {
     Promise.all([fetchSettings(), fetchStats()])
@@ -370,7 +533,7 @@ export function AdminSettings() {
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 border-b border-border mb-6">
-        {(['storage', 'logs'] as const).map((tab) => (
+        {(['storage', 'trash', 'logs'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -380,7 +543,7 @@ export function AdminSettings() {
                 : 'border-transparent text-content-secondary hover:text-content-primary'
             }`}
           >
-            {tab === 'storage' ? 'Storage' : 'Logs'}
+            {tab === 'storage' ? 'Storage' : tab === 'trash' ? 'Trash' : 'Logs'}
           </button>
         ))}
       </div>
@@ -466,6 +629,9 @@ export function AdminSettings() {
           </div>
         </div>
       )}
+
+      {/* Trash tab */}
+      {!loading && activeTab === 'trash' && <TrashTab />}
 
       {/* Logs tab */}
       {!loading && activeTab === 'logs' && <LogsTab />}

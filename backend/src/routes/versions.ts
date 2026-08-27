@@ -1,10 +1,22 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { uploadToS3, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
+
+async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
+  try {
+    return await sharp(buffer)
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+  } catch {
+    return null;
+  }
+}
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -103,6 +115,18 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     const newStorageKey = `assets/${params.id}/versions/${Date.now()}_${uploadFilename}`;
     await uploadToS3(newStorageKey, uploadBuffer, uploadMime);
 
+    // Regenerate thumbnail from the new version if it's an image type.
+    let newThumbnailKey: string | undefined;
+    if (uploadMime.startsWith('image/')) {
+      const thumbBuffer = await generateThumbnail(uploadBuffer);
+      if (thumbBuffer) {
+        newThumbnailKey = `assets/${params.id}/thumbnail.webp`;
+        await uploadToS3(newThumbnailKey, thumbBuffer, 'image/webp').catch(() => {
+          newThumbnailKey = undefined;
+        });
+      }
+    }
+
     const maxVersionRecord = await prisma.assetVersion.findFirst({
       where: { assetId: params.id },
       orderBy: { versionNumber: 'desc' },
@@ -155,6 +179,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
             storageKey: newStorageKey,
             sizeBytes: BigInt(uploadBuffer!.length),
             mimeType: uploadMime,
+            ...(newThumbnailKey !== undefined ? { thumbnailKey: newThumbnailKey } : {}),
           },
         });
 
@@ -199,6 +224,33 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
         'Content-Disposition',
         `attachment; filename*=UTF-8''v${version.versionNumber}_file`,
       );
+      if (contentLength) reply.header('Content-Length', contentLength);
+
+      return reply.send(stream);
+    },
+  );
+
+  // Preview (inline stream) a specific version — used by the frontend viewer when
+  // the user clicks a version entry. Same as download but Content-Disposition is inline.
+  app.get<{ Params: { id: string; versionId: string } }>(
+    '/api/files/:id/versions/:versionId/preview',
+    async (req, reply) => {
+      const token = (req.query as Record<string, string>).token;
+      if (!await authenticateToken(token, reply)) return;
+
+      const params = parseParams(VersionParams, req.params, reply);
+      if (!params) return;
+
+      const version = await prisma.assetVersion.findFirst({
+        where: { id: params.versionId, assetId: params.id },
+        select: { storageKey: true, mimeType: true, versionNumber: true },
+      });
+      if (!version) return reply.status(404).send({ error: 'Version not found' });
+
+      const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
+
+      reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
+      reply.header('Content-Disposition', 'inline');
       if (contentLength) reply.header('Content-Length', contentLength);
 
       return reply.send(stream);

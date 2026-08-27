@@ -11,6 +11,7 @@ import {
   downloadUrl,
   thumbnailUrl,
   versionDownloadUrl,
+  versionStreamUrl,
   getAsset,
   type Asset,
   type AssetVersion,
@@ -358,7 +359,7 @@ function AssetCard({
 
 // --- Version History ---
 
-function VersionHistory({ assetId }: { assetId: string }) {
+function VersionHistory({ assetId, onVersionPreview }: { assetId: string; onVersionPreview?: (url: string) => void }) {
   const [versions, setVersions] = useState<AssetVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -451,6 +452,19 @@ function VersionHistory({ assetId }: { assetId: string }) {
                   </p>
                 )}
               </div>
+              {onVersionPreview && (
+                <button
+                  type="button"
+                  onClick={() => onVersionPreview(versionStreamUrl(assetId, v.id))}
+                  className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
+                  title="Preview this version"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                </button>
+              )}
               <a
                 href={versionDownloadUrl(assetId, v.id)}
                 download
@@ -535,11 +549,13 @@ function AssetDetailModal({
   onClose,
   onTagClick,
   onUpdate,
+  onVersionPreview,
 }: {
   asset: Asset;
   onClose: () => void;
   onTagClick: (name: string) => void;
   onUpdate: (updated: Asset) => void;
+  onVersionPreview?: (url: string) => void;
 }) {
   const [editingTags, setEditingTags] = useState(false);
   const [pendingTags, setPendingTags] = useState<string[]>(asset.tags?.map((t) => t.name) ?? []);
@@ -933,7 +949,7 @@ function AssetDetailModal({
           {/* Version history */}
           <div>
             <div className="label mb-2.5">Version history</div>
-            <VersionHistory assetId={asset.id} />
+            <VersionHistory assetId={asset.id} onVersionPreview={onVersionPreview} />
           </div>
         </div>
 
@@ -1016,6 +1032,7 @@ export function AssetBrowser() {
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const [versionPreviewUrl, setVersionPreviewUrl] = useState<string | null>(null);
 
   // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1491,6 +1508,11 @@ export function AssetBrowser() {
           onClose={() => setDetailAsset(null)}
           onTagClick={toggleTag}
           onUpdate={handleAssetUpdate}
+          onVersionPreview={(url) => {
+            setVersionPreviewUrl(url);
+            // If no file viewer is open yet, open it for the detail asset
+            if (!previewAsset) setPreviewAsset(detailAsset);
+          }}
         />
       )}
 
@@ -1499,8 +1521,10 @@ export function AssetBrowser() {
         <FileViewer
           asset={previewAsset}
           assets={displayed}
+          urlOverride={versionPreviewUrl ?? undefined}
           onClose={() => {
             setPreviewAsset(null);
+            setVersionPreviewUrl(null);
             // Remove ?preview= from URL without adding a history entry so that
             // pressing Back after an explicit close does not re-open the viewer.
             pushUrlFilters(
@@ -1513,6 +1537,7 @@ export function AssetBrowser() {
           onOpenDetails={() => {
             setDetailAsset(previewAsset);
             setPreviewAsset(null);
+            setVersionPreviewUrl(null);
           }}
         />
       )}

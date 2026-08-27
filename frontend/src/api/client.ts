@@ -199,6 +199,10 @@ export function versionDownloadUrl(assetId: string, versionId: string): string {
   return withToken(`/api/files/${assetId}/versions/${versionId}/download`);
 }
 
+export function versionStreamUrl(assetId: string, versionId: string): string {
+  return withToken(`/api/files/${assetId}/versions/${versionId}/preview`);
+}
+
 export function downloadUrl(id: string): string {
   return withToken(`/api/files/${id}/download`);
 }

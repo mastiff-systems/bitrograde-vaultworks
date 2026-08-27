@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { copyS3Object, deleteFromS3, getS3ObjectStream, moveS3Object } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { copyS3Object, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { copyS3Object, deleteFromS3, getS3ObjectStream, moveS3Object } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -417,27 +417,62 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send(formatAsset(newAsset));
   });
 
-  // Soft-delete: marks the asset as trashed (sets deleted_at/deleted_by).
-  // Does NOT remove the S3 object — that happens in the 30-day auto-purge job
-  // or via the explicit DELETE /api/files/:id/purge endpoint.
+  // Soft-delete: marks the asset as trashed (sets deleted_at/deleted_by) and moves
+  // its S3 objects to the trash/ prefix so live and trashed objects are distinguishable.
+  // The 30-day auto-purge job (trashPurge.ts) uses storageKey from the DB, so keeping
+  // the DB in sync here is all that is needed for purge to work correctly.
   app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    // Step 1: Fetch current asset (live only) — need storageKey/thumbnailKey for S3 moves
+    const existing = await prisma.asset.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { originalName: true, storageKey: true, thumbnailKey: true },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Not found' });
+
+    // Step 2: Compute trash keys
+    const trashKey = `trash/${params.id}/${existing.originalName}`;
+    const trashThumbnailKey = existing.thumbnailKey ? `trash/${params.id}/thumbnail.webp` : null;
+
+    // Step 3: Move main S3 object (fail-hard — nothing has changed yet if this throws)
+    await moveS3Object(existing.storageKey, trashKey);
+
+    // Step 4: Move thumbnail (best-effort — log failure, do not abort)
+    let thumbnailMoved = false;
+    if (existing.thumbnailKey && trashThumbnailKey) {
+      try {
+        await moveS3Object(existing.thumbnailKey, trashThumbnailKey);
+        thumbnailMoved = true;
+      } catch (err) {
+        console.error(`[files] soft-delete: failed to move thumbnail for asset ${params.id}:`, err);
+      }
+    }
+
+    // Step 5: Update DB — storageKey always reflects the successful main move;
+    // thumbnailKey only updated to the new trash path if the thumbnail move succeeded.
     let asset: { originalName: string };
     try {
       asset = await prisma.asset.update({
         where: { id: params.id, deletedAt: null },
-        data: { deletedAt: new Date(), deletedBy: req.user.userId },
+        data: {
+          deletedAt: new Date(),
+          deletedBy: req.user.userId,
+          storageKey: trashKey,
+          thumbnailKey: thumbnailMoved ? trashThumbnailKey : existing.thumbnailKey,
+        },
         select: { originalName: true },
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        // Race condition: another request deleted the asset between our findFirst and update
         return reply.status(404).send({ error: 'Not found' });
       }
       throw err;
     }
 
+    // Step 6: Log audit and return 204
     void logAudit({
       userId: req.user.userId,
       action: AuditAction.DELETE,
@@ -482,25 +517,64 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
-  // Restores a soft-deleted asset: clears deleted_at and deleted_by, logs RESTORE.
+  // Restores a soft-deleted asset: moves S3 objects back to assets/ prefix,
+  // clears deleted_at/deleted_by, and logs RESTORE.
   app.post<{ Params: { id: string } }>('/api/files/:id/restore', async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    // Step 1: Fetch current asset (trashed only) — need storageKey/thumbnailKey for S3 moves.
+    // assetSelect does not include internal S3 fields, so we fetch them separately here.
+    const existing = await prisma.asset.findFirst({
+      where: { id: params.id, deletedAt: { not: null } },
+      select: { originalName: true, storageKey: true, thumbnailKey: true },
+    });
+    if (!existing) return reply.status(404).send({ error: 'Not found or not in trash' });
+
+    // Step 2: Compute restore keys
+    const restoreKey = `assets/${params.id}/${existing.originalName}`;
+    const restoreThumbnailKey = existing.thumbnailKey ? `assets/${params.id}/thumbnail.webp` : null;
+
+    // Step 3: Move main S3 object (fail-hard — nothing has changed yet if this throws).
+    // Skip the move if storageKey is already at the restore path (e.g. legacy data never trashed).
+    if (existing.storageKey !== restoreKey) {
+      await moveS3Object(existing.storageKey, restoreKey);
+    }
+
+    // Step 4: Move thumbnail (best-effort — log failure, do not abort)
+    let thumbnailMoved = false;
+    if (existing.thumbnailKey && restoreThumbnailKey && existing.thumbnailKey !== restoreThumbnailKey) {
+      try {
+        await moveS3Object(existing.thumbnailKey, restoreThumbnailKey);
+        thumbnailMoved = true;
+      } catch (err) {
+        console.error(`[files] restore: failed to move thumbnail for asset ${params.id}:`, err);
+      }
+    }
+
+    // Step 5: Update DB — restore asset, update storage keys to match S3 state.
+    // thumbnailKey only updated to the restore path if the thumbnail move succeeded.
     let asset: { originalName: string } & AssetSelect;
     try {
       asset = await prisma.asset.update({
         where: { id: params.id, deletedAt: { not: null } },
-        data: { deletedAt: null, deletedBy: null },
+        data: {
+          deletedAt: null,
+          deletedBy: null,
+          storageKey: restoreKey,
+          thumbnailKey: thumbnailMoved ? restoreThumbnailKey : existing.thumbnailKey,
+        },
         select: { ...assetSelect, originalName: true },
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        // Race condition: another request restored or purged the asset between our findFirst and update
         return reply.status(404).send({ error: 'Not found or not in trash' });
       }
       throw err;
     }
 
+    // Step 6: Log audit and return 200
     void logAudit({
       userId: req.user.userId,
       action: AuditAction.RESTORE,

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { uploadToS3, deleteFromS3, getS3ObjectStream } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -28,7 +28,18 @@ const MessageSchema = z.string().max(500).optional();
 
 export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   // List version history for an asset
-  app.get<{ Params: { id: string } }>('/api/files/:id/versions', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/versions', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -63,7 +74,18 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Upload a new version of an asset
-  app.post<{ Params: { id: string } }>('/api/files/:id/versions', async (req, reply) => {
+  app.post<{ Params: { id: string } }>('/api/files/:id/versions', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 5, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -101,8 +123,9 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'A file is required' });
     }
 
+    const storage = await getStorageProvider();
     const newStorageKey = `assets/${params.id}/versions/${Date.now()}_${uploadFilename}`;
-    await uploadToS3(newStorageKey, uploadBuffer, uploadMime);
+    await storage.upload(newStorageKey, uploadBuffer, uploadMime);
 
     // Regenerate thumbnail from the new version if it's an image type.
     let newThumbnailKey: string | undefined;
@@ -175,7 +198,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
         return version;
       });
     } catch (err) {
-      await deleteFromS3(newStorageKey).catch(() => {});
+      await storage.delete(newStorageKey).catch(() => {});
       throw err;
     }
 
@@ -193,6 +216,25 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
   // Download a specific version
   app.get<{ Params: { id: string; versionId: string } }>(
     '/api/files/:id/versions/:versionId/download',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id', 'versionId'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            versionId: { type: 'string', format: 'uuid' },
+          },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+          },
+        },
+      },
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const token = (req.query as Record<string, string>).token;
       if (!await authenticateToken(token, reply)) return;
@@ -202,16 +244,19 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
 
       const version = await prisma.assetVersion.findFirst({
         where: { id: params.versionId, assetId: params.id },
-        select: { storageKey: true, mimeType: true, versionNumber: true },
+        select: { storageKey: true, mimeType: true, versionNumber: true, asset: { select: { originalName: true } } },
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });
 
-      const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
+      const storage = await getStorageProvider();
+      const { stream, contentType, contentLength } = await storage.download(version.storageKey);
+
+      const filename = encodeURIComponent(`v${version.versionNumber}_${version.asset.originalName}`);
 
       reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
       reply.header(
         'Content-Disposition',
-        `attachment; filename*=UTF-8''v${version.versionNumber}_file`,
+        `attachment; filename*=UTF-8''${filename}`,
       );
       if (contentLength) reply.header('Content-Length', contentLength);
 

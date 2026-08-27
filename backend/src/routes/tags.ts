@@ -11,7 +11,9 @@ const CreateTagBody = z.object({ name: z.string().min(1).max(100) });
 const SetTagsBody = z.object({ tags: z.array(z.string().min(1).max(100)) });
 
 export async function tagsRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/tags', async (_req, reply) => {
+  app.get('/api/tags', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
     const tags = await prisma.tag.findMany({
       select: {
         id: true,
@@ -31,7 +33,19 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     );
   });
 
-  app.post('/api/tags', async (req, reply) => {
+  app.post('/api/tags', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 100 },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const body = parseBody(CreateTagBody, req.body, reply);
     if (!body) return;
 
@@ -51,7 +65,19 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>('/api/tags/:id', { preHandler: [requireAdmin] }, async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/tags/:id', {
+    preHandler: [requireAdmin],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -66,15 +92,39 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
-  app.put<{ Params: { id: string } }>('/api/files/:id/tags', async (req, reply) => {
+  app.put<{ Params: { id: string } }>('/api/files/:id/tags', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['tags'],
+        additionalProperties: false,
+        properties: {
+          tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 } },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
     const body = parseBody(SetTagsBody, req.body, reply);
     if (!body) return;
 
-    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true } });
+    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true, uploadedBy: true } });
     if (!asset) return reply.status(404).send({ error: 'Asset not found' });
+
+    const { userId, role } = req.user;
+    if (role !== 'admin' && asset.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     const tagNames = [...new Set(body.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
 

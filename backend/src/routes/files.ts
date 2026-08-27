@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
@@ -10,12 +11,17 @@ import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
 
-async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
+async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
   try {
     const provider = process.env.AUTH_PROVIDER ?? 'local';
-    if (provider === 'keycloak') { await verifyKeycloakToken(token); } else { verifyLocalToken(token); }
-    return true;
+    if (provider === 'keycloak') {
+      await verifyKeycloakToken(token);
+      return null; // keycloak path doesn't return userId easily
+    } else {
+      const payload = verifyLocalToken(token);
+      return payload.userId;
+    }
   } catch { reply.status(401).send({ error: 'Invalid token' }); return false; }
 }
 
@@ -30,7 +36,8 @@ const FilesQuerySchema = z.object({
   categoryId: z.string().uuid().optional(),
   subcategoryId: z.string().uuid().optional(),
   format: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 type TagInfo = { id: string; name: string };
@@ -44,6 +51,7 @@ type AssetSelect = {
   thumbnailKey: string | null;
   description: string | null;
   uploadedAt: Date;
+  updatedAt: Date;
   categoryId: string | null;
   subcategoryId: string | null;
   license: string | null;
@@ -63,6 +71,7 @@ function formatAsset(a: AssetSelect) {
     thumbnail_key: a.thumbnailKey,
     description: a.description,
     uploaded_at: a.uploadedAt,
+    updated_at: a.updatedAt,
     category_id: a.categoryId,
     subcategory_id: a.subcategoryId,
     license: a.license,
@@ -82,6 +91,7 @@ const assetSelect = {
   thumbnailKey: true,
   description: true,
   uploadedAt: true,
+  updatedAt: true,
   categoryId: true,
   subcategoryId: true,
   license: true,
@@ -91,8 +101,36 @@ const assetSelect = {
   tags: { select: { tag: { select: { id: true, name: true } } } },
 } as const;
 
+function makeEtag(data: string): string {
+  return '"' + crypto.createHash('sha1').update(data).digest('hex') + '"';
+}
+
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/files', async (req, reply) => {
+  app.get('/api/files', {
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          q: { type: 'string' },
+          tags: { type: 'string' },
+          assetType: { type: 'string' },
+          mimeType: { type: 'string' },
+          categoryId: { type: 'string', format: 'uuid' },
+          subcategoryId: { type: 'string', format: 'uuid' },
+          format: { type: 'string' },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 60,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const query = FilesQuerySchema.safeParse(req.query);
     if (!query.success) return reply.status(400).send({ error: 'Invalid query parameters', details: query.error.flatten() });
     const params = query.data;
@@ -109,13 +147,20 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const limit = params.limit ?? 50;
+    const page  = params.page  ?? 1;
     const tagNames = params.tags
       ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
       : [];
 
     if (params.q) {
       const q = params.q.trim();
-      if (!q) return reply.send([]);
+      if (!q) {
+        const body = { data: [], total: 0, page, limit, totalPages: 0 };
+        const etag = makeEtag(JSON.stringify(body));
+        reply.header('ETag', etag).header('Cache-Control', 'no-cache');
+        if (req.headers['if-none-match'] === etag) return reply.status(304).send();
+        return reply.send(body);
+      }
 
       const like = `%${q}%`;
 
@@ -147,35 +192,58 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         )`;
       }
 
-      // Phase 1: ranked ID list via pg_trgm similarity + ILIKE fallback
-      // Ranking: name match (1) > tag match (2) > description match (3)
-      // Soft-deleted assets are excluded: AND a.deleted_at IS NULL
-      const rankedIds = await prisma.$queryRaw<{ id: string }[]>`
-        SELECT a.id
-        FROM assets a
-        LEFT JOIN asset_tags jat ON jat.asset_id = a.id
-        LEFT JOIN tags t ON t.id = jat.tag_id
-        WHERE a.deleted_at IS NULL
-        AND (
-          similarity(a.original_name, ${q}) > 0.3
-          OR a.original_name ILIKE ${like}
-          OR a.description ILIKE ${like}
-          OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
-        )
-        ${extraFilters}
-        GROUP BY a.id, a.original_name, a.description
-        ORDER BY
-          MIN(CASE
-            WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
-            WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
-            WHEN a.description ILIKE ${like} THEN 3
-            ELSE 4
-          END) ASC,
-          similarity(a.original_name, ${q}) DESC
-        LIMIT ${limit}
-      `;
+      const skip = (page - 1) * limit;
 
-      if (rankedIds.length === 0) return reply.send([]);
+      // Phase 1: count + ranked ID list in one transaction
+      const [countResult, rankedIds] = await prisma.$transaction([
+        prisma.$queryRaw<{ count: bigint }[]>`
+          SELECT COUNT(DISTINCT a.id) AS count
+          FROM assets a
+          LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+          LEFT JOIN tags t ON t.id = jat.tag_id
+          WHERE (
+            similarity(a.original_name, ${q}) > 0.3
+            OR a.original_name ILIKE ${like}
+            OR a.description ILIKE ${like}
+            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+          )
+          ${extraFilters}
+        `,
+        prisma.$queryRaw<{ id: string }[]>`
+          SELECT a.id
+          FROM assets a
+          LEFT JOIN asset_tags jat ON jat.asset_id = a.id
+          LEFT JOIN tags t ON t.id = jat.tag_id
+          WHERE (
+            similarity(a.original_name, ${q}) > 0.3
+            OR a.original_name ILIKE ${like}
+            OR a.description ILIKE ${like}
+            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+          )
+          ${extraFilters}
+          GROUP BY a.id, a.original_name, a.description
+          ORDER BY
+            MIN(CASE
+              WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
+              WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
+              WHEN a.description ILIKE ${like} THEN 3
+              ELSE 4
+            END) ASC,
+            similarity(a.original_name, ${q}) DESC,
+            a.id ASC
+          LIMIT ${limit}
+          OFFSET ${skip}
+        `,
+      ]);
+      const total = Number(countResult[0].count);
+
+      if (rankedIds.length === 0) {
+        const body = { data: [], total, page, limit, totalPages: Math.ceil(total / limit) || 0 };
+        const etag = makeEtag(JSON.stringify(body));
+        reply.header('ETag', etag).header('Cache-Control', 'no-cache');
+        if (req.headers['if-none-match'] === etag) return reply.status(304).send();
+        return reply.send(body);
+      }
 
       const ids = rankedIds.map((r) => r.id);
 
@@ -191,7 +259,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         (a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999),
       );
 
-      return reply.send(sorted.map(formatAsset));
+      const searchBody = { data: sorted.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
+      const searchEtag = makeEtag(JSON.stringify(searchBody));
+      reply.header('ETag', searchEtag).header('Cache-Control', 'no-cache');
+      if (req.headers['if-none-match'] === searchEtag) return reply.status(304).send();
+      return reply.send(searchBody);
     }
 
     // No query: standard filtered list — exclude soft-deleted assets
@@ -218,16 +290,41 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const where: Prisma.AssetWhereInput = { AND: conditions };
 
-    const assets = await prisma.asset.findMany({
-      where,
-      select: assetSelect,
-      orderBy: { uploadedAt: 'desc' },
-      take: limit,
-    });
-    return reply.send(assets.map(formatAsset));
+    const [total, assets] = await prisma.$transaction([
+      prisma.asset.count({ where }),
+      prisma.asset.findMany({
+        where,
+        select: assetSelect,
+        orderBy: { uploadedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    const listBody = { data: assets.map(formatAsset), total, page, limit, totalPages: Math.ceil(total / limit) };
+    const listEtag = makeEtag(JSON.stringify(listBody));
+    reply.header('ETag', listEtag).header('Cache-Control', 'no-cache');
+    if (req.headers['if-none-match'] === listEtag) return reply.status(304).send();
+    return reply.send(listBody);
   });
 
-  app.get<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 120,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -289,9 +386,32 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients
-  app.get<{ Params: { id: string } }>('/api/files/:id/download', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/download', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 30,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    const authResult = await authenticateToken(token, reply);
+    if (authResult === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -302,7 +422,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset || asset.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.storageKey);
 
     const mime = contentType ?? asset.mimeType ?? 'application/octet-stream';
     const filename = encodeURIComponent(asset.originalName);
@@ -311,13 +432,45 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     reply.header('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
     if (contentLength) reply.header('Content-Length', contentLength);
 
+    logAudit({
+      prisma,
+      userId:    authResult,
+      assetId:   params.id,
+      assetName: asset.originalName,
+      ipAddress: req.ip,
+      action:    'DOWNLOAD',
+      metadata:  { userAgent: req.headers['user-agent'] },
+    });
+
     return reply.send(stream);
   });
 
   // Inline stream for previews — no Content-Disposition attachment
-  app.get<{ Params: { id: string } }>('/api/files/:id/stream', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/stream', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    if (await authenticateToken(token, reply) === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -328,7 +481,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset || asset.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.storageKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.storageKey);
 
     reply.header('Content-Type', contentType ?? asset.mimeType ?? 'application/octet-stream');
     if (contentLength) reply.header('Content-Length', contentLength);
@@ -337,9 +491,31 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Streams the generated thumbnail — 404 if no thumbnail exists for this asset
-  app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/api/files/:id/thumbnail', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 60,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!await authenticateToken(token, reply)) return;
+    if (await authenticateToken(token, reply) === false) return;
 
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
@@ -350,7 +526,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!asset || asset.deletedAt !== null || !asset.thumbnailKey) return reply.status(404).send({ error: 'No thumbnail available' });
 
-    const { stream, contentType, contentLength } = await getS3ObjectStream(asset.thumbnailKey);
+    const storage = await getStorageProvider();
+    const { stream, contentType, contentLength } = await storage.download(asset.thumbnailKey);
 
     reply.header('Content-Type', contentType ?? 'image/webp');
     if (contentLength) reply.header('Content-Length', contentLength);
@@ -390,7 +567,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const newId = uuidv4();
     const storageKey = `assets/${newId}/${newName}`;
 
-    await copyS3Object(source.storageKey, storageKey);
+    const storage = await getStorageProvider();
+    await storage.copy(source.storageKey, storageKey);
 
     // Persist the new asset, copying all metadata from the source
     const newAsset = await prisma.asset.create({
@@ -425,12 +603,19 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
+    const { userId, role } = req.user;
+
     // Step 1: Fetch current asset (live only) — need storageKey/thumbnailKey for S3 moves
     const existing = await prisma.asset.findFirst({
       where: { id: params.id, deletedAt: null },
-      select: { originalName: true, storageKey: true, thumbnailKey: true },
+      select: { originalName: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
     });
     if (!existing) return reply.status(404).send({ error: 'Not found' });
+
+    // Ownership check: only admin or the uploader can delete
+    if (role !== 'admin' && existing.uploadedBy !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     // Step 2: Compute trash keys
     const trashKey = `trash/${params.id}/${existing.originalName}`;

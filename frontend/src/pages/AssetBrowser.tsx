@@ -6,6 +6,8 @@ import {
   uploadFiles,
   deleteFile,
   updateAssetTags,
+  updateFile,
+  getAssetById,
   listVersions,
   uploadVersion,
   downloadUrl,
@@ -13,9 +15,15 @@ import {
   versionDownloadUrl,
   versionStreamUrl,
   getAsset,
+  bulkDelete,
+  bulkDownload,
   type Asset,
   type AssetVersion,
   type Tag,
+  createShareLink,
+  getShareLinks,
+  revokeShareLinks,
+  type ShareLink,
 } from '../api/client.js';
 import {
   listFolderAssets,
@@ -31,6 +39,13 @@ import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
+import { useUpload } from '../contexts/UploadContext.js';
+import {
+  type Collection,
+  listCollections,
+  addAssetsToCollection,
+  createCollection,
+} from '../api/collections.js';
 
 // --- Helpers ---
 
@@ -78,12 +93,19 @@ function tagPalette(name: string) {
 
 // --- URL state ---
 
+function getExtension(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  if (dot < 1) return 'unknown';
+  return filename.slice(dot + 1).toLowerCase();
+}
+
 function getUrlFilters() {
   const p = new URLSearchParams(window.location.search);
   return {
     q: p.get('q') ?? '',
-    types: p.getAll('type'),
+    exts: p.getAll('ext'),
     tags: p.getAll('tag'),
+    types: p.getAll('type'),
     sort: (p.get('sort') ?? 'newest') as SortKey,
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
@@ -95,8 +117,9 @@ function getUrlFilters() {
 function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = false) {
   const p = new URLSearchParams();
   if (filters.q) p.set('q', filters.q);
-  filters.types.forEach((t) => p.append('type', t));
+  filters.exts.forEach((e) => p.append('ext', e));
   filters.tags.forEach((t) => p.append('tag', t));
+  (filters.types ?? []).forEach((t) => p.append('type', t));
   if (filters.sort && filters.sort !== 'newest') p.set('sort', filters.sort);
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
@@ -124,6 +147,26 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'smallest', label: 'Smallest' },
   { value: 'relevance', label: 'Best match' },
 ];
+
+const EXT_DOT_CLS: Record<string, string> = {
+  obj: 'bg-violet-400',
+  fbx: 'bg-violet-500',
+  gltf: 'bg-violet-300',
+  glb: 'bg-purple-400',
+  mp3: 'bg-cyan-400',
+  wav: 'bg-cyan-500',
+  ogg: 'bg-cyan-300',
+  flac: 'bg-sky-400',
+  png: 'bg-emerald-400',
+  jpg: 'bg-emerald-500',
+  jpeg: 'bg-emerald-500',
+  gif: 'bg-green-400',
+  webp: 'bg-teal-400',
+  svg: 'bg-lime-400',
+  pdf: 'bg-red-400',
+  zip: 'bg-amber-400',
+  unknown: 'bg-content-muted',
+};
 
 function sortAssets(assets: Asset[], sort: SortKey): Asset[] {
   if (sort === 'relevance') return [...assets];
@@ -223,6 +266,9 @@ function AssetCard({
   onDetails,
   onDelete,
   onRemoveFromFolder,
+  selectionMode,
+  selected,
+  onToggleSelect,
 }: {
   asset: Asset;
   categoryName?: string;
@@ -233,28 +279,55 @@ function AssetCard({
   onDelete?: () => void;
   /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
   onRemoveFromFolder?: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const palette = (name: string) => tagPalette(name);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  function handleCardClick() {
+    if (selectionMode) {
+      onToggleSelect?.(asset.id);
+    } else {
+      onClick();
+    }
+  }
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className="card flex flex-col overflow-hidden cursor-pointer hover:border-border-light transition-all hover:shadow-lg hover:shadow-black/20 group outline-none focus-visible:ring-2 focus-visible:ring-accent/50 relative"
+      onClick={handleCardClick}
+      onKeyDown={(e) => e.key === 'Enter' && handleCardClick()}
+      className={`card flex flex-col overflow-hidden cursor-pointer hover:border-border-light transition-all hover:shadow-lg hover:shadow-black/20 group outline-none focus-visible:ring-2 focus-visible:ring-accent/50 relative ${selected ? 'ring-2 ring-accent border-accent' : ''}`}
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-surface-3 overflow-hidden flex items-center justify-center relative">
         <AssetThumbnail asset={asset} />
         <div className="absolute top-2 left-2 flex flex-col gap-1">
-          <TypeBadge type={asset.asset_type} />
-          {categoryName && (
+          {!selectionMode && <TypeBadge type={asset.asset_type} />}
+          {!selectionMode && categoryName && (
             <span className="badge bg-surface-0/80 text-content-secondary backdrop-blur-sm text-[10px]">{categoryName}</span>
           )}
         </div>
-        {/* Context menu trigger */}
+        {/* Checkbox overlay in selection mode */}
+        {selectionMode && (
+          <div
+            className="absolute inset-0 flex items-start justify-start p-2"
+            onClick={(e) => { e.stopPropagation(); onToggleSelect?.(asset.id); }}
+          >
+            <input
+              type="checkbox"
+              checked={selected ?? false}
+              onChange={() => onToggleSelect?.(asset.id)}
+              onClick={(e) => e.stopPropagation()}
+              className="w-5 h-5 rounded cursor-pointer accent-violet-500"
+            />
+          </div>
+        )}
+        {/* Context menu trigger (hidden in selection mode) */}
+        {!selectionMode && (
         <div
           className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={(e) => e.stopPropagation()}
@@ -321,6 +394,7 @@ function AssetCard({
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* Card body */}
@@ -560,6 +634,122 @@ function VersionHistory({ assetId, onVersionPreview }: { assetId: string; onVers
   );
 }
 
+// --- Share Modal ---
+
+function ShareModal({ assetId, onClose }: { assetId: string; onClose: () => void }) {
+  const [links, setLinks] = useState<ShareLink[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getShareLinks(assetId)
+      .then(setLinks)
+      .catch(() => setError('Failed to load share links.'))
+      .finally(() => setLoading(false));
+  }, [assetId]);
+
+  async function handleCreate() {
+    setCreating(true);
+    setError(null);
+    try {
+      const link = await createShareLink(assetId, 30);
+      setLinks([{ id: '', token: link.token, url: link.url, expiresAt: link.expiresAt, createdAt: new Date().toISOString(), createdByUserId: null }]);
+    } catch {
+      setError('Failed to create share link.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleRevoke() {
+    setRevoking(true);
+    setError(null);
+    try {
+      await revokeShareLinks(assetId);
+      setLinks([]);
+    } catch {
+      setError('Failed to revoke share link.');
+    } finally {
+      setRevoking(false);
+    }
+  }
+
+  async function handleCopy(url: string) {
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const activeLink = links[0] ?? null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div
+        className="bg-surface border border-border rounded-xl shadow-xl w-full max-w-md mx-4 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-content">Share Asset</h2>
+          <button onClick={onClose} className="text-content-muted hover:text-content" aria-label="Close">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-6">
+            <div className="w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : activeLink ? (
+          <div className="space-y-3">
+            <p className="text-xs text-content-muted">Anyone with this link can download the asset.</p>
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={activeLink.url}
+                className="flex-1 text-xs bg-surface-raised border border-border rounded px-2.5 py-1.5 text-content font-mono truncate"
+              />
+              <button
+                onClick={() => handleCopy(activeLink.url)}
+                className="btn-secondary btn-sm shrink-0"
+              >
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+            {activeLink.expiresAt && (
+              <p className="text-xs text-content-muted">
+                Expires {new Date(activeLink.expiresAt).toLocaleDateString()}
+              </p>
+            )}
+            <button
+              onClick={handleRevoke}
+              disabled={revoking}
+              className="btn-ghost btn-sm text-xs text-danger hover:text-danger w-full mt-1"
+            >
+              {revoking ? 'Revoking…' : 'Revoke link'}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-content-muted">
+              Generate a link to share this asset with external reviewers. Links expire in 30 days.
+            </p>
+            <button onClick={handleCreate} disabled={creating} className="btn-primary btn-sm w-full">
+              {creating ? 'Generating…' : 'Generate share link'}
+            </button>
+          </div>
+        )}
+
+        {error && <p className="mt-3 text-xs text-danger">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
 // --- Asset Detail Modal ---
 
 /** Returns "First Last" if either name part exists, otherwise falls back to the email. */
@@ -580,11 +770,13 @@ function AssetDetailModal({
   onUpdate: (updated: Asset) => void;
   onVersionPreview?: (url: string) => void;
 }) {
+  const { categories } = useCategoryContext();
   const [editingTags, setEditingTags] = useState(false);
   const [pendingTags, setPendingTags] = useState<string[]>(asset.tags?.map((t) => t.name) ?? []);
   const [tagInput, setTagInput] = useState('');
   const [savingTags, setSavingTags] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
 
   // Full asset detail (includes attribution fields not in list response)
@@ -640,6 +832,75 @@ function AssetDetailModal({
     (f) => folderPickerSearch.trim() === '' || f.name.toLowerCase().includes(folderPickerSearch.toLowerCase()),
   );
   // ── End folder state ─────────────────────────────────────────────────────────
+
+  // ── Edit metadata state ──────────────────────────────────────────────────────
+  const [editingMeta, setEditingMeta] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: asset.original_name,
+    description: asset.description ?? '',
+    categoryId: asset.category_id ?? '',
+    subcategoryId: asset.subcategory_id ?? '',
+    tags: asset.tags?.map((t) => t.name) ?? [],
+  });
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveFieldErrors, setSaveFieldErrors] = useState<Record<string, string[]>>({});
+  const [editTagInput, setEditTagInput] = useState('');
+
+  const subcategoriesForEdit = useMemo(() => {
+    const cat = categories.find((c) => c.id === editForm.categoryId);
+    return cat?.subcategories ?? [];
+  }, [categories, editForm.categoryId]);
+
+  function startEdit() {
+    setEditForm({
+      name: asset.original_name,
+      description: asset.description ?? '',
+      categoryId: asset.category_id ?? '',
+      subcategoryId: asset.subcategory_id ?? '',
+      tags: asset.tags?.map((t) => t.name) ?? [],
+    });
+    setSaveError(null);
+    setSaveFieldErrors({});
+    setEditingMeta(true);
+  }
+
+  function addEditTag() {
+    const name = editTagInput.trim().toLowerCase();
+    if (name && !editForm.tags.includes(name)) {
+      setEditForm((f) => ({ ...f, tags: [...f.tags, name] }));
+    }
+    setEditTagInput('');
+  }
+
+  function removeEditTag(name: string) {
+    setEditForm((f) => ({ ...f, tags: f.tags.filter((t) => t !== name) }));
+  }
+
+  async function handleSaveMeta() {
+    const errors: Record<string, string[]> = {};
+    if (!editForm.name.trim()) errors.name = ['Name is required'];
+    if (Object.keys(errors).length > 0) { setSaveFieldErrors(errors); return; }
+    setSavingMeta(true);
+    setSaveError(null);
+    setSaveFieldErrors({});
+    try {
+      const updated = await updateFile(asset.id, {
+        name: editForm.name.trim(),
+        description: editForm.description.trim() || null,
+        categoryId: editForm.categoryId || null,
+        subcategoryId: editForm.subcategoryId || null,
+        tags: editForm.tags,
+      });
+      onUpdate(updated);
+      setEditingMeta(false);
+    } catch {
+      setSaveError('Failed to save changes. Please try again.');
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+  // ── End edit metadata state ──────────────────────────────────────────────────
 
   useEffect(() => {
     if (!editingTags) setPendingTags(asset.tags?.map((t) => t.name) ?? []);
@@ -715,17 +976,157 @@ function AssetDetailModal({
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {!editingMeta && (
+              <button
+                onClick={startEdit}
+                className="btn-ghost btn-sm text-xs text-content-muted hover:text-accent"
+                title="Edit metadata"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                </svg>
+                Edit
+              </button>
+            )}
+            <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Body */}
         <div className="overflow-y-auto flex-1 px-5 py-5 space-y-5">
+          {/* Edit form */}
+          {editingMeta && (
+            <div className="space-y-4">
+              <div>
+                <label className="label mb-1 block">Name <span className="text-danger">*</span></label>
+                <input
+                  className="input w-full"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Asset name"
+                  autoFocus
+                />
+                {saveFieldErrors.name?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
+              </div>
+              <div>
+                <label className="label mb-1 block">Description</label>
+                <textarea
+                  className="input w-full resize-none"
+                  rows={3}
+                  value={editForm.description}
+                  onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="Optional description…"
+                />
+                {saveFieldErrors.description?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
+              </div>
+              <div>
+                <label className="label mb-1 block">Category</label>
+                <select
+                  className="input w-full"
+                  value={editForm.categoryId}
+                  onChange={(e) => setEditForm((f) => ({ ...f, categoryId: e.target.value, subcategoryId: '' }))}
+                >
+                  <option value="">— None —</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              {subcategoriesForEdit.length > 0 && (
+                <div>
+                  <label className="label mb-1 block">Subcategory</label>
+                  <select
+                    className="input w-full"
+                    value={editForm.subcategoryId}
+                    onChange={(e) => setEditForm((f) => ({ ...f, subcategoryId: e.target.value }))}
+                  >
+                    <option value="">— None —</option>
+                    {subcategoriesForEdit.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="label mb-1 block">Tags</label>
+                <div className="flex flex-wrap gap-1.5 mb-2 min-h-6">
+                  {editForm.tags.map((name) => {
+                    const p = tagPalette(name);
+                    return (
+                      <span
+                        key={name}
+                        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${p.bg} ${p.text}`}
+                      >
+                        {name}
+                        <button
+                          onClick={() => removeEditTag(name)}
+                          className="opacity-60 hover:opacity-100 ml-0.5"
+                          aria-label={`Remove tag ${name}`}
+                        >
+                          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    className="input py-1.5 text-xs flex-1"
+                    placeholder="Type a tag and press Enter…"
+                    value={editTagInput}
+                    onChange={(e) => setEditTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); addEditTag(); }
+                    }}
+                  />
+                  <button onClick={addEditTag} className="btn-secondary btn-sm text-xs">Add</button>
+                </div>
+                {saveFieldErrors.tags?.map((e, i) => (
+                  <p key={i} className="text-xs text-danger mt-1">{e}</p>
+                ))}
+              </div>
+              {saveError && (
+                <p className="text-xs text-danger">{saveError}</p>
+              )}
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  onClick={() => { setEditingMeta(false); setSaveError(null); setSaveFieldErrors({}); }}
+                  className="btn-ghost btn-sm text-xs"
+                  disabled={savingMeta}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveMeta}
+                  className="btn-primary btn-sm text-xs"
+                  disabled={savingMeta}
+                >
+                  {savingMeta ? (
+                    <>
+                      <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save changes'
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Preview */}
-          {asset.asset_type === 'image' && asset.thumbnail_key && (
+          {!editingMeta && asset.asset_type === 'image' && asset.thumbnail_key && (
             <div className="rounded-xl overflow-hidden bg-surface-3 flex items-center justify-center">
               <img
                 src={thumbnailUrl(asset.id)}
@@ -734,18 +1135,19 @@ function AssetDetailModal({
               />
             </div>
           )}
-          {asset.asset_type === 'audio' && (
+          {!editingMeta && asset.asset_type === 'audio' && (
             <div className="card p-4 bg-surface-1">
               <AudioPreview assetId={asset.id} />
             </div>
           )}
-          {asset.asset_type === '3d' && (
+          {!editingMeta && asset.asset_type === '3d' && (
             <div className="card overflow-hidden bg-surface-1" style={{ height: '180px' }}>
               <Preview3D assetId={asset.id} filename={asset.original_name} />
             </div>
           )}
 
           {/* Metadata */}
+          {!editingMeta && (
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <div>
               <div className="label">Uploaded</div>
@@ -787,8 +1189,9 @@ function AssetDetailModal({
               </>
             )}
           </div>
+          )}
 
-          {asset.description && (
+          {!editingMeta && asset.description && (
             <div>
               <div className="label">Description</div>
               <p className="text-sm text-content-secondary leading-relaxed">{asset.description}</p>
@@ -796,7 +1199,7 @@ function AssetDetailModal({
           )}
 
           {/* Tags */}
-          <div>
+          {!editingMeta && <div>
             <div className="flex items-center justify-between mb-2.5">
               <span className="label mb-0">Tags</span>
               {!editingTags && (
@@ -894,7 +1297,7 @@ function AssetDetailModal({
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Folders */}
           <div>
@@ -973,10 +1376,12 @@ function AssetDetailModal({
           </div>
 
           {/* Version history */}
+          {!editingMeta && (
           <div>
             <div className="label mb-2.5">Version history</div>
             <VersionHistory assetId={asset.id} onVersionPreview={onVersionPreview} />
           </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -988,7 +1393,14 @@ function AssetDetailModal({
               </svg>
               Download
             </a>
+            <button onClick={() => setSharingOpen(true)} className="btn-secondary btn-sm">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 1 0 0 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186 9.566-5.314m-9.566 7.5 9.566 5.314m0 0a2.25 2.25 0 1 0 3.935 2.186 2.25 2.25 0 0 0-3.935-2.186zm0-12.814a2.25 2.25 0 1 0 3.933-2.185 2.25 2.25 0 0 0-3.933 2.185z" />
+              </svg>
+              Share
+            </button>
           </div>
+          {sharingOpen && <ShareModal assetId={asset.id} onClose={() => setSharingOpen(false)} />}
           <button
             onClick={handleDelete}
             disabled={deleting}
@@ -1011,11 +1423,271 @@ function AssetDetailModal({
   );
 }
 
+// --- Asset List Row (list view) ---
+
+function AssetListRow({
+  asset,
+  categoryName,
+  onTagClick,
+  activeTagFilters,
+  onClick,
+  onDetails,
+  selectionMode,
+  selected,
+  onToggleSelect,
+}: {
+  asset: Asset;
+  categoryName?: string;
+  onTagClick: (name: string) => void;
+  activeTagFilters: string[];
+  onClick: () => void;
+  onDetails: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
+}) {
+  const ext = asset.original_name.includes('.') ? asset.original_name.split('.').pop()!.toLowerCase() : null;
+
+  function handleRowClick() {
+    if (selectionMode) {
+      onToggleSelect?.(asset.id);
+    } else {
+      onClick();
+    }
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={handleRowClick}
+      onKeyDown={(e) => e.key === 'Enter' && handleRowClick()}
+      className={`flex items-center gap-3 px-4 py-2.5 border-b border-border/50 hover:bg-surface-2 cursor-pointer transition-colors group outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${selected ? 'bg-accent/5' : ''}`}
+    >
+      {/* Checkbox in selection mode */}
+      {selectionMode && (
+        <input
+          type="checkbox"
+          checked={selected ?? false}
+          onChange={() => onToggleSelect?.(asset.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+        />
+      )}
+      {/* Thumbnail / icon */}
+      <div className="w-10 h-10 rounded-lg bg-surface-3 flex-shrink-0 overflow-hidden flex items-center justify-center">
+        {asset.asset_type === 'image' && asset.thumbnail_key ? (
+          <img src={`/api/files/${asset.id}/thumbnail`} alt="" className="w-full h-full object-cover" loading="lazy" />
+        ) : (
+          <AssetIcon type={asset.asset_type} className="w-5 h-5" />
+        )}
+      </div>
+
+      {/* Name + ext badge */}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-content-primary truncate" title={asset.original_name}>
+          {asset.original_name}
+        </p>
+        <div className="flex items-center gap-2 mt-0.5">
+          {ext && (
+            <span className="text-[10px] font-mono text-content-muted bg-surface-3 px-1.5 py-0.5 rounded uppercase">{ext}</span>
+          )}
+          {categoryName && (
+            <span className="text-[10px] text-content-muted">{categoryName}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Tags */}
+      <div className="hidden md:flex items-center gap-1 flex-shrink-0 max-w-[160px]" onClick={(e) => e.stopPropagation()}>
+        {asset.tags?.slice(0, 2).map((tag) => {
+          const p = tagPalette(tag.name);
+          const active = activeTagFilters.includes(tag.name);
+          return (
+            <button
+              key={tag.id}
+              onClick={() => onTagClick(tag.name)}
+              className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${p.bg} ${p.text} ${active ? 'ring-1 ring-offset-0' : 'hover:opacity-80'} truncate max-w-[72px]`}
+            >
+              {tag.name}
+            </button>
+          );
+        })}
+        {(asset.tags?.length ?? 0) > 2 && (
+          <span className="text-[10px] text-content-muted">+{(asset.tags?.length ?? 0) - 2}</span>
+        )}
+      </div>
+
+      {/* Size */}
+      <span className="hidden sm:block text-xs text-content-muted tabular-nums flex-shrink-0 w-16 text-right">
+        {formatBytes(asset.size_bytes ?? 0)}
+      </span>
+
+      {/* Date */}
+      <span className="hidden lg:block text-xs text-content-muted flex-shrink-0 w-24 text-right">
+        {formatDate(asset.uploaded_at)}
+      </span>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onClick}
+          className="btn-ghost btn-sm p-1.5"
+          aria-label="Preview"
+          title="Preview"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+        <button
+          onClick={onDetails}
+          className="btn-ghost btn-sm p-1.5"
+          aria-label="Details"
+          title="Details"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- Add to Collection Inline Modal ---
+
+function AddToCollectionInlineModal({
+  assetIds,
+  collections,
+  onClose,
+  onCollectionCreated,
+  onAdded,
+}: {
+  assetIds: string[];
+  collections: Collection[];
+  onClose: () => void;
+  onCollectionCreated: (c: Collection) => void;
+  onAdded?: () => void;
+}) {
+  const [adding, setAdding] = useState<string | null>(null);
+  const [done, setDone] = useState<Set<string>>(new Set());
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleAdd(collectionId: string) {
+    setAdding(collectionId);
+    setError(null);
+    try {
+      await addAssetsToCollection(collectionId, assetIds);
+      setDone((prev) => new Set([...prev, collectionId]));
+      onAdded?.();
+    } catch {
+      setError('Failed to add to collection. Please try again.');
+    } finally {
+      setAdding(null);
+    }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    setCreating(true);
+    try {
+      const c = await createCollection(newName.trim());
+      onCollectionCreated(c);
+      await handleAdd(c.id);
+      setNewName('');
+      setShowCreate(false);
+    } catch {
+      // ignore
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="card w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold text-content-primary">Add to Collection</h2>
+          <button onClick={onClose} className="btn-ghost btn-sm">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-5 py-3 max-h-56 overflow-y-auto">
+          {collections.length === 0 && !showCreate ? (
+            <p className="text-sm text-content-muted text-center py-3">No collections yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {collections.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => handleAdd(c.id)}
+                  disabled={adding === c.id || done.has(c.id)}
+                  className="w-full text-left flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-surface-3 transition-colors disabled:opacity-50"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-content-primary truncate">{c.name}</p>
+                    <p className="text-xs text-content-muted">{c.asset_count} assets</p>
+                  </div>
+                  {done.has(c.id) ? (
+                    <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : adding === c.id ? (
+                    <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <p className="px-5 pt-2 text-xs text-danger">{error}</p>
+        )}
+
+        <div className="px-5 pb-4 pt-2 border-t border-border">
+          {showCreate ? (
+            <form onSubmit={handleCreate} className="flex gap-2">
+              <input
+                className="input py-1.5 text-xs flex-1"
+                placeholder="Collection name…"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                autoFocus
+              />
+              <button type="submit" disabled={creating || !newName.trim()} className="btn-primary btn-sm text-xs">
+                {creating ? <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" /> : 'Create'}
+              </button>
+              <button type="button" onClick={() => setShowCreate(false)} className="btn-ghost btn-sm text-xs">Cancel</button>
+            </form>
+          ) : (
+            <button onClick={() => setShowCreate(true)} className="btn-secondary btn-sm text-xs w-full">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              New Collection
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Main AssetBrowser ---
 
-const ASSET_TYPES = ['3d', 'audio', 'image', 'other'] as const;
+const PAGE_LIMIT = 24;
 
-export function AssetBrowser() {
+export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: string | null } = {}) {
   const initial = getUrlFilters();
   const {
     searchQuery,
@@ -1027,8 +1699,13 @@ export function AssetBrowser() {
     setSelectedSubcategoryId,
   } = useCategoryContext();
   const [debouncedQuery, setDebouncedQuery] = useState(initial.q);
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
+  const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+
+  const upload = useUpload();
   const [sort, setSort] = useState<SortKey>(initial.sort);
   // Active folder: null = show all assets, uuid = show folder assets
   const [activeFolderId, setActiveFolderId] = useState<string | null>(initial.folder);
@@ -1051,14 +1728,108 @@ export function AssetBrowser() {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [showWizard, setShowWizard] = useState(false);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [versionPreviewUrl, setVersionPreviewUrl] = useState<string | null>(null);
+
+  // Selection state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionPending, setBulkActionPending] = useState(false);
+
+  // Add to Collection state
+  const [addToCollectionAssetId, setAddToCollectionAssetId] = useState<string | null>(null);
+  const [collectionsForModal, setCollectionsForModal] = useState<Collection[]>([]);
+  const [collectionsLoaded, setCollectionsLoaded] = useState(false);
+  const [bulkAddToCollectionOpen, setBulkAddToCollectionOpen] = useState(false);
+  const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
+
+  async function openAddToCollection(assetId: string) {
+    setAddToCollectionAssetId(assetId);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
+
+  async function openBulkAddToCollection() {
+    setBulkAddToCollectionOpen(true);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === displayed.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(displayed.map((a) => a.id)));
+    }
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function handleBulkDownload() {
+    if (selectedIds.size === 0) return;
+    setBulkActionPending(true);
+    try {
+      await bulkDownload(Array.from(selectedIds));
+    } catch {
+      setError('Download failed. Please try again.');
+    } finally {
+      setBulkActionPending(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    setBulkActionPending(true);
+    try {
+      const result = await bulkDelete(Array.from(selectedIds));
+      setAssets((prev) => prev.filter((a) => !result.deleted.includes(a.id)));
+      listTags().then(setAllTags).catch(() => {});
+      exitSelectionMode();
+      if (result.errors.length > 0) {
+        setError(`${result.deleted.length} deleted; ${result.errors.length} failed.`);
+      }
+    } catch {
+      setError('Bulk delete failed. Please try again.');
+    } finally {
+      setBulkActionPending(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!initialDetailAssetId) return;
+    getAssetById(initialDetailAssetId).then(setDetailAsset).catch(() => {});
+  }, [initialDetailAssetId]);
 
   // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1080,7 +1851,7 @@ export function AssetBrowser() {
       isRestoringFromHistory.current = true;
       setGlobalSearch(filters.q);
       setDebouncedQuery(filters.q);
-      setSelectedTypes(filters.types);
+      setSelectedExts(filters.exts);
       setSelectedTags(filters.tags);
       setSort(filters.sort);
       setSelectedCategoryId(filters.category);
@@ -1132,12 +1903,12 @@ export function AssetBrowser() {
     const isMount = !didMountRef.current;
     didMountRef.current = true;
     pushUrlFilters(
-      { q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort,
+      { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
         category: selectedCategoryId, subcategory: selectedSubcategoryId,
         folder: activeFolderId, preview: previewAsset?.id ?? null },
       isMount, // replaceState on first render, pushState on subsequent filter changes
     );
-  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
+  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
 
 
   // Load tags
@@ -1169,8 +1940,8 @@ export function AssetBrowser() {
 
   const displayed = useMemo(() => {
     let result = assets;
-    if (selectedTypes.length > 1) {
-      result = result.filter((a) => selectedTypes.includes(a.asset_type));
+    if (selectedExts.length > 0) {
+      result = result.filter((a) => selectedExts.includes(getExtension(a.original_name)));
     }
     if (selectedCategoryId) {
       result = result.filter((a) => a.category_id === selectedCategoryId);
@@ -1179,22 +1950,31 @@ export function AssetBrowser() {
       result = result.filter((a) => a.subcategory_id === selectedSubcategoryId);
     }
     return sortAssets(result, sort);
-  }, [assets, selectedTypes, selectedCategoryId, selectedSubcategoryId, sort]);
+  }, [assets, selectedExts, selectedCategoryId, selectedSubcategoryId, sort]);
 
-  const hasFilters = !!(debouncedQuery || selectedTypes.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
+  const availableExts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of assets) {
+      const ext = getExtension(a.original_name);
+      if (ext) counts[ext] = (counts[ext] ?? 0) + 1;
+    }
+    return Object.entries(counts).map(([ext, count]) => ({ ext, count })).sort((a, b) => b.count - a.count);
+  }, [assets]);
+
+  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
 
   function clearFilters() {
     setGlobalSearch('');
     setSelectedCategoryId(null);
     setSelectedSubcategoryId(null);
-    setSelectedTypes([]);
+    setSelectedExts([]);
     setSelectedTags([]);
     setSort('newest');
   }
 
-  function toggleType(type: string) {
-    setSelectedTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
+  function toggleExt(ext: string) {
+    setSelectedExts((prev) =>
+      prev.includes(ext) ? prev.filter((e) => e !== ext) : [...prev, ext],
     );
   }
 
@@ -1207,20 +1987,19 @@ export function AssetBrowser() {
   // Upload drop
   const onDrop = useCallback(async (files: File[]) => {
     if (!files.length) return;
-    setUploading(true);
-    setUploadProgress(0);
+    upload.setUploading(true);
+    upload.setProgress(0);
     try {
-      const added = await uploadFiles(files, setUploadProgress);
+      const added = await uploadFiles(files, upload.setProgress);
       setAssets((prev) => [...added, ...prev]);
-      // Refresh tags in case new tags were implied
       listTags().then(setAllTags).catch(() => {});
     } catch {
       setError('Upload failed. Please try again.');
     } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      upload.setUploading(false);
+      upload.setProgress(0);
     }
-  }, []);
+  }, [upload]);
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
@@ -1231,6 +2010,7 @@ export function AssetBrowser() {
   function handleWizardComplete(asset: Asset) {
     setAssets((prev) => [asset, ...prev]);
     listTags().then(setAllTags).catch(() => {});
+    upload.closeWizard();
   }
 
   function handleAssetUpdate(updated: Asset) {
@@ -1292,75 +2072,99 @@ export function AssetBrowser() {
       )}
 
       {/* Filter sidebar */}
-      <aside className="w-60 flex-shrink-0 border-r border-border overflow-y-auto flex flex-col bg-surface-1">
-        <div className="px-4 py-3.5 border-b border-border flex items-center justify-between">
-          <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="text-xs text-accent-light hover:text-accent transition-colors"
-            >
-              Clear all
-            </button>
+      <aside className={`flex-shrink-0 border-r border-border flex flex-col bg-surface-1 transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-10'}`}>
+        {/* Sidebar header with collapse toggle */}
+        <div className={`px-2 py-3.5 border-b border-border flex items-center ${sidebarOpen ? 'justify-between px-4' : 'justify-center'}`}>
+          {sidebarOpen && (
+            <>
+              <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
+              {hasFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="text-xs text-accent-light hover:text-accent transition-colors"
+                >
+                  Clear all
+                </button>
+              )}
+            </>
           )}
+          <button
+            onClick={() => setSidebarOpen((o) => !o)}
+            aria-label={sidebarOpen ? 'Collapse filters' : 'Expand filters'}
+            className={`flex-shrink-0 p-1 rounded text-content-muted hover:text-content-primary hover:bg-surface-3 transition-colors ${sidebarOpen ? '' : 'mx-auto'}`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              {sidebarOpen
+                ? <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                : <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              }
+            </svg>
+          </button>
         </div>
 
-        {/* Type filter */}
-        <div className="px-4 py-3 border-b border-border/50">
-          <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-            Asset type
-          </div>
-          {ASSET_TYPES.map((type) => (
-            <label
-              key={type}
-              className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
-            >
-              <input
-                type="checkbox"
-                checked={selectedTypes.includes(type)}
-                onChange={() => toggleType(type)}
-                className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
-              />
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${TYPE_DOT_CLS[type]}`} />
-              <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1">
-                {TYPE_LABELS[type]}
-              </span>
-            </label>
-          ))}
-        </div>
-
-        {/* Tags filter */}
-        {allTags.length > 0 && (
-          <div className="px-4 py-3">
-            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-              Tags
-            </div>
-            <div className="space-y-0.5 max-h-72 overflow-y-auto">
-              {allTags.map((tag) => {
-                const p = tagPalette(tag.name);
-                return (
+        {sidebarOpen && (
+          <div className="overflow-y-auto flex-1">
+            {/* File type filter — dynamic from loaded assets */}
+            {availableExts.length > 0 && (
+              <div className="px-4 py-3 border-b border-border/50">
+                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+                  File type
+                </div>
+                {availableExts.map(({ ext, count }) => (
                   <label
-                    key={tag.id}
+                    key={ext}
                     className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
                   >
                     <input
                       type="checkbox"
-                      checked={selectedTags.includes(tag.name)}
-                      onChange={() => toggleTag(tag.name)}
-                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                      checked={selectedExts.includes(ext)}
+                      onChange={() => toggleExt(ext)}
+                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
                     />
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
-                    >
-                      {tag.name}
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
+                    <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
+                      .{ext}
                     </span>
-                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
-                      {tag.asset_count}
-                    </span>
+                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
                   </label>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )}
+
+            {/* Tags filter */}
+            {allTags.length > 0 && (
+              <div className="px-4 py-3">
+                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+                  Tags
+                </div>
+                <div className="space-y-0.5 max-h-72 overflow-y-auto">
+                  {allTags.map((tag) => {
+                    const p = tagPalette(tag.name);
+                    return (
+                      <label
+                        key={tag.id}
+                        className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTags.includes(tag.name)}
+                          onChange={() => toggleTag(tag.name)}
+                          className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                        />
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
+                        >
+                          {tag.name}
+                        </span>
+                        <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                          {tag.asset_count}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -1373,6 +2177,37 @@ export function AssetBrowser() {
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
           <div className="flex items-center gap-2 ml-auto">
+            {/* Select toggle */}
+            <button
+              onClick={() => { if (selectionMode) { exitSelectionMode(); } else { setSelectionMode(true); } }}
+              className={`btn-sm text-xs px-3 py-1.5 rounded-lg border transition-colors ${selectionMode ? 'bg-accent/15 text-accent-light border-accent/30 hover:bg-accent/25' : 'border-border text-content-muted hover:text-content-primary hover:bg-surface-3'}`}
+            >
+              {selectionMode ? 'Cancel' : 'Select'}
+            </button>
+            {/* View toggle */}
+            <div className="flex items-center border border-border rounded-lg overflow-hidden">
+              <button
+                onClick={() => setViewMode('grid')}
+                aria-label="Card view"
+                title="Card view"
+                className={`p-1.5 transition-colors ${viewMode === 'grid' ? 'bg-surface-3 text-content-primary' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                aria-label="List view"
+                title="List view"
+                className={`p-1.5 transition-colors ${viewMode === 'list' ? 'bg-surface-3 text-content-primary' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+              </button>
+            </div>
+
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value as SortKey)}
@@ -1382,22 +2217,6 @@ export function AssetBrowser() {
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
-
-            <button onClick={() => setShowWizard(true)} disabled={uploading} className="btn-primary py-2">
-              {uploading ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  {uploadProgress}%
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                  </svg>
-                  Upload
-                </>
-              )}
-            </button>
           </div>
         </div>
 
@@ -1405,7 +2224,7 @@ export function AssetBrowser() {
         {(!loading && (hasFilters || displayed.length > 0)) && (
           <div className="px-6 py-2 flex items-center gap-2 flex-wrap border-b border-border/50 flex-shrink-0 bg-surface-0/30 min-h-[40px]">
             <span className="text-xs text-content-muted">
-              {loading ? '…' : `${displayed.length} ${displayed.length === 1 ? 'asset' : 'assets'}`}
+              {loading ? '…' : `Showing ${displayed.length} of ${total} ${total === 1 ? 'asset' : 'assets'}`}
             </span>
             {selectedCategoryId && (
               <button
@@ -1429,13 +2248,13 @@ export function AssetBrowser() {
                 </svg>
               </button>
             )}
-            {selectedTypes.map((t) => (
+            {selectedExts.map((ext) => (
               <button
-                key={t}
-                onClick={() => toggleType(t)}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-surface-3 text-content-secondary hover:bg-surface-4 transition-colors"
+                key={ext}
+                onClick={() => toggleExt(ext)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-surface-3 text-content-secondary hover:bg-surface-4 transition-colors font-mono"
               >
-                {TYPE_LABELS[t]}
+                .{ext}
                 <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -1466,6 +2285,13 @@ export function AssetBrowser() {
           </div>
         )}
 
+        {/* Success banner */}
+        {bulkSuccess && (
+          <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-success/10 border border-success/20 text-success text-sm flex-shrink-0">
+            {bulkSuccess}
+          </div>
+        )}
+
         {/* Content area */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {/* Loading state */}
@@ -1479,7 +2305,7 @@ export function AssetBrowser() {
           {!loading && assets.length === 0 && !hasFilters && (
             <div
               className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-border rounded-2xl cursor-pointer hover:border-accent/40 transition-colors"
-              onClick={() => setShowWizard(true)}
+              onClick={upload.openWizard}
             >
               <div className="w-16 h-16 rounded-2xl bg-surface-3 flex items-center justify-center mb-5">
                 <svg className="w-8 h-8 text-content-muted" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -1491,7 +2317,7 @@ export function AssetBrowser() {
                 Drop files here or click Upload to add your first assets. Supports 3D models, audio, images, and more.
               </p>
               <button
-                onClick={(e) => { e.stopPropagation(); setShowWizard(true); }}
+                onClick={(e) => { e.stopPropagation(); upload.openWizard(); }}
                 className="btn-primary mt-5"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -1518,8 +2344,8 @@ export function AssetBrowser() {
             </div>
           )}
 
-          {/* Asset grid */}
-          {!loading && displayed.length > 0 && (
+          {/* Asset grid / list */}
+          {!loading && displayed.length > 0 && viewMode === 'grid' && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {displayed.map((asset) => (
                 <AssetCard
@@ -1532,17 +2358,51 @@ export function AssetBrowser() {
                   onDetails={() => setDetailAsset(asset)}
                   onDelete={() => handleDeleteFromCard(asset.id)}
                   onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={toggleSelect}
                 />
               ))}
             </div>
           )}
         </div>
+
+        {/* Pagination controls */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border flex-shrink-0 bg-surface-0/60">
+            <span className="text-xs text-content-muted">
+              Page {page} of {totalPages}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((p) => p - 1)}
+                disabled={page === 1}
+                className="btn-secondary btn-sm text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <svg className="w-3.5 h-3.5 mr-1 inline" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                </svg>
+                Prev
+              </button>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={page === totalPages}
+                className="btn-secondary btn-sm text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+                <svg className="w-3.5 h-3.5 ml-1 inline" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Upload wizard */}
       <UploadWizard
-        open={showWizard}
-        onClose={() => setShowWizard(false)}
+        open={upload.showWizard}
+        onClose={upload.closeWizard}
         onComplete={handleWizardComplete}
       />
 
@@ -1585,6 +2445,77 @@ export function AssetBrowser() {
             setVersionPreviewUrl(null);
           }}
         />
+      )}
+
+      {/* Add to Collection modal */}
+      {addToCollectionAssetId && (
+        <AddToCollectionInlineModal
+          assetIds={[addToCollectionAssetId]}
+          collections={collectionsForModal}
+          onClose={() => setAddToCollectionAssetId(null)}
+          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+        />
+      )}
+
+      {/* Bulk Add to Collection modal */}
+      {bulkAddToCollectionOpen && (
+        <AddToCollectionInlineModal
+          assetIds={Array.from(selectedIds)}
+          collections={collectionsForModal}
+          onClose={() => setBulkAddToCollectionOpen(false)}
+          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onAdded={() => {
+            const count = selectedIds.size;
+            setBulkAddToCollectionOpen(false);
+            setBulkSuccess(`${count} asset${count > 1 ? 's' : ''} added to collection.`);
+            setTimeout(() => setBulkSuccess(null), 3000);
+            exitSelectionMode();
+          }}
+        />
+      )}
+
+      {/* Floating bulk action bar */}
+      {selectionMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-2xl bg-surface-1 border border-border shadow-2xl shadow-black/40">
+          <span className="text-sm font-medium text-content-primary whitespace-nowrap">
+            {selectedIds.size} {selectedIds.size === 1 ? 'asset' : 'assets'} selected
+          </span>
+          <div className="w-px h-5 bg-border flex-shrink-0" />
+          <button
+            onClick={handleBulkDownload}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            {bulkActionPending ? (
+              <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            )}
+            Download ZIP
+          </button>
+          <button
+            onClick={openBulkAddToCollection}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            Add to Collection
+          </button>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkActionPending}
+            className="btn-sm text-xs flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-danger/15 text-danger hover:bg-danger/25 transition-colors border border-danger/20"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            Delete
+          </button>
+        </div>
       )}
     </div>
   );

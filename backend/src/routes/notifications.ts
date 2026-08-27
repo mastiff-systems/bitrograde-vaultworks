@@ -45,7 +45,9 @@ function fmt(n: {
 
 export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
   // List notifications for current user — unread first, max 50
-  app.get('/api/notifications', async (req, reply) => {
+  app.get('/api/notifications', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const notifications = await prisma.notification.findMany({
       where: { userId: req.user.userId },
       select: notifSelect,
@@ -56,7 +58,18 @@ export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Mark a single notification as read
-  app.patch<{ Params: { id: string } }>('/api/notifications/:id/read', async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/notifications/:id/read', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -76,7 +89,9 @@ export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Mark all notifications as read
-  app.patch('/api/notifications/read-all', async (req, reply) => {
+  app.patch('/api/notifications/read-all', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     await prisma.notification.updateMany({
       where: { userId: req.user.userId, read: false },
       data: { read: true },
@@ -85,7 +100,17 @@ export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // SSE stream — auth via ?token= since EventSource can't set headers
-  app.get('/api/notifications/stream', async (req, reply) => {
+  app.get('/api/notifications/stream', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
     if (!token) return reply.status(401).send({ error: 'token required' });
 

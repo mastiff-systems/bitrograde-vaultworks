@@ -464,40 +464,17 @@ function TrashTab() {
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export function AdminSettings() {
-  const [settings, setSettings] = useState<Record<string, string>>({});
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'storage' | 'logs' | 'trash'>('storage');
 
   useEffect(() => {
-    Promise.all([fetchSettings(), fetchStats()])
-      .then(([s, st]) => { setSettings(s); setStats(st); })
-      .catch(() => setError('Failed to load settings.'))
+    fetchStats()
+      .then((st) => setStats(st))
+      .catch(() => setError('Failed to load stats.'))
       .finally(() => setLoading(false));
   }, []);
-
-  const handleChange = (key: string, value: string) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-    setSaved(false);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await updateSettings(settings);
-      setSettings(updated);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch {
-      setError('Failed to save settings. Please try again.');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   return (
     <div className="flex-1 p-8">
@@ -505,7 +482,7 @@ export function AdminSettings() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Storage and server configuration</p>
+          <p className="page-subtitle">General server configuration and usage overview</p>
         </div>
       </div>
 

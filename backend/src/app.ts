@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { uploadRoutes } from './routes/upload.js';
@@ -10,18 +12,63 @@ import { notificationsRoutes } from './routes/notifications.js';
 import { versionsRoutes } from './routes/versions.js';
 import { categoriesRoutes } from './routes/categories.js';
 import { foldersRoutes } from './routes/folders.js';
+import { smtpSettingsRoutes } from './routes/smtp-settings.js';
+import { collectionsRoutes } from './routes/collections.js';
+import { shareRoutes } from './routes/share.js';
+import { auditRoutes } from './routes/audit.js';
 import { authenticate } from './auth/middleware.js';
 import { startTrashPurgeJob } from './jobs/trashPurge.js';
+import { prisma } from './db/client.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
-const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login', '/api/notifications/stream'];
+const AUTH_SKIP = [
+  '/health',
+  '/api/auth/register',
+  '/api/auth/login',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/notifications/stream',
+];
+
+// Paths exempt from the mustChangePassword 403 gate (routes the user needs to change their password)
+const MUST_CHANGE_PW_EXEMPT = new Set(['/api/auth/me', '/api/auth/change-password']);
+// Includes /preview for version thumbnails (MAS-570) and /download
 const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/(download|preview)$/;
+// Public share download route — unauthenticated by design
+const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
 
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false });
+  const app = Fastify({
+    logger: opts.logger ?? false,
+    ajv: {
+      customOptions: {
+        // Do not silently strip extra fields — schemas with additionalProperties:false must reject them.
+        removeAdditional: false,
+        coerceTypes: 'array',
+        useDefaults: true,
+        allErrors: true,
+      },
+    },
+  });
+
+  // Security headers on every response — registered first so all replies are covered
+  await app.register(helmet, {
+    contentSecurityPolicy: process.env.HELMET_CSP ? undefined : false,
+  });
+
+  // Rate limiting available opt-in per route via config.rateLimit
+  await app.register(rateLimit, { global: false });
+
+  const corsOrigin = process.env.CORS_ORIGIN;
+  if (process.env.NODE_ENV === 'production' && !corsOrigin) {
+    throw new Error(
+      'CORS_ORIGIN env var must be set in production (NODE_ENV=production). ' +
+      'Example: CORS_ORIGIN=https://vaultworks.example.com',
+    );
+  }
 
   await app.register(cors, {
-    origin: process.env.CORS_ORIGIN ?? '*',
+    origin: corsOrigin ?? '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
@@ -31,12 +78,25 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
 
   app.addHook('preHandler', async (req, reply) => {
     const path = req.url.split('?')[0];
-    if (!path.startsWith('/api/') || AUTH_SKIP.includes(path) || ASSET_MEDIA_RE.test(path)) return;
+    if (!path.startsWith('/api/') || AUTH_SKIP.includes(path) || ASSET_MEDIA_RE.test(path) || SHARE_TOKEN_RE.test(path)) return;
     await authenticate(req, reply);
+    if (reply.sent) return;
+
+    // Enforce mustChangePassword: block protected endpoints until the user changes their password
+    if (!MUST_CHANGE_PW_EXEMPT.has(path)) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { mustChangePassword: true },
+      });
+      if (user?.mustChangePassword) {
+        return reply.status(403).send({ error: 'Password change required' });
+      }
+    }
   });
 
   await app.register(authRoutes);
   await app.register(adminRoutes);
+  await app.register(smtpSettingsRoutes);
   await app.register(uploadRoutes);
   await app.register(filesRoutes);
   await app.register(tagsRoutes);
@@ -44,6 +104,9 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(versionsRoutes);
   await app.register(categoriesRoutes);
   await app.register(foldersRoutes);
+  await app.register(collectionsRoutes);
+  await app.register(shareRoutes);
+  await app.register(auditRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

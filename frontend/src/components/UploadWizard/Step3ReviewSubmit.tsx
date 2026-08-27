@@ -28,11 +28,18 @@ export function Step3ReviewSubmit({ state, categories }: Props) {
   const isSubmitting = state.step === 'submitting';
   const isError = state.step === 'error';
 
-  const categoryName = categories.find((c) => c.id === metadata.categoryId)?.name;
-  const subcategoryName = categories
-    .find((c) => c.id === metadata.categoryId)
-    ?.subcategories.find((s) => s.id === metadata.subcategoryId)?.name;
+  const selectedCategory = categories.find((c) => c.id === metadata.categoryId);
+  const categoryName = selectedCategory?.name;
+  const subcategoryName = selectedCategory?.subcategories.find((s) => s.id === metadata.subcategoryId)?.name;
   const licenseName = ALLOWED_LICENSES.find((l) => l.value === metadata.license)?.label ?? metadata.license;
+
+  const fileMime = file?.type ?? null;
+  const categoryMimeTypes = selectedCategory?.allowed_mime_types ?? [];
+  const isMismatch =
+    categoryMimeTypes.length > 0 && fileMime !== null && !categoryMimeTypes.includes(fileMime);
+  const suggestedCategory = isMismatch
+    ? categories.find((c) => c.id !== metadata.categoryId && c.allowed_mime_types.includes(fileMime))
+    : null;
 
   return (
     <div className="space-y-4">
@@ -81,6 +88,14 @@ export function Step3ReviewSubmit({ state, categories }: Props) {
           </div>
         )}
       </div>
+
+      {/* MIME mismatch warning */}
+      {isMismatch && (
+        <div className="px-4 py-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
+          <span className="font-medium">Warning:</span> {file?.name} — this file type may not belong in {categoryName}.
+          {suggestedCategory && <> Consider using <strong>{suggestedCategory.name}</strong> instead.</>}
+        </div>
+      )}
 
       {/* Progress bar */}
       {isSubmitting && (

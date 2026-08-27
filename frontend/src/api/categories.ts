@@ -19,6 +19,7 @@ export interface Category {
   id: string;
   name: string;
   slug: string;
+  allowed_mime_types: string[];
   created_at: string;
   updated_at: string;
   asset_count: number;

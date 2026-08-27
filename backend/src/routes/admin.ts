@@ -1,13 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
 import { Prisma, AuditAction } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getAllSettings, upsertSettings } from '../db/settings.js';
+import { invalidateStorageCache } from '../storage/index.js';
 import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
+import { logAudit } from '../lib/audit.js';
 
 const MASKED = '••••••••';
-const SECRET_KEYS = new Set(['s3_secret_key']);
+const SECRET_KEYS = new Set(['s3_secret_key', 'smtp_password']);
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid ID') });
 
@@ -27,6 +30,12 @@ const UserRoleBody = z.object({
   role: z.enum(['admin', 'user'], { message: 'role must be "admin" or "user"' }),
 });
 
+const CreateUserBody = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  role: z.enum(['admin', 'user']).default('user'),
+});
+
 function maskSecrets(settings: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(settings).map(([k, v]) => [k, SECRET_KEYS.has(k) && v ? MASKED : v]),
@@ -34,7 +43,10 @@ function maskSecrets(settings: Record<string, string>): Record<string, string> {
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  const opts = { preHandler: [requireAdmin] };
+  const opts = {
+    preHandler: [requireAdmin],
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 10, timeWindow: '1 minute' } },
+  };
 
   // GET /api/admin/stats
   app.get('/api/admin/stats', opts, async (_req, reply) => {
@@ -60,7 +72,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // PUT /api/admin/settings
-  app.put('/api/admin/settings', opts, async (req, reply) => {
+  app.put('/api/admin/settings', {
+    ...opts,
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: { type: 'string' },
+      },
+    },
+  }, async (req, reply) => {
     const body = parseBody(SettingsBody, req.body, reply);
     if (!body) return;
 
@@ -76,6 +96,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
 
     await upsertSettings(updates);
+    invalidateStorageCache();
     const updated = await getAllSettings();
     return reply.send(maskSecrets(updated));
   });
@@ -89,8 +110,77 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(users.map((u) => ({ id: u.id, email: u.email, role: u.role, created_at: u.createdAt })));
   });
 
+  // POST /api/admin/users
+  app.post('/api/admin/users', {
+    ...opts,
+    schema: {
+      body: {
+        type: 'object',
+        required: ['email', 'password'],
+        additionalProperties: false,
+        properties: {
+          email: { type: 'string', format: 'email' },
+          password: { type: 'string', minLength: 8 },
+          role: { type: 'string', enum: ['admin', 'user'] },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(CreateUserBody, req.body, reply);
+    if (!body) return;
+
+    const email = body.email.trim().toLowerCase();
+    const passwordHash = await bcrypt.hash(body.password, 12);
+
+    try {
+      const user = await prisma.user.create({
+        data: { email, passwordHash, role: body.role, mustChangePassword: true },
+        select: { id: true, email: true, role: true, mustChangePassword: true, createdAt: true },
+      });
+
+      void logAudit({
+        userId: req.user.userId,
+        action: AuditAction.USER_CREATED,
+        details: { createdUserId: user.id, role: user.role },
+        ipAddress: req.ip,
+      });
+
+      return reply.status(201).send({
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        created_at: user.createdAt,
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        return reply.status(409).send({ error: 'Email already registered' });
+      }
+      throw err;
+    }
+  });
+
   // PATCH /api/admin/users/:id/role
-  app.patch<{ Params: { id: string } }>('/api/admin/users/:id/role', opts, async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/admin/users/:id/role', {
+    ...opts,
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['role'],
+        additionalProperties: false,
+        properties: {
+          role: { type: 'string', enum: ['admin', 'user'] },
+        },
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -178,7 +268,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  // GET /api/admin/users (extended with firstName/lastName)
+  // GET /api/admin/audit-users — user list for audit log filter dropdowns
   app.get('/api/admin/audit-users', opts, async (_req, reply) => {
     const users = await prisma.user.findMany({
       select: { id: true, email: true, firstName: true, lastName: true },

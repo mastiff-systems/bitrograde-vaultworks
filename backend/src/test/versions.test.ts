@@ -4,14 +4,17 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'application/octet-stream',
-    contentLength: 12,
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'application/octet-stream',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;
@@ -245,6 +248,32 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
       .query({ token });
 
     expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('v1_hero.png');
+  });
+
+  it('serves correct filename for v2+ version with timestamp-prefixed storage key', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: 'cogwheel.stl', storageKey: 'assets/x/cogwheel.stl', assetType: '3d' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 2,
+        storageKey: 'assets/x/versions/1720000000000_cogwheel.stl',
+        mimeType: 'model/stl',
+        uploadedBy: user!.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files/${asset.id}/versions/${version.id}/download`)
+      .query({ token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('cogwheel.stl');
+    expect(res.headers['content-disposition']).not.toContain('1720000000000');
   });
 
   it('returns 404 for version belonging to different asset', async () => {
@@ -286,6 +315,30 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
       `/api/files/${asset.id}/versions/${version.id}/download`,
     );
     expect(res.status).toBe(401);
+  });
+
+  it('Content-Disposition includes version number prefix and original name with extension', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: '5-teeth-cogwheel.svg', storageKey: 'assets/cog/5-teeth-cogwheel.svg', assetType: 'image' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 2,
+        storageKey: 'assets/cog/versions/1720000000000_5-teeth-cogwheel.svg',
+        mimeType: 'image/svg+xml',
+        uploadedBy: user!.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files/${asset.id}/versions/${version.id}/download`)
+      .query({ token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toMatch(/v2_5-teeth-cogwheel\.svg/);
   });
 });
 

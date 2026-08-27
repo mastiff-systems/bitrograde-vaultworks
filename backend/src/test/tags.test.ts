@@ -17,6 +17,7 @@ vi.mock('../storage/s3.js', () => ({
 let app: FastifyInstance;
 let token: string;
 let adminToken: string;
+let userId: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -38,6 +39,7 @@ beforeEach(async () => {
     .post('/api/auth/register')
     .send({ email: 'user@example.com', password: 'password123' });
   token = userRes.body.token;
+  userId = userRes.body.user.id;
 });
 
 // --- GET /api/tags ---
@@ -168,7 +170,7 @@ describe('DELETE /api/tags/:id', () => {
 describe('PUT /api/files/:id/tags', () => {
   it('sets tags on an asset and auto-creates new tags', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image', uploadedBy: userId },
     });
 
     const res = await request(app.server)
@@ -187,7 +189,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('replaces existing tags on second call', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'image' },
+      data: { originalName: 'bg.png', storageKey: 'assets/2/bg.png', assetType: 'image', uploadedBy: userId },
     });
 
     await request(app.server)
@@ -207,7 +209,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('clears tags when passed empty array', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'image' },
+      data: { originalName: 'icon.png', storageKey: 'assets/3/icon.png', assetType: 'image', uploadedBy: userId },
     });
     await request(app.server)
       .put(`/api/files/${asset.id}/tags`)
@@ -225,7 +227,7 @@ describe('PUT /api/files/:id/tags', () => {
 
   it('normalizes tag names to lowercase', async () => {
     const asset = await prisma.asset.create({
-      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'image' },
+      data: { originalName: 'test.png', storageKey: 'assets/4/test.png', assetType: 'image', uploadedBy: userId },
     });
 
     const res = await request(app.server)
@@ -298,8 +300,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('bgm.mp3');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('bgm.mp3');
   });
 
   it('filters by mimeType', async () => {
@@ -308,7 +310,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.data).toHaveLength(2);
   });
 
   it('filters by single tag', async () => {
@@ -317,8 +319,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero.png');
   });
 
   it('filters by multiple tags (AND logic)', async () => {
@@ -328,8 +330,8 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero.png');
   });
 
   it('returns empty array when no asset matches all tags', async () => {
@@ -338,7 +340,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(0);
+    expect(res.body.data).toHaveLength(0);
   });
 
   it('response includes tags array on each asset', async () => {
@@ -347,7 +349,7 @@ describe('GET /api/files filtering', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body[0].tags).toBeDefined();
-    expect(Array.isArray(res.body[0].tags)).toBe(true);
+    expect(res.body.data[0].tags).toBeDefined();
+    expect(Array.isArray(res.body.data[0].tags)).toBe(true);
   });
 });

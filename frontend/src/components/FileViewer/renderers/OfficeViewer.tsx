@@ -24,6 +24,34 @@ function wrapHtml(body: string): string {
   </style></head><body>${body}</body></html>`;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sheetToHtml(ws: any): string {
+  const rows: string[][] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ws.eachRow({ includeEmpty: false }, (row: any) => {
+    const cells: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    row.eachCell({ includeEmpty: true }, (cell: any) => {
+      cells.push(String(cell.text ?? ''));
+    });
+    rows.push(cells);
+  });
+
+  if (rows.length === 0) return '<p>Empty sheet</p>';
+
+  const [header, ...body] = rows;
+  const ths = header.map(h => `<th>${escapeHtml(h)}</th>`).join('');
+  const trs = body.map(row =>
+    `<tr>${row.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`
+  ).join('');
+
+  return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+}
+
 export function OfficeViewer({ url, filename, downloadHref, onError }: Props) {
   const [srcdoc, setSrcdoc] = useState('');
   const [loading, setLoading] = useState(true);
@@ -32,8 +60,6 @@ export function OfficeViewer({ url, filename, downloadHref, onError }: Props) {
   const [activeSheet, setActiveSheet] = useState(0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const workbookRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const xlsxRef = useRef<any>(null);
 
   const ext = filename.split('.').pop()?.toLowerCase();
 
@@ -45,7 +71,6 @@ export function OfficeViewer({ url, filename, downloadHref, onError }: Props) {
     setSheetNames([]);
     setActiveSheet(0);
     workbookRef.current = null;
-    xlsxRef.current = null;
 
     (async () => {
       try {
@@ -64,14 +89,16 @@ export function OfficeViewer({ url, filename, downloadHref, onError }: Props) {
           if (!result.value) throw new Error('DOCX conversion produced no output');
           setSrcdoc(wrapHtml(result.value));
         } else if (ext === 'xlsx') {
-          const XLSX = await import('xlsx');
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ExcelJS = (await import('exceljs')) as any;
           if (cancelled) return;
-          xlsxRef.current = XLSX;
-          const wb = XLSX.read(buffer, { type: 'array' });
+          const wb = new ExcelJS.Workbook();
+          await wb.xlsx.load(buffer);
           workbookRef.current = wb;
           if (cancelled) return;
-          setSheetNames(wb.SheetNames);
-          setSrcdoc(wrapHtml(XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[0]])));
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setSheetNames(wb.worksheets.map((ws: any) => ws.name));
+          setSrcdoc(wrapHtml(sheetToHtml(wb.worksheets[0])));
         } else {
           throw new Error(`Unsupported office format: .${ext}`);
         }
@@ -90,11 +117,9 @@ export function OfficeViewer({ url, filename, downloadHref, onError }: Props) {
   }, [url, ext, onError]);
 
   const switchSheet = (idx: number) => {
-    if (!workbookRef.current || !xlsxRef.current) return;
-    const wb = workbookRef.current;
-    const XLSX = xlsxRef.current;
+    if (!workbookRef.current) return;
     setActiveSheet(idx);
-    setSrcdoc(wrapHtml(XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[idx]])));
+    setSrcdoc(wrapHtml(sheetToHtml(workbookRef.current.worksheets[idx])));
   };
 
   if (loadError) {

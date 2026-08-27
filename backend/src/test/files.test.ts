@@ -4,18 +4,26 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'text/plain',
-    contentLength: 12,
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'text/plain',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;
 let token: string;
+let userId: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -31,6 +39,7 @@ beforeEach(async () => {
     .post('/api/auth/register')
     .send({ email: 'fileuser@example.com', password: 'password123' });
   token = res.body.token;
+  userId = res.body.user.id;
 });
 
 describe('GET /api/files', () => {
@@ -40,7 +49,7 @@ describe('GET /api/files', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body).toMatchObject({ data: [], total: 0, page: 1, limit: 50, totalPages: 0 });
   });
 
   it('returns list of assets ordered by upload date', async () => {
@@ -56,8 +65,38 @@ describe('GET /api/files', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0]).toMatchObject({ original_name: expect.any(String) });
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data[0]).toMatchObject({ original_name: expect.any(String) });
+    expect(res.body.total).toBe(2);
+    expect(res.body.page).toBe(1);
+  });
+
+  it('response includes pagination metadata', async () => {
+    await prisma.asset.create({
+      data: { originalName: 'a.txt', storageKey: 'k/a.txt', assetType: 'other' },
+    });
+    const res = await request(app.server)
+      .get('/api/files')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, page: 1, limit: 50, totalPages: 1 });
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it('page=2 returns the correct offset slice', async () => {
+    await prisma.asset.createMany({
+      data: Array.from({ length: 3 }, (_, i) => ({
+        originalName: `f${i}.txt`, storageKey: `k/f${i}.txt`, assetType: 'other',
+      })),
+    });
+    const res = await request(app.server)
+      .get('/api/files?page=2&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.total).toBe(3);
+    expect(res.body.page).toBe(2);
+    expect(res.body.totalPages).toBe(2);
   });
 
   it('returns 401 without auth', async () => {
@@ -154,8 +193,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('dragon_sprite.png');
   });
 
   it('partial match (substring) finds the asset', async () => {
@@ -164,7 +203,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
   });
 
   it('fuzzy match with typo finds the asset via trigram similarity', async () => {
@@ -174,7 +213,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'dragon_sprite.png')).toBe(true);
   });
 
   it('matches via tag name', async () => {
@@ -183,8 +222,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('dragon_sprite.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('dragon_sprite.png');
   });
 
   it('matches via description', async () => {
@@ -193,8 +232,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('background_tile.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('background_tile.png');
   });
 
   it('returns empty array when nothing matches', async () => {
@@ -203,7 +242,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.total).toBe(0);
   });
 
   it('combined with assetType filter narrows results', async () => {
@@ -213,8 +253,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.every((a: { asset_type: string }) => a.asset_type === 'image')).toBe(true);
-    expect(res.body.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
+    expect(res.body.data.every((a: { asset_type: string }) => a.asset_type === 'image')).toBe(true);
+    expect(res.body.data.some((a: { original_name: string }) => a.original_name === 'background_tile.png')).toBe(true);
   });
 
   it('combined with tags filter requires both match and tag', async () => {
@@ -224,8 +264,8 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].original_name).toBe('hero_idle.png');
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].original_name).toBe('hero_idle.png');
   });
 
   it('result includes all asset tags regardless of which tag matched', async () => {
@@ -234,9 +274,9 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body[0].tags).toBeDefined();
-    expect(Array.isArray(res.body[0].tags)).toBe(true);
-    expect(res.body[0].tags[0].name).toBe('fire');
+    expect(res.body.data[0].tags).toBeDefined();
+    expect(Array.isArray(res.body.data[0].tags)).toBe(true);
+    expect(res.body.data[0].tags[0].name).toBe('fire');
   });
 
   it('limit param caps the number of results', async () => {
@@ -246,7 +286,26 @@ describe('GET /api/files?q= (fuzzy search)', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('page=1 and page=2 results are disjoint (no duplicates)', async () => {
+    const page1 = await request(app.server)
+      .get('/api/files?q=png&page=1&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+    const page2 = await request(app.server)
+      .get('/api/files?q=png&page=2&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(page1.status).toBe(200);
+    expect(page2.status).toBe(200);
+
+    const ids1 = page1.body.data.map((a: { id: string }) => a.id);
+    const ids2 = page2.body.data.map((a: { id: string }) => a.id);
+    const overlap = ids1.filter((id: string) => ids2.includes(id));
+    expect(overlap).toHaveLength(0);
   });
 
   it('returns 401 without auth', async () => {
@@ -257,11 +316,13 @@ describe('GET /api/files?q= (fuzzy search)', () => {
 
 describe('DELETE /api/files/:id', () => {
   it('deletes asset and returns 204', async () => {
+    // Must set uploadedBy so the delete permission check passes for non-admin users.
     const asset = await prisma.asset.create({
       data: {
         originalName: 'delete-me.txt',
         storageKey: 'assets/del/delete-me.txt',
         assetType: 'other',
+        uploadedBy: userId,
       },
     });
 
@@ -275,14 +336,20 @@ describe('DELETE /api/files/:id', () => {
     expect(check).toBeNull();
   });
 
-  it('deletes thumbnail from S3 when present', async () => {
-    const { deleteFromS3 } = await import('../storage/s3.js');
+  it('deletes thumbnail when present', async () => {
+    // Access the mock provider's delete spy via the mocked module.
+    const { getStorageProvider } = await import('../storage/index.js');
+    const provider = await (getStorageProvider as ReturnType<typeof vi.fn>)();
+    const deleteMock = provider.delete as ReturnType<typeof vi.fn>;
+    deleteMock.mockClear();
+
     const asset = await prisma.asset.create({
       data: {
         originalName: 'img.png',
         storageKey: 'assets/img/img.png',
         thumbnailKey: 'assets/img/thumbnail.webp',
         assetType: 'image',
+        uploadedBy: userId,
       },
     });
 
@@ -290,7 +357,7 @@ describe('DELETE /api/files/:id', () => {
       .delete(`/api/files/${asset.id}`)
       .set('Authorization', `Bearer ${token}`);
 
-    expect(deleteFromS3).toHaveBeenCalledWith('assets/img/thumbnail.webp');
+    expect(deleteMock).toHaveBeenCalledWith('assets/img/thumbnail.webp');
   });
 
   it('returns 404 when deleting non-existent asset', async () => {
@@ -323,6 +390,14 @@ describe('GET /api/files query validation', () => {
   it('returns 400 when limit is out of range', async () => {
     const res = await request(app.server)
       .get('/api/files?limit=0')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when page=0', async () => {
+    const res = await request(app.server)
+      .get('/api/files?page=0')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(400);

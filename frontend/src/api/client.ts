@@ -48,6 +48,14 @@ export interface Asset {
   updated_at?: string | null;
 }
 
+interface PaginatedFilesResponse {
+  data: Asset[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export interface AssetVersion {
   id: string;
   version_number: number;
@@ -74,6 +82,7 @@ export interface ListFilesParams {
   subcategoryId?: string;
   format?: string;
   limit?: number;
+  page?: number;
 }
 
 /**
@@ -102,9 +111,10 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
   if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
+  if (params?.page) p.page = String(params.page);
   if (params?.tags?.length) p.tags = params.tags.join(',');
-  const { data } = await api.get<Asset[]>('/api/files', { params: p });
-  return data;
+  const { data } = await api.get<PaginatedFilesResponse>('/api/files', { params: p });
+  return data.data;
 }
 
 export async function listTags(): Promise<Tag[]> {
@@ -164,6 +174,24 @@ export async function uploadWithMetadata(
   return data[0];
 }
 
+export interface UpdateFilePayload {
+  name?: string;
+  description?: string | null;
+  categoryId?: string | null;
+  subcategoryId?: string | null;
+  tags?: string[];
+}
+
+export async function getAssetById(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
+}
+
+export async function updateFile(id: string, payload: UpdateFilePayload): Promise<Asset> {
+  const { data } = await api.patch<Asset>(`/api/files/${id}`, payload);
+  return data;
+}
+
 export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
@@ -201,6 +229,55 @@ export async function listTrashedFiles(): Promise<TrashedAsset[]> {
   const { data } = await api.get<TrashedAsset[]>('/api/trash');
   return data;
 }
+
+export interface BulkDeleteResult {
+  deleted: string[];
+  errors: { id: string; reason: string }[];
+}
+
+export async function bulkDelete(ids: string[]): Promise<BulkDeleteResult> {
+  const { data } = await api.post<BulkDeleteResult>('/api/files/bulk-delete', { ids });
+  return data;
+}
+
+export async function bulkDownload(ids: string[]): Promise<void> {
+  const resp = await api.post('/api/files/bulk-download', { ids }, { responseType: 'blob' });
+  const url = URL.createObjectURL(resp.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'assets.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export interface ShareLink {
+  id: string;
+  token: string;
+  url: string;
+  expiresAt: string | null;
+  createdAt: string;
+  createdByUserId: string | null;
+}
+
+export async function createShareLink(
+  assetId: string,
+  expiresInDays?: number,
+): Promise<{ token: string; url: string; expiresAt: string | null }> {
+  const { data } = await api.post(`/api/files/${assetId}/share`, expiresInDays != null ? { expiresInDays } : {});
+  return data;
+}
+
+export async function getShareLinks(assetId: string): Promise<ShareLink[]> {
+  const { data } = await api.get<ShareLink[]>(`/api/files/${assetId}/share`);
+  return data;
+}
+
+export async function revokeShareLinks(assetId: string): Promise<void> {
+  await api.delete(`/api/files/${assetId}/share`);
+}
+
 
 export async function listVersions(assetId: string): Promise<AssetVersion[]> {
   const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);

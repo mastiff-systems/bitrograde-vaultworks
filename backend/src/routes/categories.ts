@@ -42,6 +42,7 @@ function formatCategory(c: {
   id: string;
   name: string;
   slug: string;
+  allowedMimeTypes: string[];
   createdAt: Date;
   updatedAt: Date;
   subcategories: { id: string; name: string; slug: string; _count: { assets: number } }[];
@@ -51,6 +52,7 @@ function formatCategory(c: {
     id: c.id,
     name: c.name,
     slug: c.slug,
+    allowed_mime_types: c.allowedMimeTypes,
     created_at: c.createdAt,
     updated_at: c.updatedAt,
     asset_count: c._count.assets,
@@ -82,6 +84,7 @@ const categorySelect = {
   id: true,
   name: true,
   slug: true,
+  allowedMimeTypes: true,
   createdAt: true,
   updatedAt: true,
   subcategories: {
@@ -102,7 +105,9 @@ const subcategorySelect = {
 } as const;
 
 export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/categories', async (_req, reply) => {
+  app.get('/api/categories', {
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+  }, async (_req, reply) => {
     const categories = await prisma.category.findMany({
       select: categorySelect,
       orderBy: { name: 'asc' },
@@ -110,7 +115,20 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(categories.map(formatCategory));
   });
 
-  app.post('/api/categories', async (req, reply) => {
+  app.post('/api/categories', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['name'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          slug: { type: 'string', minLength: 1, maxLength: 255 },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const body = parseBody(CreateCategoryBody, req.body, reply);
     if (!body) return;
 
@@ -131,7 +149,26 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.patch<{ Params: { id: string } }>('/api/categories/:id', async (req, reply) => {
+  app.patch<{ Params: { id: string } }>('/api/categories/:id', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 255 },
+          slug: { type: 'string', minLength: 1, maxLength: 255 },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -158,7 +195,18 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete<{ Params: { id: string } }>('/api/categories/:id', async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/categories/:id', {
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
@@ -177,6 +225,18 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { categoryId: string } }>(
     '/api/categories/:categoryId/subcategories',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['categoryId'],
+          properties: {
+            categoryId: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(CategoryIdParams, req.params, reply);
       if (!params) return;
@@ -198,6 +258,27 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { categoryId: string } }>(
     '/api/categories/:categoryId/subcategories',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['categoryId'],
+          properties: {
+            categoryId: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          required: ['name'],
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 255 },
+            slug: { type: 'string', minLength: 1, maxLength: 255 },
+          },
+        },
+      },
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(CategoryIdParams, req.params, reply);
       if (!params) return;
@@ -231,6 +312,27 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['categoryId', 'id'],
+          properties: {
+            categoryId: { type: 'string', format: 'uuid' },
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 255 },
+            slug: { type: 'string', minLength: 1, maxLength: 255 },
+          },
+        },
+      },
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(SubcategoryParams, req.params, reply);
       if (!params) return;
@@ -266,6 +368,19 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['categoryId', 'id'],
+          properties: {
+            categoryId: { type: 'string', format: 'uuid' },
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+      },
+      config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+    },
     async (req, reply) => {
       const params = parseParams(SubcategoryParams, req.params, reply);
       if (!params) return;

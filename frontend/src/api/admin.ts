@@ -47,10 +47,21 @@ export async function updateUserRole(id: string, role: 'admin' | 'user'): Promis
   return data;
 }
 
+export interface CreateUserPayload {
+  email: string;
+  password: string;
+  role: 'admin' | 'user';
+}
+
+export async function createUser(payload: CreateUserPayload): Promise<AdminUser> {
+  const { data } = await api.post<AdminUser>('/api/admin/users', payload);
+  return data;
+}
+
 export type AuditAction =
   | 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE'
   | 'SHARE' | 'REVOKE_SHARE' | 'UPDATE_METADATA'
-  | 'LOGIN' | 'LOGOUT' | 'RESTORE';
+  | 'LOGIN' | 'LOGOUT' | 'RESTORE' | 'USER_CREATED';
 
 export interface AuditLogEntry {
   id: string;
@@ -79,6 +90,30 @@ export interface AuditLogsParams {
   userId?: string;
   from?: string;
   to?: string;
+}
+
+export interface SmtpSettings {
+  smtp_host: string;
+  smtp_port: string;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_from_address: string;
+  smtp_encryption: string;
+}
+
+export async function fetchSmtpSettings(): Promise<SmtpSettings> {
+  const { data } = await api.get<SmtpSettings>('/api/settings/smtp');
+  return data;
+}
+
+export async function updateSmtpSettings(settings: Partial<SmtpSettings>): Promise<SmtpSettings> {
+  const { data } = await api.post<SmtpSettings>('/api/settings/smtp', settings);
+  return data;
+}
+
+export async function sendTestEmail(): Promise<{ success: boolean; error?: string }> {
+  const { data } = await api.post<{ success: boolean; error?: string }>('/api/settings/smtp/test');
+  return data;
 }
 
 export async function fetchAuditLogs(params?: AuditLogsParams): Promise<AuditLogsResponse> {

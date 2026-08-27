@@ -4,23 +4,29 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  // Drain the stream so the multipart parser can move on to the next part,
-  // which is what the real S3 Upload class does when it reads the body.
-  streamUploadToS3: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
-    new Promise<void>((resolve, reject) => {
-      body.resume();
-      body.on('end', resolve);
-      body.on('error', reject);
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    // Drain the stream so the multipart parser can advance to the next part,
+    // mimicking what the real S3 Upload does when it consumes the body.
+    streamUpload: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+      new Promise<void>((resolve, reject) => {
+        body.resume();
+        body.on('end', resolve);
+        body.on('error', reject);
+      }),
+    ),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from(''),
+      contentType: 'application/octet-stream',
+      contentLength: 0,
     }),
-  ),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from(''),
-    contentType: 'application/octet-stream',
-    contentLength: 0,
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 // Minimal valid 1×1 RGB PNG for thumbnail generation testing
@@ -207,6 +213,87 @@ describe('POST /api/upload', () => {
       const record = await prisma.asset.findUnique({ where: { id } });
       expect(record).not.toBeNull();
       expect(record!.originalName).toBe('asset-Copy.png');
+    });
+  });
+
+  // --- MIME type category mismatch (MAS-429) ---
+
+  describe('MIME type category mismatch warnings', () => {
+    it('returns X-Category-Mismatch: true header when file MIME is not in the category allowed list', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'VideoOnly', slug: 'video-only', allowedMimeTypes: ['video/mp4', 'video/webm'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('audio-data'), { filename: 'track.mp3', contentType: 'audio/mpeg' });
+
+      expect(res.status).toBe(201);
+      expect(res.headers['x-category-mismatch']).toBe('true');
+    });
+
+    it('does not return X-Category-Mismatch header when file MIME matches the category allowed list', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'AudioOnly', slug: 'audio-only', allowedMimeTypes: ['audio/mpeg', 'audio/wav'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('audio-data'), { filename: 'track.mp3', contentType: 'audio/mpeg' });
+
+      expect(res.status).toBe(201);
+      expect(res.headers['x-category-mismatch']).toBeUndefined();
+    });
+
+    it('upload with MIME mismatch still returns 201 with the asset record', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'DocsOnly', slug: 'docs-only', allowedMimeTypes: ['application/pdf'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'readme.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0].id).toBeTruthy();
+      expect(res.body[0].original_name).toBe('readme.txt');
+    });
+
+    it('sets category_mismatch_warning: true on the mismatched asset in the response body', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'ScriptsOnly', slug: 'scripts-only', allowedMimeTypes: ['application/javascript'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'note.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].category_mismatch_warning).toBe(true);
+    });
+
+    it('does not set category_mismatch_warning when MIME matches', async () => {
+      const cat = await prisma.category.create({
+        data: { name: 'TextOnly', slug: 'text-only', allowedMimeTypes: ['text/plain'] },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('category_id', cat.id)
+        .attach('files', Buffer.from('plain text'), { filename: 'note.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].category_mismatch_warning).toBeUndefined();
     });
   });
 });

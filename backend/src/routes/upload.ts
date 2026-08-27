@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Transform } from 'stream';
 import { prisma } from '../db/client.js';
-import { uploadToS3, streamUploadToS3, deleteFromS3 } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
@@ -61,7 +61,15 @@ function detectAssetType(filename: string, mime: string): string {
 }
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/api/upload', async (req, reply) => {
+  app.post('/api/upload', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
+    const storage = await getStorageProvider();
     const parts = req.parts();
     const uploaded: object[] = [];
 
@@ -97,7 +105,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       if (!filenameResult.success) {
         part.file.resume();
         // Clean up any S3 objects we already streamed before erroring out.
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({
           error: 'Invalid filename',
           fields: { filename: filenameResult.error.issues.map((i) => i.message) },
@@ -141,10 +149,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         part.file.pipe(counter);
 
         try {
-          await streamUploadToS3(storageKey, counter, mime);
+          await storage.streamUpload(storageKey, counter, mime);
         } catch (err) {
           // Clean up already-completed streamed uploads before propagating.
-          await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+          await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
           throw err;
         }
 
@@ -160,7 +168,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const rawMeta = coerceMeta(fields);
     const metaResult = UploadMetaSchema.safeParse(rawMeta);
     if (!metaResult.success) {
-      await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+      await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
       const fieldErrors: Record<string, string[]> = {};
       for (const issue of metaResult.error.issues) {
         const key = issue.path.join('.') || '_';
@@ -171,21 +179,28 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const meta = metaResult.data;
 
     // Validate category/subcategory FK references if provided
+    const mismatchedAssetIds = new Set<string>();
+    let categoryMimeRestrictions: string[] = [];
+
     if (meta.category_id) {
-      const cat = await prisma.category.findUnique({ where: { id: meta.category_id }, select: { id: true } });
+      const cat = await prisma.category.findUnique({
+        where: { id: meta.category_id },
+        select: { id: true, allowedMimeTypes: true },
+      });
       if (!cat) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'category_id does not exist' });
       }
+      categoryMimeRestrictions = cat.allowedMimeTypes ?? [];
     }
     if (meta.subcategory_id) {
       const sub = await prisma.subcategory.findUnique({ where: { id: meta.subcategory_id }, select: { id: true, categoryId: true } });
       if (!sub) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'subcategory_id does not exist' });
       }
       if (meta.category_id && sub.categoryId !== meta.category_id) {
-        await Promise.all(streamedFiles.map((f) => deleteFromS3(f.storageKey).catch(() => {})));
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         return reply.status(400).send({ error: 'subcategory_id does not belong to category_id' });
       }
     }
@@ -208,7 +223,11 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       const storageKey = `assets/${id}/${resolvedName}`;
       const assetType = detectAssetType(resolvedName, mime);
 
-      await uploadToS3(storageKey, buffer, mime);
+      if (categoryMimeRestrictions.length > 0 && !categoryMimeRestrictions.includes(mime)) {
+        mismatchedAssetIds.add(id);
+      }
+
+      await storage.upload(storageKey, buffer, mime);
 
       let thumbnailKey: string | undefined;
       if (assetType === 'image' || assetType === 'sprite') {
@@ -216,7 +235,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         if (thumbBuffer) {
           thumbnailKey = `assets/${id}/thumbnail.webp`;
           try {
-            await uploadToS3(thumbnailKey, thumbBuffer, 'image/webp');
+            await storage.upload(thumbnailKey, thumbBuffer, 'image/webp');
           } catch {
             thumbnailKey = undefined;
           }
@@ -276,8 +295,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           }
         }
       } catch (err) {
-        await deleteFromS3(storageKey).catch(() => {});
-        if (thumbnailKey) await deleteFromS3(thumbnailKey).catch(() => {});
+        await storage.delete(storageKey).catch(() => {});
+        if (thumbnailKey) await storage.delete(thumbnailKey).catch(() => {});
         throw err;
       }
 
@@ -345,6 +364,10 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     for (const sf of streamedFiles) {
       const { id, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes } = sf;
 
+      if (categoryMimeRestrictions.length > 0 && !categoryMimeRestrictions.includes(mime)) {
+        mismatchedAssetIds.add(id);
+      }
+
       let asset;
       let tagRecords: Array<{ id: string; name: string }> = [];
       try {
@@ -397,8 +420,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           }
         }
       } catch (err) {
-        // S3 object already exists; clean it up to avoid orphans.
-        await deleteFromS3(storageKey).catch(() => {});
+        // Storage object already exists; clean it up to avoid orphans.
+        await storage.delete(storageKey).catch(() => {});
         throw err;
       }
 
@@ -460,6 +483,16 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       })();
     }
 
-    return reply.status(201).send(uploaded);
+    if (mismatchedAssetIds.size > 0) {
+      reply.header('X-Category-Mismatch', 'true');
+    }
+
+    const response = uploaded.map((a: any) =>
+      mismatchedAssetIds.has(a.id)
+        ? { ...a, category_mismatch_warning: true }
+        : a
+    );
+
+    return reply.status(201).send(response);
   });
 }

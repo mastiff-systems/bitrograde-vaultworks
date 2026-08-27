@@ -2,10 +2,16 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slug: string }[] }[] = [
+const TAXONOMY: {
+  name: string;
+  slug: string;
+  mimeTypes: string[];
+  subcategories: { name: string; slug: string }[];
+}[] = [
   {
     name: 'Graphics',
     slug: 'graphics',
+    mimeTypes: ['image/png', 'image/jpeg', 'image/svg+xml', 'image/gif', 'image/webp', 'image/tiff', 'image/bmp', 'application/postscript', 'image/vnd.adobe.photoshop'],
     subcategories: [
       { name: 'Illustrations', slug: 'illustrations' },
       { name: 'UI Kits', slug: 'ui-kits' },
@@ -21,6 +27,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Photos',
     slug: 'photos',
+    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/x-raw', 'image/heic', 'image/heif'],
     subcategories: [
       { name: 'Nature', slug: 'nature' },
       { name: 'Architecture', slug: 'architecture' },
@@ -34,6 +41,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Audio',
     slug: 'audio',
+    mimeTypes: ['audio/mpeg', 'audio/wav', 'audio/flac', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/mp4'],
     subcategories: [
       { name: 'Music Tracks', slug: 'music-tracks' },
       { name: 'Sound Effects', slug: 'sound-effects' },
@@ -44,6 +52,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Video',
     slug: 'video',
+    mimeTypes: ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/mpeg', 'video/x-matroska'],
     subcategories: [
       { name: 'Footage', slug: 'footage' },
       { name: 'Motion Graphics', slug: 'motion-graphics' },
@@ -54,6 +63,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Fonts',
     slug: 'fonts',
+    mimeTypes: ['font/ttf', 'font/otf', 'font/woff', 'font/woff2', 'application/font-woff', 'application/vnd.ms-fontobject'],
     subcategories: [
       { name: 'Serif', slug: 'serif' },
       { name: 'Sans-Serif', slug: 'sans-serif' },
@@ -65,6 +75,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: '3D Models',
     slug: '3d-models',
+    mimeTypes: ['model/gltf+json', 'model/gltf-binary', 'model/obj', 'application/octet-stream'],
     subcategories: [
       { name: 'Characters', slug: 'characters' },
       { name: 'Environments', slug: 'environments' },
@@ -77,6 +88,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Templates',
     slug: 'templates',
+    mimeTypes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/vnd.ms-powerpoint', 'image/png', 'image/jpeg', 'application/zip'],
     subcategories: [
       { name: 'Presentation', slug: 'presentation' },
       { name: 'Social Media', slug: 'social-media' },
@@ -87,6 +99,7 @@ const TAXONOMY: { name: string; slug: string; subcategories: { name: string; slu
   {
     name: 'Scripts & Plugins',
     slug: 'scripts-plugins',
+    mimeTypes: ['text/javascript', 'application/javascript', 'text/plain', 'application/zip', 'application/x-tar'],
     subcategories: [
       { name: 'Shaders', slug: 'shaders' },
       { name: 'Game Scripts', slug: 'game-scripts' },
@@ -102,8 +115,8 @@ async function main() {
   for (const cat of TAXONOMY) {
     const category = await prisma.category.upsert({
       where: { slug: cat.slug },
-      update: { name: cat.name },
-      create: { name: cat.name, slug: cat.slug },
+      update: { name: cat.name, allowedMimeTypes: cat.mimeTypes },
+      create: { name: cat.name, slug: cat.slug, allowedMimeTypes: cat.mimeTypes },
     });
 
     for (const sub of cat.subcategories) {

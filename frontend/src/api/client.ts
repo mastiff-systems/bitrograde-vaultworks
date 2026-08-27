@@ -48,7 +48,7 @@ export interface Asset {
   updated_at?: string | null;
 }
 
-interface PaginatedFilesResponse {
+export interface PaginatedFilesResponse {
   data: Asset[];
   total: number;
   page: number;
@@ -102,7 +102,7 @@ export async function findAssetByExactName(name: string): Promise<Pick<Asset, 'i
   return data.length > 0 ? data[0] : null;
 }
 
-export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
+export async function listFiles(params?: ListFilesParams): Promise<PaginatedFilesResponse> {
   const p: Record<string, string> = {};
   if (params?.q) p.q = params.q;
   if (params?.assetType) p.assetType = params.assetType;
@@ -114,7 +114,7 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.page) p.page = String(params.page);
   if (params?.tags?.length) p.tags = params.tags.join(',');
   const { data } = await api.get<PaginatedFilesResponse>('/api/files', { params: p });
-  return data.data;
+  return data;
 }
 
 export async function listTags(): Promise<Tag[]> {

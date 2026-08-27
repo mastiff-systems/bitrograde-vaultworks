@@ -434,13 +434,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (contentLength) reply.header('Content-Length', contentLength);
 
     logAudit({
-      prisma,
-      userId:    authResult,
+      userId:    authResult ?? undefined,
       assetId:   params.id,
       assetName: asset.originalName,
       ipAddress: req.ip,
       action:    'DOWNLOAD',
-      metadata:  { userAgent: req.headers['user-agent'] },
+      details:   { userAgent: req.headers['user-agent'] },
     });
 
     return reply.send(stream);

@@ -5,6 +5,7 @@ import { useTheme } from '../contexts/ThemeContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { useUpload } from '../contexts/UploadContext.js';
 import { NotificationBell } from './NotificationBell.js';
+import { ThemeToggle } from './ThemeToggle.js';
 
 interface Props {
   children: ReactNode;

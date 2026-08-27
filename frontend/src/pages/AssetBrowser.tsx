@@ -2433,7 +2433,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             // Remove ?preview= from URL without adding a history entry so that
             // pressing Back after an explicit close does not re-open the viewer.
             pushUrlFilters(
-              { q: debouncedQuery, types: selectedTypes, tags: selectedTags, sort,
+              { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
                 category: selectedCategoryId, subcategory: selectedSubcategoryId,
                 folder: activeFolderId, preview: null },
               true, // replaceState

@@ -49,14 +49,15 @@ function actionLabel(action: AuditAction): string {
   const map: Record<AuditAction, string> = {
     UPLOAD: 'Upload', DOWNLOAD: 'Download', VIEW: 'View', UPDATE: 'Update',
     DELETE: 'Delete', SHARE: 'Share', REVOKE_SHARE: 'Revoke share',
-    UPDATE_METADATA: 'Update metadata', LOGIN: 'Login', LOGOUT: 'Logout', RESTORE: 'Restore',
+    UPDATE_METADATA: 'Update metadata', LOGIN: 'Login', LOGOUT: 'Logout',
+    RESTORE: 'Restore', USER_CREATED: 'User created',
   };
   return map[action] ?? action;
 }
 
 const AUDIT_ACTIONS: AuditAction[] = [
   'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE',
-  'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'LOGIN', 'LOGOUT', 'RESTORE',
+  'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'LOGIN', 'LOGOUT', 'RESTORE', 'USER_CREATED',
 ];
 
 const ACTIVITY_ACTIONS: AuditAction[] = ['LOGIN', 'LOGOUT', 'UPLOAD', 'DELETE', 'RESTORE', 'UPDATE_METADATA', 'UPDATE'];
@@ -469,11 +470,38 @@ export function AdminSettings() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'storage' | 'logs' | 'trash'>('storage');
 
+  // Storage settings state
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleChange = (key: string, value: string) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    try {
+      await updateSettings(settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      setError('Failed to save settings.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   useEffect(() => {
     fetchStats()
       .then((st) => setStats(st))
       .catch(() => setError('Failed to load stats.'))
       .finally(() => setLoading(false));
+    fetchSettings()
+      .then((s) => setSettings(s))
+      .catch(() => {/* settings will stay empty */});
   }, []);
 
   return (

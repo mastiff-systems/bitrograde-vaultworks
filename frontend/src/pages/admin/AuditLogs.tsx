@@ -11,10 +11,15 @@ const ACTION_STYLES: Record<AuditAction, string> = {
   DELETE:          'bg-danger/15 text-danger',
   SHARE:           'bg-purple-500/15 text-purple-400',
   REVOKE_SHARE:    'bg-orange-500/15 text-orange-400',
+  LOGIN:           'bg-teal-500/15 text-teal-400',
+  LOGOUT:          'bg-surface-4 text-content-muted',
+  RESTORE:         'bg-sky-500/15 text-sky-400',
+  USER_CREATED:    'bg-indigo-500/15 text-indigo-400',
 };
 
 const ACTIONS: AuditAction[] = [
-  'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'UPDATE_METADATA', 'DELETE', 'SHARE', 'REVOKE_SHARE',
+  'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'UPDATE_METADATA', 'DELETE',
+  'SHARE', 'REVOKE_SHARE', 'LOGIN', 'LOGOUT', 'RESTORE', 'USER_CREATED',
 ];
 
 function formatDateTime(d: string): string {
@@ -39,12 +44,12 @@ export function AuditLogs({ onNavigateToAsset }: { onNavigateToAsset?: (assetId:
     setError(null);
     try {
       const res = await fetchAuditLogs({
-        action:    action || undefined,
-        startDate: from ? new Date(from).toISOString() : undefined,
-        endDate:   to   ? new Date(to).toISOString()   : undefined,
+        action: action || undefined,
+        from:   from ? new Date(from).toISOString() : undefined,
+        to:     to   ? new Date(to).toISOString()   : undefined,
         page: p,
       });
-      setRows(res.data);
+      setRows(res.logs);
       setTotalPages(res.totalPages);
     } catch {
       setError('Failed to load audit logs.');
@@ -157,10 +162,10 @@ export function AuditLogs({ onNavigateToAsset }: { onNavigateToAsset?: (assetId:
                   rows.map((row) => (
                     <tr key={row.id}>
                       <td className="text-content-secondary text-sm whitespace-nowrap">
-                        {formatDateTime(row.createdAt)}
+                        {formatDateTime(row.created_at)}
                       </td>
                       <td className="text-content-primary text-sm">
-                        {row.user?.email ?? <span className="text-content-muted italic">deleted user</span>}
+                        {row.user_email ?? <span className="text-content-muted italic">deleted user</span>}
                       </td>
                       <td>
                         <span className={`badge text-xs font-semibold uppercase tracking-wide ${ACTION_STYLES[row.action]}`}>
@@ -168,15 +173,15 @@ export function AuditLogs({ onNavigateToAsset }: { onNavigateToAsset?: (assetId:
                         </span>
                       </td>
                       <td className="text-sm">
-                        {row.asset ? (
+                        {row.asset_name ? (
                           <button
-                            onClick={() => row.assetId && onNavigateToAsset?.(row.assetId)}
+                            onClick={() => row.asset_id && onNavigateToAsset?.(row.asset_id)}
                             className="text-accent-light font-medium hover:underline text-left"
                           >
-                            {row.asset.originalName}
+                            {row.asset_name}
                           </button>
                         ) : (
-                          <span className="text-content-muted italic">deleted asset</span>
+                          <span className="text-content-muted italic">—</span>
                         )}
                       </td>
                     </tr>

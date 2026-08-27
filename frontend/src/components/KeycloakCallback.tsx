@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { exchangeKeycloakCode } from '../auth/keycloak.js';
 import { useAuth } from '../contexts/AuthContext.js';
 
 // Handles the /auth/callback redirect from Keycloak (PKCE code exchange)
 export function KeycloakCallback() {
   const { setAuth } = useAuth();
+  const navigate = useNavigate();
   const handled = useRef(false);
 
   useEffect(() => {
@@ -29,7 +31,7 @@ export function KeycloakCallback() {
             email: payload.email ?? payload.preferred_username,
             role: payload.role ?? 'user',
           });
-          window.history.replaceState({}, '', '/');
+          navigate('/', { replace: true });
         } catch {
           window.location.replace('/');
         }

@@ -6,11 +6,12 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { copyS3Object, deleteFromS3, getS3ObjectStream, moveS3Object } from '../storage/s3.js';
 import { getStorageProvider } from '../storage/index.js';
-import { parseParams } from '../lib/validate.js';
+import { parseParams, parseBody } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
+import { ZipArchive } from 'archiver';
 
 async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<string | null | false> {
   if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
@@ -595,11 +596,287 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send(formatAsset(newAsset));
   });
 
+  const UpdateFileSchema = z.object({
+    name: z.string().min(1).optional(),
+    description: z.string().max(2000).nullable().optional(),
+    categoryId: z.string().uuid().nullable().optional(),
+    subcategoryId: z.string().uuid().nullable().optional(),
+    tags: z.array(z.string().min(1).max(100)).optional(),
+  });
+
+  // Rename / metadata edit. Tags are replaced wholesale when provided (not appended).
+  app.patch<{ Params: { id: string } }>(
+    '/api/files/:id',
+    {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', minLength: 1 },
+            description: { type: ['string', 'null'], maxLength: 2000 },
+            categoryId: { type: ['string', 'null'], format: 'uuid' },
+            subcategoryId: { type: ['string', 'null'], format: 'uuid' },
+            tags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 } },
+          },
+        },
+      },
+      config: {
+        rateLimit: {
+          max: process.env.VITEST ? 10000 : 20,
+          timeWindow: '1 minute',
+        },
+      },
+    },
+    async (req, reply) => {
+      const params = parseParams(UuidParams, req.params, reply);
+      if (!params) return;
+
+      const body = parseBody(UpdateFileSchema, req.body, reply);
+      if (!body) return;
+
+      const existing = await prisma.asset.findUnique({
+        where: { id: params.id },
+        select: { id: true, uploadedBy: true, deletedAt: true },
+      });
+      if (!existing || existing.deletedAt !== null) return reply.status(404).send({ error: 'Not found' });
+
+      const { userId, role } = req.user;
+      if (role !== 'admin' && existing.uploadedBy !== userId) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      const { tags, ...fields } = body;
+
+      const updateData: Prisma.AssetUpdateInput = {};
+      if (fields.name !== undefined) updateData.originalName = fields.name;
+      if (fields.description !== undefined) updateData.description = fields.description;
+      if (fields.categoryId !== undefined) {
+        updateData.category = fields.categoryId ? { connect: { id: fields.categoryId } } : { disconnect: true };
+      }
+      if (fields.subcategoryId !== undefined) {
+        updateData.subcategory = fields.subcategoryId ? { connect: { id: fields.subcategoryId } } : { disconnect: true };
+      }
+
+      if (tags !== undefined) {
+        await prisma.$transaction(async (tx) => {
+          const tagNames = [...new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean))];
+          for (const name of tagNames) {
+            await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+          }
+          const tagRecords = tagNames.length
+            ? await tx.tag.findMany({ where: { name: { in: tagNames } }, select: { id: true } })
+            : [];
+          await tx.assetTag.deleteMany({ where: { assetId: params.id } });
+          if (tagRecords.length > 0) {
+            await tx.assetTag.createMany({
+              data: tagRecords.map((t) => ({ assetId: params.id, tagId: t.id })),
+            });
+          }
+          await tx.asset.update({ where: { id: params.id }, data: updateData });
+        });
+      } else {
+        await prisma.asset.update({ where: { id: params.id }, data: updateData });
+      }
+
+      const updated = await prisma.asset.findUnique({ where: { id: params.id }, select: assetSelect });
+      if (!updated) return reply.status(404).send({ error: 'Not found' });
+
+      void logAudit({
+        userId:    req.user.userId,
+        assetId:   params.id,
+        assetName: updated.originalName,
+        ipAddress: req.ip,
+        action:    AuditAction.UPDATE_METADATA,
+        details:   { userAgent: req.headers['user-agent'] },
+      });
+
+      return reply.send(formatAsset(updated));
+    },
+  );
+
+  const BulkIdsSchema = z.object({
+    ids: z.array(z.string().uuid()).min(1).max(100),
+  });
+
+  // Bulk hard-delete: removes DB records and S3 objects outright (no trash step).
+  // Per-asset error model: unauthorized/missing IDs land in errors[], the rest proceed.
+  app.post('/api/files/bulk-delete', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(BulkIdsSchema, req.body, reply);
+    if (!body) return;
+
+    const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
+
+    // Trashed assets are invisible to bulk ops — they report as Not found
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
+    });
+
+    const deleted: string[] = [];
+    const errors: { id: string; reason: string }[] = [];
+
+    const authorizedAssets: typeof assets = [];
+    for (const id of ids) {
+      const asset = assets.find((a) => a.id === id);
+      if (!asset) { errors.push({ id, reason: 'Not found' }); continue; }
+      if (role !== 'admin' && asset.uploadedBy !== userId) { errors.push({ id, reason: 'Unauthorized' }); continue; }
+      authorizedAssets.push(asset);
+    }
+
+    for (const asset of authorizedAssets) {
+      try {
+        await prisma.asset.delete({ where: { id: asset.id } });
+      } catch (err) {
+        errors.push({ id: asset.id, reason: err instanceof Error ? err.message : 'Unknown error' });
+        continue;
+      }
+
+      // S3 delete: log warning on failure but still count asset as deleted (DB already gone)
+      try {
+        await deleteFromS3(asset.storageKey);
+        if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey).catch(() => {});
+      } catch (err) {
+        req.log.warn({ assetId: asset.id, err }, 'S3 delete failed after DB delete — orphaned object');
+      }
+
+      void logAudit({
+        userId,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    AuditAction.DELETE,
+        details:   { userAgent: req.headers['user-agent'], deletedAssetId: asset.id },
+      });
+
+      deleted.push(asset.id);
+    }
+
+    return reply.send({ deleted, errors });
+  });
+
+  // Bulk download: streams the requested assets as a single ZIP archive.
+  // Non-admins must own every requested asset (all-or-nothing 403).
+  app.post('/api/files/bulk-download', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(BulkIdsSchema, req.body, reply);
+    if (!body) return;
+
+    const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
+
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: { id: true, storageKey: true, originalName: true, uploadedBy: true },
+    });
+
+    if (role !== 'admin') {
+      for (const asset of assets) {
+        if (asset.uploadedBy !== userId) {
+          return reply.status(403).send({ error: 'Forbidden: you do not own all requested assets' });
+        }
+      }
+    }
+
+    reply.hijack();
+    reply.raw.setHeader('Content-Type', 'application/zip');
+    reply.raw.setHeader('Content-Disposition', 'attachment; filename=assets.zip');
+
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    archive.pipe(reply.raw);
+    archive.on('error', (err) => reply.raw.destroy(err));
+
+    const nameCounts = new Map<string, number>();
+    for (const asset of assets) {
+      const { stream } = await getS3ObjectStream(asset.storageKey);
+      const count = nameCounts.get(asset.originalName) ?? 0;
+      nameCounts.set(asset.originalName, count + 1);
+      let archiveName: string;
+      if (count === 0) {
+        archiveName = asset.originalName;
+      } else {
+        const dotIdx = asset.originalName.lastIndexOf('.');
+        archiveName = dotIdx === -1
+          ? `${asset.originalName} (${count})`
+          : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
+      }
+      archive.append(stream, { name: archiveName });
+
+      void logAudit({
+        userId,
+        assetId:   asset.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+        action:    AuditAction.DOWNLOAD,
+        details:   { userAgent: req.headers['user-agent'], bulk: true },
+      });
+    }
+
+    archive.finalize();
+  });
+
   // Soft-delete: marks the asset as trashed (sets deleted_at/deleted_by) and moves
   // its S3 objects to the trash/ prefix so live and trashed objects are distinguishable.
   // The 30-day auto-purge job (trashPurge.ts) uses storageKey from the DB, so keeping
   // the DB in sync here is all that is needed for purge to work correctly.
-  app.delete<{ Params: { id: string } }>('/api/files/:id', async (req, reply) => {
+  app.delete<{ Params: { id: string } }>('/api/files/:id', {
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 10,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 

@@ -366,6 +366,8 @@ function VersionHistory({ assetId, onVersionPreview }: { assetId: string; onVers
   const [showUpload, setShowUpload] = useState(false);
   const [message, setMessage] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  // Tracks which version is currently loaded in the preview panel
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -415,68 +417,78 @@ function VersionHistory({ assetId, onVersionPreview }: { assetId: string; onVers
         </div>
       ) : (
         <div className="space-y-1.5">
-          {[...versions].reverse().map((v, idx) => (
-            <div
-              key={v.id}
-              className={`flex items-start gap-3 p-3 rounded-lg border ${idx === 0 ? 'border-accent/30 bg-accent/5' : 'border-border bg-surface-1'}`}
-            >
-              <div className="flex-shrink-0 mt-0.5">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${idx === 0 ? 'bg-accent text-white' : 'bg-surface-3 text-content-muted'}`}>
-                  v{v.version_number}
+          {[...versions].reverse().map((v, idx) => {
+            const isSelected = selectedVersionId === v.id;
+            const isLatest = idx === 0;
+            return (
+              <div
+                key={v.id}
+                onClick={onVersionPreview ? () => {
+                  setSelectedVersionId(v.id);
+                  onVersionPreview(versionStreamUrl(assetId, v.id));
+                } : undefined}
+                className={[
+                  'flex items-start gap-3 p-3 rounded-lg border transition-colors',
+                  // Clickable only when a preview handler is wired up
+                  onVersionPreview ? 'cursor-pointer' : '',
+                  // Border + background: selected takes highest priority, then latest, then default
+                  isSelected
+                    ? 'border-accent bg-accent/15 ring-1 ring-accent/30'
+                    : isLatest
+                    ? 'border-accent/30 bg-accent/5 hover:bg-accent/10'
+                    : 'border-border bg-surface-1 hover:bg-surface-2',
+                ].join(' ')}
+                role={onVersionPreview ? 'button' : undefined}
+                aria-pressed={onVersionPreview ? isSelected : undefined}
+                title={onVersionPreview ? `Preview version ${v.version_number}` : undefined}
+              >
+                <div className="flex-shrink-0 mt-0.5">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isLatest ? 'bg-accent text-white' : 'bg-surface-3 text-content-muted'}`}>
+                    v{v.version_number}
+                  </div>
                 </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  {idx === 0 && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-light">
-                      Latest
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {isLatest && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-light">
+                        Latest
+                      </span>
+                    )}
+                    <span className="text-xs text-content-muted">
+                      {formatDate(v.uploaded_at)}
                     </span>
+                    {v.uploader && (
+                      <span className="text-xs text-content-muted truncate">
+                        · {v.uploader.email.split('@')[0]}
+                      </span>
+                    )}
+                  </div>
+                  {v.message && (
+                    <p className="text-xs text-content-secondary mt-0.5 leading-relaxed truncate">
+                      "{v.message}"
+                    </p>
                   )}
-                  <span className="text-xs text-content-muted">
-                    {formatDate(v.uploaded_at)}
-                  </span>
-                  {v.uploader && (
-                    <span className="text-xs text-content-muted truncate">
-                      · {v.uploader.email.split('@')[0]}
-                    </span>
+                  {v.size_bytes !== null && (
+                    <p className="text-[10px] text-content-muted mt-0.5 tabular-nums">
+                      {formatBytes(v.size_bytes)}
+                    </p>
                   )}
                 </div>
-                {v.message && (
-                  <p className="text-xs text-content-secondary mt-0.5 leading-relaxed truncate">
-                    "{v.message}"
-                  </p>
-                )}
-                {v.size_bytes !== null && (
-                  <p className="text-[10px] text-content-muted mt-0.5 tabular-nums">
-                    {formatBytes(v.size_bytes)}
-                  </p>
-                )}
-              </div>
-              {onVersionPreview && (
-                <button
-                  type="button"
-                  onClick={() => onVersionPreview(versionStreamUrl(assetId, v.id))}
+                {/* Download — stopPropagation so clicking this doesn't also trigger row-select */}
+                <a
+                  href={versionDownloadUrl(assetId, v.id)}
+                  download
+                  onClick={(e) => e.stopPropagation()}
                   className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
-                  title="Preview this version"
+                  title="Download this version"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
                   </svg>
-                </button>
-              )}
-              <a
-                href={versionDownloadUrl(assetId, v.id)}
-                download
-                className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
-                title="Download this version"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                </svg>
-              </a>
-            </div>
-          ))}
+                </a>
+              </div>
+            );
+          })}
         </div>
       )}
 

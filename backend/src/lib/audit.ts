@@ -25,16 +25,22 @@ async function resolveUserName(userId: string): Promise<string | undefined> {
 
 /** Write an audit log entry, denormalizing userName at write time. Fire-and-forget safe. */
 export async function logAudit(entry: AuditEntry): Promise<void> {
-  const userName = entry.userId ? await resolveUserName(entry.userId) : undefined;
-  await prisma.auditLog.create({
-    data: {
-      userId: entry.userId,
-      action: entry.action,
-      assetId: entry.assetId,
-      assetName: entry.assetName,
-      userName,
-      ipAddress: entry.ipAddress,
-      details: (entry.details ?? {}) as object,
-    },
-  });
+  try {
+    const userName = entry.userId ? await resolveUserName(entry.userId) : undefined;
+    await prisma.auditLog.create({
+      data: {
+        userId: entry.userId,
+        action: entry.action,
+        assetId: entry.assetId,
+        assetName: entry.assetName,
+        userName,
+        ipAddress: entry.ipAddress,
+        details: (entry.details ?? {}) as object,
+      },
+    });
+  } catch (err) {
+    // Callers use `void logAudit(...)` — a throw here would surface as an
+    // unhandled rejection, so an audit failure must never propagate.
+    console.error('[audit] failed to write audit log entry:', err);
+  }
 }

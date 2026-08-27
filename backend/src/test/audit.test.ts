@@ -1,58 +1,68 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const { createMock, findUniqueMock } = vi.hoisted(() => ({
+  createMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+}))
+
+vi.mock('../db/client.js', () => ({
+  prisma: {
+    auditLog: { create: createMock },
+    user: { findUnique: findUniqueMock },
+  },
+}))
+
 import { logAudit } from '../lib/audit.js'
+import { AuditAction } from '@prisma/client'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  createMock.mockResolvedValue({})
+  findUniqueMock.mockResolvedValue({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com' })
+})
 
 describe('logAudit', () => {
-  it('fires and forgets without throwing when prisma succeeds', () => {
-    const mockPrisma = {
-      auditLog: {
-        create: vi.fn().mockResolvedValue({}),
-      },
-    } as any
-
-    expect(() =>
-      logAudit({ prisma: mockPrisma, userId: 'user-1', assetId: 'asset-1', action: 'VIEW' }),
-    ).not.toThrow()
+  it('resolves without throwing when prisma succeeds', async () => {
+    await expect(
+      logAudit({ userId: 'user-1', assetId: 'asset-1', action: AuditAction.VIEW }),
+    ).resolves.toBeUndefined()
+    expect(createMock).toHaveBeenCalledTimes(1)
   })
 
-  it('never throws when prisma rejects', async () => {
+  it('never rejects when prisma rejects — fire-and-forget must be safe', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const mockPrisma = {
-      auditLog: {
-        create: vi.fn().mockRejectedValue(new Error('DB connection lost')),
-      },
-    } as any
+    createMock.mockRejectedValueOnce(new Error('DB connection lost'))
 
-    expect(() =>
-      logAudit({ prisma: mockPrisma, userId: null, assetId: null, action: 'UPLOAD' }),
-    ).not.toThrow()
+    await expect(
+      logAudit({ action: AuditAction.UPLOAD }),
+    ).resolves.toBeUndefined()
 
-    // Allow the rejected promise to propagate to the .catch() handler
-    await new Promise((r) => setTimeout(r, 0))
-
-    expect(consoleError).toHaveBeenCalledWith('[audit] write failed', expect.any(Error))
+    expect(consoleError).toHaveBeenCalledWith(
+      '[audit] failed to write audit log entry:',
+      expect.any(Error),
+    )
     consoleError.mockRestore()
   })
 
-  it('passes correct data to prisma', () => {
-    const createMock = vi.fn().mockResolvedValue({})
-    const mockPrisma = { auditLog: { create: createMock } } as any
-
-    logAudit({
-      prisma:   mockPrisma,
-      userId:   'uid-123',
-      assetId:  'aid-456',
-      action:   'DOWNLOAD',
-      metadata: { ip: '1.2.3.4', userAgent: 'Mozilla/5.0' },
+  it('passes correct data to prisma, denormalizing userName', async () => {
+    await logAudit({
+      userId:    'uid-123',
+      assetId:   'aid-456',
+      assetName: 'photo.png',
+      action:    AuditAction.DOWNLOAD,
+      ipAddress: '1.2.3.4',
+      details:   { userAgent: 'Mozilla/5.0' },
     })
 
     expect(createMock).toHaveBeenCalledWith({
       data: {
         userId:    'uid-123',
         assetId:   'aid-456',
-        assetName: null,
-        ipAddress: null,
-        action:    'DOWNLOAD',
-        details:   { ip: '1.2.3.4', userAgent: 'Mozilla/5.0' },
+        assetName: 'photo.png',
+        userName:  'Ada Lovelace',
+        ipAddress: '1.2.3.4',
+        action:    AuditAction.DOWNLOAD,
+        details:   { userAgent: 'Mozilla/5.0' },
       },
     })
   })

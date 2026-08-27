@@ -2,7 +2,6 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
-import { uploadToS3, getS3ObjectStream } from '../storage/s3.js';
 import { parseParams } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -134,7 +133,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       const thumbBuffer = await generateThumbnail(uploadBuffer);
       if (thumbBuffer) {
         newThumbnailKey = `assets/${params.id}/thumbnail.webp`;
-        await uploadToS3(newThumbnailKey, thumbBuffer, 'image/webp').catch(() => {
+        await storage.upload(newThumbnailKey, thumbBuffer, 'image/webp').catch(() => {
           newThumbnailKey = undefined;
         });
       }
@@ -282,7 +281,8 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });
 
-      const { stream, contentType, contentLength } = await getS3ObjectStream(version.storageKey);
+      const storage = await getStorageProvider();
+      const { stream, contentType, contentLength } = await storage.download(version.storageKey);
 
       reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
       reply.header('Content-Disposition', 'inline');

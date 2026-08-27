@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage.js';
 import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
@@ -9,41 +9,63 @@ import { AdminUsers } from './pages/admin/Users.js';
 import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
-import type { Page } from './components/Layout.js';
+import type { ReactNode } from 'react';
 
-const ADMIN_PAGES: Page[] = ['admin-settings', 'admin-users', 'admin-taxonomy'];
+/** Redirects non-admin users to the dashboard root. */
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 
 function AppShell() {
-  const { user } = useAuth();
-  const [page, setPage] = useState<Page>('dashboard');
-
-  const handleNavigate = (p: Page) => {
-    if (ADMIN_PAGES.includes(p) && user?.role !== 'admin') return;
-    setPage(p);
-  };
-
   return (
-    <Layout page={page} onNavigate={handleNavigate}>
-      {page === 'dashboard' && <AssetBrowser />}
-      {page === 'profile' && <ProfilePage />}
-      {page === 'admin-settings' && user?.role === 'admin' && <AdminSettings />}
-      {page === 'admin-users' && user?.role === 'admin' && <AdminUsers />}
-      {page === 'admin-taxonomy' && user?.role === 'admin' && <TaxonomyManager />}
-    </Layout>
+    <CategoryProvider>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<AssetBrowser />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route
+            path="/admin/settings"
+            element={
+              <AdminRoute>
+                <AdminSettings />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <AdminRoute>
+                <AdminUsers />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/taxonomy"
+            element={
+              <AdminRoute>
+                <TaxonomyManager />
+              </AdminRoute>
+            }
+          />
+          {/* Catch-all: unknown paths → dashboard */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+    </CategoryProvider>
   );
 }
 
 export function App() {
   const { token } = useAuth();
 
-  if (window.location.pathname === '/auth/callback') {
-    return <KeycloakCallback />;
-  }
-
-  if (!token) return <LoginPage />;
   return (
-    <CategoryProvider>
-      <AppShell />
-    </CategoryProvider>
+    <Routes>
+      {/* Keycloak PKCE callback — accessible without a token */}
+      <Route path="/auth/callback" element={<KeycloakCallback />} />
+      {/* Everything else: gate on auth */}
+      <Route path="/*" element={token ? <AppShell /> : <LoginPage />} />
+    </Routes>
   );
 }

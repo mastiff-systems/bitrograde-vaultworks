@@ -1,19 +1,18 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { NotificationBell } from './NotificationBell.js';
 import { ThemeToggle } from './ThemeToggle.js';
 
-type Page = 'dashboard' | 'admin-settings' | 'admin-users' | 'admin-taxonomy' | 'profile';
-
 interface Props {
-  page: Page;
-  onNavigate: (p: Page) => void;
   children: ReactNode;
 }
 
-function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
+function ProfileDropdown() {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const isAdmin = user?.role === 'admin';
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -52,9 +51,9 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
 
             {/* My Profile — available to all users */}
             <button
-              onClick={() => { setOpen(false); onNavigate('profile'); }}
+              onClick={() => { setOpen(false); navigate('/profile'); }}
               className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                page === 'profile'
+                location.pathname === '/profile'
                   ? 'text-accent bg-accent/5'
                   : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
               }`}
@@ -68,9 +67,9 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
             {isAdmin && (
               <>
                 <button
-                  onClick={() => { setOpen(false); onNavigate('admin-settings'); }}
+                  onClick={() => { setOpen(false); navigate('/admin/settings'); }}
                   className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-settings'
+                    location.pathname === '/admin/settings'
                       ? 'text-accent bg-accent/5'
                       : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
                   }`}
@@ -81,9 +80,9 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
                   Settings
                 </button>
                 <button
-                  onClick={() => { setOpen(false); onNavigate('admin-taxonomy'); }}
+                  onClick={() => { setOpen(false); navigate('/admin/taxonomy'); }}
                   className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-taxonomy'
+                    location.pathname === '/admin/taxonomy'
                       ? 'text-accent bg-accent/5'
                       : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
                   }`}
@@ -94,9 +93,9 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
                   Taxonomy
                 </button>
                 <button
-                  onClick={() => { setOpen(false); onNavigate('admin-users'); }}
+                  onClick={() => { setOpen(false); navigate('/admin/users'); }}
                   className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    page === 'admin-users'
+                    location.pathname === '/admin/users'
                       ? 'text-accent bg-accent/5'
                       : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
                   }`}
@@ -127,9 +126,12 @@ function ProfileDropdown({ page, onNavigate }: { page: Page; onNavigate: (p: Pag
   );
 }
 
-export function Layout({ page, onNavigate, children }: Props) {
+export function Layout({ children }: Props) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { categories, selectedCategoryId, selectedSubcategoryId, searchQuery, setSelectedCategoryId, setSelectedSubcategoryId, setSearchQuery } = useCategoryContext();
 
+  const isDashboard = location.pathname === '/';
   const selectedCategory = categories.find((c) => c.id === selectedCategoryId);
   const subcategories = selectedCategory?.subcategories ?? [];
 
@@ -142,7 +144,7 @@ export function Layout({ page, onNavigate, children }: Props) {
 
           {/* Logo */}
           <button
-            onClick={() => { onNavigate('dashboard'); setSelectedCategoryId(null); }}
+            onClick={() => { navigate('/'); setSelectedCategoryId(null); }}
             className="flex items-center gap-2 flex-shrink-0 mr-1 hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
           >
             <div className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center">
@@ -154,7 +156,7 @@ export function Layout({ page, onNavigate, children }: Props) {
           </button>
 
           {/* Category tabs — dashboard only */}
-          {page === 'dashboard' && (
+          {isDashboard && (
             <nav
               className="flex items-center gap-0.5 overflow-x-auto flex-1 min-w-0 py-1"
               aria-label="Asset categories"
@@ -187,10 +189,10 @@ export function Layout({ page, onNavigate, children }: Props) {
           )}
 
           {/* Spacer on non-dashboard pages */}
-          {page !== 'dashboard' && <div className="flex-1" />}
+          {!isDashboard && <div className="flex-1" />}
 
           {/* Global search — dashboard only */}
-          {page === 'dashboard' && (
+          {isDashboard && (
             <div className="relative flex-shrink-0 w-44 sm:w-56 lg:w-72">
               <svg
                 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
@@ -221,15 +223,15 @@ export function Layout({ page, onNavigate, children }: Props) {
 
           {/* Right controls */}
           <div className="flex items-center gap-1 flex-shrink-0 ml-1">
-            <NotificationBell onNavigateDashboard={() => onNavigate('dashboard')} />
+            <NotificationBell onNavigateDashboard={() => navigate('/')} />
             <ThemeToggle />
-            <ProfileDropdown page={page} onNavigate={onNavigate} />
+            <ProfileDropdown />
           </div>
         </div>
       </header>
 
       {/* ── Subcategory chip bar ── */}
-      {page === 'dashboard' && subcategories.length > 0 && (
+      {isDashboard && subcategories.length > 0 && (
         <div
           className="flex-shrink-0 bg-surface-0 border-b border-border/60"
           role="navigation"
@@ -278,5 +280,3 @@ export function Layout({ page, onNavigate, children }: Props) {
     </div>
   );
 }
-
-export type { Page };

@@ -17,6 +17,7 @@ vi.mock('../storage/index.js', () => ({
     }),
     delete: vi.fn().mockResolvedValue(undefined),
     copy: vi.fn().mockResolvedValue(undefined),
+    move: vi.fn().mockResolvedValue(undefined),
   }),
   invalidateStorageCache: vi.fn(),
 }));
@@ -315,7 +316,7 @@ describe('GET /api/files?q= (fuzzy search)', () => {
 });
 
 describe('DELETE /api/files/:id', () => {
-  it('deletes asset and returns 204', async () => {
+  it('soft-deletes asset (moved to trash) and returns 204', async () => {
     // Must set uploadedBy so the delete permission check passes for non-admin users.
     const asset = await prisma.asset.create({
       data: {
@@ -332,16 +333,18 @@ describe('DELETE /api/files/:id', () => {
 
     expect(res.status).toBe(204);
 
+    // DELETE is a soft-delete: the record stays, marked deleted, keyed into trash/
     const check = await prisma.asset.findUnique({ where: { id: asset.id } });
-    expect(check).toBeNull();
+    expect(check?.deletedAt).not.toBeNull();
+    expect(check?.storageKey).toBe(`trash/${asset.id}/delete-me.txt`);
   });
 
-  it('deletes thumbnail when present', async () => {
-    // Access the mock provider's delete spy via the mocked module.
+  it('moves storage object and thumbnail to trash', async () => {
+    // Access the mock provider's move spy via the mocked module.
     const { getStorageProvider } = await import('../storage/index.js');
     const provider = await (getStorageProvider as ReturnType<typeof vi.fn>)();
-    const deleteMock = provider.delete as ReturnType<typeof vi.fn>;
-    deleteMock.mockClear();
+    const moveMock = provider.move as ReturnType<typeof vi.fn>;
+    moveMock.mockClear();
 
     const asset = await prisma.asset.create({
       data: {
@@ -357,7 +360,8 @@ describe('DELETE /api/files/:id', () => {
       .delete(`/api/files/${asset.id}`)
       .set('Authorization', `Bearer ${token}`);
 
-    expect(deleteMock).toHaveBeenCalledWith('assets/img/thumbnail.webp');
+    expect(moveMock).toHaveBeenCalledWith('assets/img/img.png', `trash/${asset.id}/img.png`);
+    expect(moveMock).toHaveBeenCalledWith('assets/img/thumbnail.webp', `trash/${asset.id}/thumbnail.webp`);
   });
 
   it('returns 404 when deleting non-existent asset', async () => {

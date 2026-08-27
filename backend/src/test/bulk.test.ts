@@ -4,14 +4,24 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'text/plain',
-    contentLength: 12,
-  }),
+const { mockStorage } = vi.hoisted(() => ({
+  mockStorage: {
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'text/plain',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
+    move: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue(mockStorage),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;
@@ -89,8 +99,7 @@ describe('POST /api/files/bulk-delete', () => {
     expect(remaining).toHaveLength(0);
   });
 
-  it('calls deleteFromS3 for each deleted asset', async () => {
-    const { deleteFromS3 } = await import('../storage/s3.js');
+  it('calls storage.delete for each deleted asset', async () => {
     const a1 = await createAsset(userId, 's3_a.txt');
     const a2 = await createAsset(userId, 's3_b.txt');
 
@@ -99,8 +108,8 @@ describe('POST /api/files/bulk-delete', () => {
       .set('Authorization', `Bearer ${userToken}`)
       .send({ ids: [a1.id, a2.id] });
 
-    expect(deleteFromS3).toHaveBeenCalledWith(a1.storageKey);
-    expect(deleteFromS3).toHaveBeenCalledWith(a2.storageKey);
+    expect(mockStorage.delete).toHaveBeenCalledWith(a1.storageKey);
+    expect(mockStorage.delete).toHaveBeenCalledWith(a2.storageKey);
   });
 
   it('returns 200 with Unauthorized error when user tries to delete an asset they do not own', async () => {
@@ -301,5 +310,20 @@ describe('POST /api/files/bulk-download', () => {
       .send({ ids: ['00000000-0000-0000-0000-000000000000'] });
 
     expect(res.status).toBe(401);
+  });
+
+  it('destroys the socket instead of hanging when storage download fails (MAS-602)', async () => {
+    const asset = await createAsset(userId, 'boom.txt');
+    mockStorage.download.mockRejectedValueOnce(new Error('storage exploded'));
+
+    // The handler has already hijacked the reply when the failure occurs, so no
+    // HTTP response can be sent — the connection must be destroyed so the client
+    // errors out immediately rather than waiting forever.
+    await expect(
+      request(app.server)
+        .post('/api/files/bulk-download')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ ids: [asset.id] }),
+    ).rejects.toThrow();
   });
 });

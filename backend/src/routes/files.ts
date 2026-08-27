@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { copyS3Object, deleteFromS3, getS3ObjectStream, moveS3Object } from '../storage/s3.js';
 import { getStorageProvider } from '../storage/index.js';
+import { StorageNotFoundError } from '../storage/provider.js';
 import { parseParams, parseBody } from '../lib/validate.js';
 import { verifyLocalToken } from '../auth/tokens.js';
 import { verifyKeycloakToken } from '../auth/keycloak.js';
@@ -762,12 +762,13 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         continue;
       }
 
-      // S3 delete: log warning on failure but still count asset as deleted (DB already gone)
+      // Storage delete: log warning on failure but still count asset as deleted (DB already gone)
       try {
-        await deleteFromS3(asset.storageKey);
-        if (asset.thumbnailKey) await deleteFromS3(asset.thumbnailKey).catch(() => {});
+        const storage = await getStorageProvider();
+        await storage.delete(asset.storageKey);
+        if (asset.thumbnailKey) await storage.delete(asset.thumbnailKey).catch(() => {});
       } catch (err) {
-        req.log.warn({ assetId: asset.id, err }, 'S3 delete failed after DB delete — orphaned object');
+        req.log.warn({ assetId: asset.id, err }, 'Storage delete failed after DB delete — orphaned object');
       }
 
       void logAudit({
@@ -828,6 +829,10 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Resolve the provider before hijacking so a storage config error can still
+    // produce a normal 500 response.
+    const storage = await getStorageProvider();
+
     reply.hijack();
     reply.raw.setHeader('Content-Type', 'application/zip');
     reply.raw.setHeader('Content-Disposition', 'attachment; filename=assets.zip');
@@ -836,33 +841,42 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     archive.pipe(reply.raw);
     archive.on('error', (err) => reply.raw.destroy(err));
 
-    const nameCounts = new Map<string, number>();
-    for (const asset of assets) {
-      const { stream } = await getS3ObjectStream(asset.storageKey);
-      const count = nameCounts.get(asset.originalName) ?? 0;
-      nameCounts.set(asset.originalName, count + 1);
-      let archiveName: string;
-      if (count === 0) {
-        archiveName = asset.originalName;
-      } else {
-        const dotIdx = asset.originalName.lastIndexOf('.');
-        archiveName = dotIdx === -1
-          ? `${asset.originalName} (${count})`
-          : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
+    // After hijack() no normal reply can be sent — any storage failure must
+    // destroy the socket, otherwise the client hangs forever waiting for a
+    // response that will never come.
+    try {
+      const nameCounts = new Map<string, number>();
+      for (const asset of assets) {
+        const { stream } = await storage.download(asset.storageKey);
+        const count = nameCounts.get(asset.originalName) ?? 0;
+        nameCounts.set(asset.originalName, count + 1);
+        let archiveName: string;
+        if (count === 0) {
+          archiveName = asset.originalName;
+        } else {
+          const dotIdx = asset.originalName.lastIndexOf('.');
+          archiveName = dotIdx === -1
+            ? `${asset.originalName} (${count})`
+            : `${asset.originalName.slice(0, dotIdx)} (${count})${asset.originalName.slice(dotIdx)}`;
+        }
+        archive.append(stream, { name: archiveName });
+
+        void logAudit({
+          userId,
+          assetId:   asset.id,
+          assetName: asset.originalName,
+          ipAddress: req.ip,
+          action:    AuditAction.DOWNLOAD,
+          details:   { userAgent: req.headers['user-agent'], bulk: true },
+        });
       }
-      archive.append(stream, { name: archiveName });
 
-      void logAudit({
-        userId,
-        assetId:   asset.id,
-        assetName: asset.originalName,
-        ipAddress: req.ip,
-        action:    AuditAction.DOWNLOAD,
-        details:   { userAgent: req.headers['user-agent'], bulk: true },
-      });
+      await archive.finalize();
+    } catch (err) {
+      req.log.error({ err }, 'bulk-download: storage error after hijack — destroying socket');
+      archive.destroy();
+      reply.raw.destroy(err instanceof Error ? err : new Error(String(err)));
     }
-
-    archive.finalize();
   });
 
   // Soft-delete: marks the asset as trashed (sets deleted_at/deleted_by) and moves
@@ -898,14 +912,22 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const trashKey = `trash/${params.id}/${existing.originalName}`;
     const trashThumbnailKey = existing.thumbnailKey ? `trash/${params.id}/thumbnail.webp` : null;
 
-    // Step 3: Move main S3 object (fail-hard — nothing has changed yet if this throws)
-    await moveS3Object(existing.storageKey, trashKey);
+    // Step 3: Move main storage object (fail-hard — nothing has changed yet if this throws).
+    // A missing source object is tolerated: the DB is the source of truth, and refusing
+    // to trash an asset whose bytes are already gone would leave an undeletable ghost.
+    const storage = await getStorageProvider();
+    try {
+      await storage.move(existing.storageKey, trashKey);
+    } catch (err) {
+      if (!(err instanceof StorageNotFoundError)) throw err;
+      req.log.warn({ assetId: params.id, storageKey: existing.storageKey }, 'soft-delete: storage object already missing — trashing DB record only');
+    }
 
     // Step 4: Move thumbnail (best-effort — log failure, do not abort)
     let thumbnailMoved = false;
     if (existing.thumbnailKey && trashThumbnailKey) {
       try {
-        await moveS3Object(existing.thumbnailKey, trashThumbnailKey);
+        await storage.move(existing.thumbnailKey, trashThumbnailKey);
         thumbnailMoved = true;
       } catch (err) {
         console.error(`[files] soft-delete: failed to move thumbnail for asset ${params.id}:`, err);
@@ -997,17 +1019,18 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const restoreKey = `assets/${params.id}/${existing.originalName}`;
     const restoreThumbnailKey = existing.thumbnailKey ? `assets/${params.id}/thumbnail.webp` : null;
 
-    // Step 3: Move main S3 object (fail-hard — nothing has changed yet if this throws).
+    // Step 3: Move main storage object (fail-hard — nothing has changed yet if this throws).
     // Skip the move if storageKey is already at the restore path (e.g. legacy data never trashed).
+    const storage = await getStorageProvider();
     if (existing.storageKey !== restoreKey) {
-      await moveS3Object(existing.storageKey, restoreKey);
+      await storage.move(existing.storageKey, restoreKey);
     }
 
     // Step 4: Move thumbnail (best-effort — log failure, do not abort)
     let thumbnailMoved = false;
     if (existing.thumbnailKey && restoreThumbnailKey && existing.thumbnailKey !== restoreThumbnailKey) {
       try {
-        await moveS3Object(existing.thumbnailKey, restoreThumbnailKey);
+        await storage.move(existing.thumbnailKey, restoreThumbnailKey);
         thumbnailMoved = true;
       } catch (err) {
         console.error(`[files] restore: failed to move thumbnail for asset ${params.id}:`, err);
@@ -1069,19 +1092,22 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       throw err;
     }
 
+    // assetId must go in details: the asset row is already deleted, so a real
+    // assetId FK reference would make the audit insert fail.
     void logAudit({
       userId: req.user.userId,
       action: AuditAction.DELETE,
-      assetId: params.id,
       assetName: assetForS3.originalName,
       ipAddress: req.ip,
+      details: { purgedAssetId: params.id },
     });
 
-    // Await S3 deletions so failures are surfaced to the caller instead of silently orphaning objects.
-    // S3 DeleteObject is idempotent — returns success for non-existent keys.
-    await deleteFromS3(assetForS3.storageKey);
+    // Await storage deletions so failures are surfaced to the caller instead of silently orphaning objects.
+    // Both providers treat deleting a non-existent key as success (S3 DeleteObject is idempotent; disk tolerates ENOENT).
+    const storage = await getStorageProvider();
+    await storage.delete(assetForS3.storageKey);
     if (assetForS3.thumbnailKey) {
-      await deleteFromS3(assetForS3.thumbnailKey);
+      await storage.delete(assetForS3.thumbnailKey);
     }
 
     return reply.status(204).send();

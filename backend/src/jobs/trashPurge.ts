@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../db/client.js';
-import { deleteFromS3 } from '../storage/s3.js';
+import { getStorageProvider } from '../storage/index.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -13,21 +13,23 @@ async function purgeExpiredAssets(): Promise<void> {
     select: { id: true, storageKey: true, thumbnailKey: true, originalName: true },
   });
 
+  const storage = await getStorageProvider();
   for (const asset of expired) {
-    // Delete DB record first; if S3 fails the record is gone — orphaned S3 is recoverable,
-    // a zombie DB record that never purges is not.
+    // Delete DB record first; if storage fails the record is gone — an orphaned object is
+    // recoverable, a zombie DB record that never purges is not.
     await prisma.asset.delete({ where: { id: asset.id } });
 
-    await deleteFromS3(asset.storageKey);
+    await storage.delete(asset.storageKey);
     if (asset.thumbnailKey) {
-      await deleteFromS3(asset.thumbnailKey);
+      await storage.delete(asset.thumbnailKey);
     }
 
+    // assetId must go in details: the asset row is already deleted, so a real
+    // assetId FK reference would make the audit insert fail.
     void logAudit({
       action: AuditAction.DELETE,
-      assetId: asset.id,
       assetName: asset.originalName,
-      details: { source: 'auto-purge', cutoffDate: cutoff.toISOString() },
+      details: { source: 'auto-purge', purgedAssetId: asset.id, cutoffDate: cutoff.toISOString() },
     });
   }
 

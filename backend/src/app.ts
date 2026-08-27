@@ -15,7 +15,7 @@ import { startTrashPurgeJob } from './jobs/trashPurge.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
 const AUTH_SKIP = ['/health', '/api/auth/register', '/api/auth/login', '/api/notifications/stream'];
-const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/download$/;
+const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/(download|preview)$/;
 
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false });

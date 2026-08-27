@@ -288,3 +288,47 @@ describe('GET /api/files/:id/versions/:versionId/download', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// --- GET /api/files/:id/versions/:versionId/preview ---
+// MAS-570: ensure ?token= query-param auth passes the preHandler (ASSET_MEDIA_RE must include /preview)
+
+describe('GET /api/files/:id/versions/:versionId/preview', () => {
+  it('streams the versioned file inline via ?token= query param', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: 'hero.png', storageKey: 'assets/1/hero.png', assetType: 'image' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 1,
+        storageKey: 'assets/1/v1.png',
+        mimeType: 'image/png',
+        uploadedBy: user!.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files/${asset.id}/versions/${version.id}/preview`)
+      .query({ token });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toBe('inline');
+  });
+
+  it('returns 401 without any auth', async () => {
+    const asset = await prisma.asset.create({
+      data: { originalName: 'x.png', storageKey: 'assets/x/x.png', assetType: 'image' },
+    });
+    const user = await prisma.user.findFirst({ where: { email: 'versioner@example.com' } });
+    const version = await prisma.assetVersion.create({
+      data: { assetId: asset.id, versionNumber: 1, storageKey: 'assets/x/v1.png', uploadedBy: user!.id },
+    });
+
+    const res = await request(app.server).get(
+      `/api/files/${asset.id}/versions/${version.id}/preview`,
+    );
+    expect(res.status).toBe(401);
+  });
+});

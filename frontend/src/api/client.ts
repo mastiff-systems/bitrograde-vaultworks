@@ -279,3 +279,9 @@ export async function getAsset(id: string): Promise<Asset> {
   const { data } = await api.get<Asset>(`/api/files/${id}`);
   return data;
 }
+
+/** Fetch a single file by ID — satisfies MAS-536 acceptance criterion. */
+export async function getFile(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
+}

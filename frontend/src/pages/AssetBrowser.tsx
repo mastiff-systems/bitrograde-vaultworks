@@ -763,9 +763,12 @@ function AssetDetailModal({
             {fullAsset && (
               <>
                 <div className="col-span-2">
-                  <div className="label">Uploaded by</div>
+                  <div className="label">Created by</div>
                   <div className="text-content-primary text-xs">
-                    {resolveAttribution(fullAsset.created_by_name, fullAsset.created_by_email) ?? '—'}
+                    {resolveAttribution(fullAsset.created_by_name, fullAsset.created_by_email) ?? 'Unknown'}
+                    <span className="text-content-muted ml-1.5">
+                      · {formatDate(fullAsset.uploaded_at)}
+                    </span>
                   </div>
                 </div>
                 {fullAsset.updated_by_name || fullAsset.updated_by_email ? (

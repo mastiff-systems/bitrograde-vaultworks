@@ -1,6 +1,6 @@
 // webhook-server.mjs — listens for GitHub push events and routes to per-environment deploy scripts
-// main   → deploy-prod.sh    (port 3000, production)
-// develop → deploy-staging.sh (port 3001, staging) + deploy-dev.sh (port 3002, dev)
+// main    → deploy-prod.sh (port 3000, production)
+// develop → deploy-dev.sh  (port 3001, dev)
 import http from 'http';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
@@ -14,10 +14,7 @@ const SECRET = process.env.WEBHOOK_SECRET || 'vaultworks-webhook-secret';
 
 const DEPLOY_SCRIPTS = {
   'refs/heads/main': path.join(__dirname, 'deploy-prod.sh'),
-  'refs/heads/develop': [
-    path.join(__dirname, 'deploy-staging.sh'),
-    path.join(__dirname, 'deploy-dev.sh'),
-  ],
+  'refs/heads/develop': path.join(__dirname, 'deploy-dev.sh'),
 };
 
 const running = new Set();
@@ -95,7 +92,6 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`webhook server listening on :${PORT}`);
   console.log('Routes:');
-  console.log('  main    → deploy-prod.sh    (production, port 3000)');
-  console.log('  develop → deploy-staging.sh (staging, port 3001)');
-  console.log('           + deploy-dev.sh    (dev, port 3002)');
+  console.log('  main    → deploy-prod.sh (production, port 3000)');
+  console.log('  develop → deploy-dev.sh  (dev, port 3001)');
 });

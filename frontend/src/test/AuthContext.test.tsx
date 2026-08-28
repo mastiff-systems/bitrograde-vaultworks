@@ -98,6 +98,27 @@ describe('AuthContext', () => {
     expect(localStorage.getItem('vaultworks_token')).toBeNull();
   });
 
+  it('parses user from stored token on the very first render (MAS-615)', () => {
+    // AdminRoute checks user.role synchronously; if the token is only parsed
+    // in an effect, the first render sees user=null and redirects to /.
+    localStorage.setItem('vaultworks_token', makeToken('admin@example.com', 'admin'));
+
+    const rolesSeen: Array<string | undefined> = [];
+    function Recorder() {
+      const { user } = useAuth();
+      rolesSeen.push(user?.role);
+      return null;
+    }
+
+    render(
+      <AuthProvider>
+        <Recorder />
+      </AuthProvider>,
+    );
+
+    expect(rolesSeen[0]).toBe('admin');
+  });
+
   it('clears invalid token on mount', async () => {
     localStorage.setItem('vaultworks_token', 'not.valid.token.at.all');
 

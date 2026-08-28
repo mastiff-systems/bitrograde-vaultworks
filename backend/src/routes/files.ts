@@ -204,10 +204,10 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           LEFT JOIN asset_tags jat ON jat.asset_id = a.id
           LEFT JOIN tags t ON t.id = jat.tag_id
           WHERE (
-            similarity(a.original_name, ${q}) > 0.3
+            public.similarity(a.original_name, ${q}) > 0.3
             OR a.original_name ILIKE ${like}
             OR a.description ILIKE ${like}
-            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+            OR (t.name IS NOT NULL AND (public.similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
           )
           ${extraFilters}
         `,
@@ -217,21 +217,21 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           LEFT JOIN asset_tags jat ON jat.asset_id = a.id
           LEFT JOIN tags t ON t.id = jat.tag_id
           WHERE (
-            similarity(a.original_name, ${q}) > 0.3
+            public.similarity(a.original_name, ${q}) > 0.3
             OR a.original_name ILIKE ${like}
             OR a.description ILIKE ${like}
-            OR (t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
+            OR (t.name IS NOT NULL AND (public.similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}))
           )
           ${extraFilters}
           GROUP BY a.id, a.original_name, a.description
           ORDER BY
             MIN(CASE
-              WHEN similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
-              WHEN t.name IS NOT NULL AND (similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
+              WHEN public.similarity(a.original_name, ${q}) > 0.3 OR a.original_name ILIKE ${like} THEN 1
+              WHEN t.name IS NOT NULL AND (public.similarity(t.name, ${q}) > 0.3 OR t.name ILIKE ${like}) THEN 2
               WHEN a.description ILIKE ${like} THEN 3
               ELSE 4
             END) ASC,
-            similarity(a.original_name, ${q}) DESC,
+            public.similarity(a.original_name, ${q}) DESC,
             a.id ASC
           LIMIT ${limit}
           OFFSET ${skip}

@@ -706,8 +706,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     ids: z.array(z.string().uuid()).min(1).max(100),
   });
 
-  // Bulk hard-delete: removes DB records and S3 objects outright (no trash step).
-  // Per-asset error model: unauthorized/missing IDs land in errors[], the rest proceed.
+  // Bulk soft-delete: marks each asset as trashed (sets deleted_at/deleted_by) and moves
+  // its S3 objects to the trash/ prefix — same per-asset semantics as DELETE /api/files/:id.
+  // Per-asset error model: unauthorized/missing IDs and per-asset storage/DB failures land
+  // in errors[]; one asset's failure never aborts the rest. Trashed assets flow into
+  // GET /api/trash and the 30-day auto-purge job like single-file deletes.
   app.post('/api/files/bulk-delete', {
     schema: {
       body: {
@@ -754,25 +757,64 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       authorizedAssets.push(asset);
     }
 
+    const storage = await getStorageProvider();
+
     for (const asset of authorizedAssets) {
+      const trashKey = `trash/${asset.id}/${asset.originalName}`;
+      const trashThumbnailKey = asset.thumbnailKey ? `trash/${asset.id}/thumbnail.webp` : null;
+
+      // Move main storage object. A missing source object is tolerated: the DB is the
+      // source of truth, and refusing to trash an asset whose bytes are already gone
+      // would leave an undeletable ghost. Any other storage error fails this asset only —
+      // the DB row is untouched, so it must not proceed to the update below.
       try {
-        await prisma.asset.delete({ where: { id: asset.id } });
+        await storage.move(asset.storageKey, trashKey);
       } catch (err) {
-        errors.push({ id: asset.id, reason: err instanceof Error ? err.message : 'Unknown error' });
-        continue;
+        if (!(err instanceof StorageNotFoundError)) {
+          req.log.error({ assetId: asset.id, storageKey: asset.storageKey, err }, 'bulk-delete: storage move to trash failed');
+          errors.push({ id: asset.id, reason: 'Storage error' });
+          continue;
+        }
+        req.log.warn({ assetId: asset.id, storageKey: asset.storageKey }, 'bulk-delete: storage object already missing — trashing DB record only');
       }
 
-      // Storage delete: log warning on failure but still count asset as deleted (DB already gone)
+      // Move thumbnail (best-effort — log failure, do not abort)
+      let thumbnailMoved = false;
+      if (asset.thumbnailKey && trashThumbnailKey) {
+        try {
+          await storage.move(asset.thumbnailKey, trashThumbnailKey);
+          thumbnailMoved = true;
+        } catch (err) {
+          req.log.warn({ assetId: asset.id, err }, 'bulk-delete: failed to move thumbnail to trash');
+        }
+      }
+
+      // Soft-delete in DB — storageKey always reflects the successful main move;
+      // thumbnailKey only updated to the new trash path if the thumbnail move succeeded.
+      // deletedAt: null in the where clause guards the race where another request
+      // trashed the asset between our findMany and this update (P2025 → Not found).
       try {
-        const storage = await getStorageProvider();
-        await storage.delete(asset.storageKey);
-        if (asset.thumbnailKey) await storage.delete(asset.thumbnailKey).catch(() => {});
+        await prisma.asset.update({
+          where: { id: asset.id, deletedAt: null },
+          data: {
+            deletedAt: new Date(),
+            deletedBy: userId,
+            storageKey: trashKey,
+            thumbnailKey: thumbnailMoved ? trashThumbnailKey : asset.thumbnailKey,
+          },
+        });
       } catch (err) {
-        req.log.warn({ assetId: asset.id, err }, 'Storage delete failed after DB delete — orphaned object');
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+          errors.push({ id: asset.id, reason: 'Not found' });
+        } else {
+          errors.push({ id: asset.id, reason: err instanceof Error ? err.message : 'Unknown error' });
+        }
+        continue;
       }
 
       void logAudit({
         userId,
+        assetId: asset.id,
         assetName: asset.originalName,
         ipAddress: req.ip,
         action:    AuditAction.DELETE,

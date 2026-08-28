@@ -299,6 +299,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         passwordHash: newHash,
         passwordResetToken: null,
         passwordResetExpiresAt: null,
+        // Proving ownership of the reset email is at least as strong as knowing
+        // the admin-issued temp password, so this also lifts the change-password gate
+        mustChangePassword: false,
       },
     });
 

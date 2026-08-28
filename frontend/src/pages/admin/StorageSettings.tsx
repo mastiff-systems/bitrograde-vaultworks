@@ -28,7 +28,12 @@ const STORAGE_KEYS = [
   's3_root_folder',
 ];
 
-export function StorageSettings() {
+interface StorageSettingsProps {
+  /** Render without the page wrapper/header, for embedding inside another page's tab. */
+  embedded?: boolean;
+}
+
+export function StorageSettings({ embedded = false }: StorageSettingsProps) {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -76,20 +81,22 @@ export function StorageSettings() {
 
   if (loading) {
     return (
-      <div className="flex-1 p-8 flex items-center justify-center py-24">
+      <div className={`flex items-center justify-center py-24 ${embedded ? '' : 'flex-1 p-8'}`}>
         <div className="w-6 h-6 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 p-8">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Storage</h1>
-          <p className="page-subtitle">Configure where uploaded files are stored. Changes take effect within 30 seconds.</p>
+    <div className={embedded ? '' : 'flex-1 p-8'}>
+      {!embedded && (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Storage</h1>
+            <p className="page-subtitle">Configure where uploaded files are stored. Changes take effect within 30 seconds.</p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="max-w-2xl">
         {/* Storage type selector */}

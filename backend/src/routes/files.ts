@@ -379,14 +379,29 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       updatedAt = lastUpdate.createdAt;
     }
 
-    return reply.send({
+    const detailBody = {
       ...formatAsset(asset),
       created_by_name: createdByName,
       created_by_email: createdByEmail,
       updated_by_name: updatedByName,
       updated_by_email: updatedByEmail,
       updated_at: updatedAt,
-    });
+    };
+
+    const detailEtag = makeEtag(JSON.stringify(detailBody));
+    reply
+      .header('ETag', detailEtag)
+      .header('Cache-Control', 'no-cache')
+      .header('Last-Modified', asset.updatedAt.toUTCString());
+    if (req.headers['if-none-match'] !== undefined) {
+      if (req.headers['if-none-match'] === detailEtag) return reply.status(304).send();
+    } else if (req.headers['if-modified-since']) {
+      // Last-Modified has 1-second resolution, so floor updatedAt before comparing
+      const since = new Date(req.headers['if-modified-since']).getTime();
+      const modified = Math.floor(asset.updatedAt.getTime() / 1000) * 1000;
+      if (!Number.isNaN(since) && since >= modified) return reply.status(304).send();
+    }
+    return reply.send(detailBody);
   });
 
   // Streams the file through the backend — avoids exposing internal S3/MinIO URLs to clients

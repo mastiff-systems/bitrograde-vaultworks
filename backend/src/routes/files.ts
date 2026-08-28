@@ -203,7 +203,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           FROM assets a
           LEFT JOIN asset_tags jat ON jat.asset_id = a.id
           LEFT JOIN tags t ON t.id = jat.tag_id
-          WHERE (
+          WHERE a.deleted_at IS NULL
+          AND (
             public.similarity(a.original_name, ${q}) > 0.3
             OR a.original_name ILIKE ${like}
             OR a.description ILIKE ${like}
@@ -216,7 +217,8 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           FROM assets a
           LEFT JOIN asset_tags jat ON jat.asset_id = a.id
           LEFT JOIN tags t ON t.id = jat.tag_id
-          WHERE (
+          WHERE a.deleted_at IS NULL
+          AND (
             public.similarity(a.original_name, ${q}) > 0.3
             OR a.original_name ILIKE ${like}
             OR a.description ILIKE ${like}

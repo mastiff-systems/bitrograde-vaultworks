@@ -315,6 +315,70 @@ describe('GET /api/files?q= (fuzzy search)', () => {
   });
 });
 
+// MAS-617: the search branch's raw-SQL count + ranked-ID queries must exclude
+// soft-deleted assets. Pre-fix, `total` counted trashed rows and they consumed
+// LIMIT/OFFSET slots (phase 2 then dropped them), so pages came back short.
+describe('GET /api/files?q= excludes soft-deleted assets (MAS-617)', () => {
+  beforeEach(async () => {
+    await prisma.asset.createMany({
+      data: Array.from({ length: 3 }, (_, i) => ({
+        originalName: `mas617doc-${i + 1}.txt`,
+        storageKey: `assets/s/mas617doc-${i + 1}.txt`,
+        assetType: 'other',
+        mimeType: 'text/plain',
+      })),
+    });
+    await prisma.asset.update({
+      where: { storageKey: 'assets/s/mas617doc-2.txt' },
+      data: { deletedAt: new Date(), deletedBy: userId },
+    });
+  });
+
+  it('total and data.length agree on live assets only', async () => {
+    const res = await request(app.server)
+      .get('/api/files?q=mas617doc')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.totalPages).toBe(1);
+    const names = res.body.data.map((a: { original_name: string }) => a.original_name);
+    expect(names).not.toContain('mas617doc-2.txt');
+  });
+
+  it('soft-deleted assets do not consume page slots', async () => {
+    // 2 live matches, limit=2: pre-fix the trashed row could occupy a slot in the
+    // ranked-ID window and page 1 would come back with only 1 live row.
+    const res = await request(app.server)
+      .get('/api/files?q=mas617doc&page=1&limit=2')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.total).toBe(2);
+    expect(res.body.totalPages).toBe(1);
+  });
+
+  it('tag-matched search also excludes soft-deleted assets', async () => {
+    const tag = await prisma.tag.create({ data: { name: 'mas617tag' } });
+    const matches = await prisma.asset.findMany({
+      where: { originalName: { startsWith: 'mas617doc' } },
+    });
+    await prisma.assetTag.createMany({
+      data: matches.map((a) => ({ assetId: a.id, tagId: tag.id })),
+    });
+
+    const res = await request(app.server)
+      .get('/api/files?q=mas617tag')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.data).toHaveLength(2);
+  });
+});
+
 describe('DELETE /api/files/:id', () => {
   it('soft-deletes asset (moved to trash) and returns 204', async () => {
     // Must set uploadedBy so the delete permission check passes for non-admin users.

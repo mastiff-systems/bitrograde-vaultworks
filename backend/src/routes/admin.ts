@@ -16,13 +16,13 @@ const UuidParams = z.object({ id: z.string().uuid('Invalid ID') });
 
 const AuditLogsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
   action: z.nativeEnum(AuditAction).optional(),
   userId: z.string().uuid().optional(),
+  assetId: z.string().uuid().optional(),
   from: z.string().optional(),
   to: z.string().optional(),
 });
-
-const PAGE_SIZE = 50;
 
 const SettingsBody = z.record(z.string(), z.string());
 
@@ -208,14 +208,32 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // GET /api/admin/audit-logs
-  app.get('/api/admin/audit-logs', opts, async (req, reply) => {
+  app.get('/api/admin/audit-logs', {
+    ...opts,
+    schema: {
+      querystring: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          action: { type: 'string' },
+          userId: { type: 'string', format: 'uuid' },
+          assetId: { type: 'string', format: 'uuid' },
+          from: { type: 'string' },
+          to: { type: 'string' },
+        },
+      },
+    },
+  }, async (req, reply) => {
     const q = AuditLogsQuery.safeParse(req.query);
     if (!q.success) return reply.status(400).send({ error: 'Invalid query', details: q.error.flatten() });
-    const { page, action, userId, from, to } = q.data;
+    const { page, limit, action, userId, assetId, from, to } = q.data;
 
     const where: Prisma.AuditLogWhereInput = {};
     if (action) where.action = action;
     if (userId) where.userId = userId;
+    if (assetId) where.assetId = assetId;
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(from);
@@ -231,8 +249,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       prisma.auditLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * PAGE_SIZE,
-        take: PAGE_SIZE,
+        skip: (page - 1) * limit,
+        take: limit,
         select: {
           id: true,
           action: true,
@@ -251,8 +269,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({
       total,
       page,
-      pageSize: PAGE_SIZE,
-      totalPages: Math.ceil(total / PAGE_SIZE),
+      pageSize: limit,
+      totalPages: Math.ceil(total / limit),
       logs: logs.map((l) => ({
         id: l.id,
         action: l.action,

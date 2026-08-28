@@ -24,6 +24,11 @@ interface EmailSettingsProps {
   embedded?: boolean;
 }
 
+/** The API returns '' for a never-configured smtp_encryption, but only enum values are valid on save. */
+function normalizeSettings(s: SmtpSettings): SmtpSettings {
+  return { ...s, smtp_encryption: s.smtp_encryption || 'none' };
+}
+
 export function EmailSettings({ embedded = false }: EmailSettingsProps) {
   const [settings, setSettings] = useState<SmtpSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
@@ -35,7 +40,7 @@ export function EmailSettings({ embedded = false }: EmailSettingsProps) {
 
   useEffect(() => {
     fetchSmtpSettings()
-      .then((s) => setSettings(s))
+      .then((s) => setSettings(normalizeSettings(s)))
       .catch(() => setError('Failed to load email settings.'))
       .finally(() => setLoading(false));
   }, []);
@@ -49,8 +54,8 @@ export function EmailSettings({ embedded = false }: EmailSettingsProps) {
     setSaving(true);
     setError(null);
     try {
-      const updated = await updateSmtpSettings(settings);
-      setSettings(updated);
+      const updated = await updateSmtpSettings(normalizeSettings(settings));
+      setSettings(normalizeSettings(updated));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {

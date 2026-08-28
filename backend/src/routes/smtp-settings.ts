@@ -19,8 +19,14 @@ const SmtpSettingsBody = z.object({
   smtp_port: z.string().optional(),
   smtp_username: z.string().optional(),
   smtp_password: z.string().optional(),
-  smtp_from_address: z.string().email().optional(),
-  smtp_encryption: z.enum(['none', 'tls', 'starttls']).optional(),
+  // '' is the "not configured" sentinel that GET itself returns; accept it back
+  // ('' clears from_address, and is treated as omitted for encryption).
+  smtp_from_address: z.literal('').or(z.string().email()).optional(),
+  smtp_encryption: z
+    .literal('')
+    .transform(() => undefined)
+    .or(z.enum(['none', 'tls', 'starttls']))
+    .optional(),
 });
 
 const opts = {

@@ -1838,7 +1838,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Move ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''} to trash? You can restore them from the admin trash bin.`)) return;
+    if (!confirm(`Move ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''} to trash? You can restore ${selectedIds.size > 1 ? 'them' : 'it'} from the admin trash bin.`)) return;
     setBulkActionPending(true);
     try {
       const result = await bulkDelete(Array.from(selectedIds));

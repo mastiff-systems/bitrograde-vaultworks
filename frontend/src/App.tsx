@@ -10,6 +10,7 @@ import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
 import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { Collections } from './pages/Collections.js';
 import { ResetPassword } from './pages/ResetPassword.js';
+import { ChangePassword } from './pages/ChangePassword.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
 import type { ReactNode } from 'react';
@@ -70,7 +71,7 @@ function AppShell() {
 }
 
 export function App() {
-  const { token } = useAuth();
+  const { token, mustChangePassword } = useAuth();
 
   return (
     <Routes>
@@ -78,8 +79,9 @@ export function App() {
       <Route path="/auth/callback" element={<KeycloakCallback />} />
       {/* Password reset — accessible without a token */}
       <Route path="/reset-password" element={<ResetPassword token={new URLSearchParams(window.location.search).get('token') ?? ''} onDone={() => { window.history.replaceState(null, '', '/'); window.location.reload(); }} />} />
-      {/* Everything else: gate on auth */}
-      <Route path="/*" element={token ? <AppShell /> : <LoginPage />} />
+      {/* Everything else: gate on auth, then on the forced password change (MAS-626) —
+          the backend 403s all protected routes while mustChangePassword is set */}
+      <Route path="/*" element={token ? (mustChangePassword ? <ChangePassword /> : <AppShell />) : <LoginPage />} />
     </Routes>
   );
 }

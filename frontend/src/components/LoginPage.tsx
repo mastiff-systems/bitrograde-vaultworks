@@ -34,7 +34,11 @@ export function LoginPage() {
       const result = mode === 'login'
         ? await login(email, password)
         : await register(email, password);
-      setAuth(result.token, { userId: result.user.id, email: result.user.email, role: (result.user as { role?: 'admin' | 'user' }).role ?? 'user' });
+      setAuth(
+        result.token,
+        { userId: result.user.id, email: result.user.email, role: result.user.role ?? 'user' },
+        result.user.mustChangePassword === true,
+      );
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       setError(msg ?? 'Something went wrong. Please try again.');

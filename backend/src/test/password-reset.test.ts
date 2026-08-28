@@ -256,6 +256,55 @@ describe('POST /api/auth/reset-password', () => {
   });
 });
 
+describe('POST /api/auth/reset-password clears mustChangePassword (MAS-626)', () => {
+  it('admin-created user is unlocked by the email reset flow, not just change-password', async () => {
+    // Self-registered first user becomes admin (mustChangePassword: false)
+    const adminRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'admin@example.com', password: 'adminpass123' });
+    const adminToken = adminRes.body.token as string;
+
+    // Admin-created users get mustChangePassword: true and are gated off all protected routes
+    await request(app.server)
+      .post('/api/admin/users')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ email: 'locked@example.com', password: 'temppass123' });
+
+    const lockedLogin = await request(app.server)
+      .post('/api/auth/login')
+      .send({ email: 'locked@example.com', password: 'temppass123' });
+    expect(lockedLogin.body.user.mustChangePassword).toBe(true);
+    const gatedRes = await request(app.server)
+      .get('/api/files')
+      .set('Authorization', `Bearer ${lockedLogin.body.token}`);
+    expect(gatedRes.status).toBe(403);
+    expect(gatedRes.body.error).toMatch(/password change required/i);
+
+    // Email reset flow
+    await request(app.server)
+      .post('/api/auth/forgot-password')
+      .send({ email: 'locked@example.com' });
+    const rawToken = extractTokenFromEmail(mockSendEmail.mock.calls.length - 1);
+
+    const resetRes = await request(app.server)
+      .post('/api/auth/reset-password')
+      .send({ token: rawToken, password: 'brandnewpass123' });
+    expect(resetRes.status).toBe(200);
+
+    // Flag is cleared and protected routes are reachable again
+    const loginRes = await request(app.server)
+      .post('/api/auth/login')
+      .send({ email: 'locked@example.com', password: 'brandnewpass123' });
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.user.mustChangePassword).toBe(false);
+
+    const filesRes = await request(app.server)
+      .get('/api/files')
+      .set('Authorization', `Bearer ${loginRes.body.token}`);
+    expect(filesRes.status).toBe(200);
+  });
+});
+
 describe('Rate limit: POST /api/auth/reset-password (max 5 / minute)', () => {
   let rateLimitedApp: FastifyInstance;
 

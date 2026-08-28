@@ -13,14 +13,27 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'application/octet-stream',
-    contentLength: 12,
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+      new Promise<void>((resolve, reject) => {
+        body.resume();
+        body.on('end', resolve);
+        body.on('error', reject);
+      }),
+    ),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'application/octet-stream',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;

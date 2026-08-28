@@ -124,6 +124,55 @@ describe('POST /api/settings/smtp', () => {
     expect(getRes.body.smtp_password).toBe('••••••••');
   });
 
+  // MAS-639 regression: GET returns '' for never-configured fields, and the UI
+  // used to echo them back on save, which 400'd the whole request.
+  it('accepts smtp_encryption: "" (unset sentinel) and treats it as omitted', async () => {
+    const res = await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_from_address: 'noreply@example.com', smtp_encryption: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.smtp_from_address).toBe('noreply@example.com');
+    // still unset — '' in the response is the unset sentinel, not a stored value
+    expect(res.body.smtp_encryption).toBe('');
+
+    // A previously saved enum value survives a later save that sends ''
+    await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_encryption: 'tls' });
+    const res2 = await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_host: 'mail.example.com', smtp_encryption: '' });
+    expect(res2.status).toBe(200);
+    expect(res2.body.smtp_encryption).toBe('tls');
+  });
+
+  it('accepts smtp_from_address: "" and clears the stored value', async () => {
+    await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_from_address: 'noreply@example.com' });
+
+    const res = await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_from_address: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.smtp_from_address).toBe('');
+  });
+
+  it('still rejects an invalid smtp_encryption value', async () => {
+    const res = await request(app.server)
+      .post('/api/settings/smtp')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ smtp_encryption: 'ssl' });
+    expect(res.status).toBe(400);
+  });
+
   it('returns 401 when no token is provided', async () => {
     const res = await request(app.server)
       .post('/api/settings/smtp')

@@ -930,7 +930,7 @@ function AssetDetailModal({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Delete "${asset.original_name}"? This cannot be undone.`)) return;
+    if (!confirm(`Move "${asset.original_name}" to trash? You can restore it from the admin trash bin.`)) return;
     setDeleting(true);
     try {
       await deleteFile(asset.id);
@@ -1809,7 +1809,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    if (!confirm(`Move ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''} to trash? You can restore them from the admin trash bin.`)) return;
     setBulkActionPending(true);
     try {
       const result = await bulkDelete(Array.from(selectedIds));
@@ -1817,7 +1817,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       listTags().then(setAllTags).catch(() => {});
       exitSelectionMode();
       if (result.errors.length > 0) {
-        setError(`${result.deleted.length} deleted; ${result.errors.length} failed.`);
+        setError(`${result.deleted.length} moved to trash; ${result.errors.length} failed.`);
       }
     } catch {
       setError('Bulk delete failed. Please try again.');

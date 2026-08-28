@@ -4,6 +4,7 @@ import type { AdminStats, AuditLogEntry, AuditLogsParams, AuditAction, AuditUser
 import { listTrashedFiles, purgeFile, restoreFile } from '../../api/client.js';
 import type { TrashedAsset } from '../../api/client.js';
 import { StorageSettings } from './StorageSettings.js';
+import { EmailSettings } from './EmailSettings.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -452,7 +453,7 @@ export function AdminSettings() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'storage' | 'logs' | 'trash'>('storage');
+  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'logs' | 'trash'>('storage');
 
   useEffect(() => {
     fetchStats()
@@ -495,7 +496,7 @@ export function AdminSettings() {
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 border-b border-border mb-6">
-        {(['storage', 'trash', 'logs'] as const).map((tab) => (
+        {(['storage', 'email', 'trash', 'logs'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -505,7 +506,7 @@ export function AdminSettings() {
                 : 'border-transparent text-content-secondary hover:text-content-primary'
             }`}
           >
-            {tab === 'storage' ? 'Storage' : tab === 'trash' ? 'Trash' : 'Logs'}
+            {tab === 'storage' ? 'Storage' : tab === 'email' ? 'Email' : tab === 'trash' ? 'Trash' : 'Logs'}
           </button>
         ))}
       </div>
@@ -525,6 +526,9 @@ export function AdminSettings() {
           <StorageSettings embedded />
         </div>
       )}
+
+      {/* Email tab */}
+      {!loading && activeTab === 'email' && <EmailSettings embedded />}
 
       {/* Trash tab */}
       {!loading && activeTab === 'trash' && <TrashTab />}

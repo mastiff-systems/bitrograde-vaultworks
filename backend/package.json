@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:qa-scratch": "vitest run --config vitest.config.qa-scratch.ts",
     "test:db:start": "docker-compose --profile test up -d",
     "test:db:stop": "docker-compose --profile test down",
     "db:generate": "prisma generate",

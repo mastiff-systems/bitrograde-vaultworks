@@ -97,12 +97,24 @@ export class S3StorageProvider implements StorageProvider {
     );
   }
 
+  /**
+   * Build the CopySource value for CopyObjectCommand. The AWS SDK does NOT
+   * URL-encode CopySource (it goes into the x-amz-copy-source header verbatim),
+   * so keys containing spaces, '%', '+', '#', '?' or non-ASCII characters must
+   * be encoded here. Each path segment is encoded individually to preserve the
+   * '/' separators. `Key:` params must stay unencoded — the SDK handles those.
+   */
+  private encodeCopySource(bucket: string, key: string): string {
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    return `${bucket}/${encodedKey}`;
+  }
+
   async copy(sourceKey: string, destKey: string): Promise<void> {
     const { client, bucket, prefix } = await this.getClient();
     await client.send(
       new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `${bucket}/${this.prefixedKey(prefix, sourceKey)}`,
+        CopySource: this.encodeCopySource(bucket, this.prefixedKey(prefix, sourceKey)),
         Key: this.prefixedKey(prefix, destKey),
       }),
     );

@@ -352,6 +352,45 @@ describe('Scenario 2: S3 storage — key format and operations unchanged', () =>
     expect(dbAsset).toBeNull();
   });
 
+  it('soft-delete → restore round-trip works for filenames with spaces, %, + and non-ASCII (MAS-664)', async () => {
+    // CopyObject is the only S3 op that needs URL-encoding; this exercises it
+    // twice (delete moves to trash/, restore moves back to assets/).
+    const filename = 'my file (1) 100% +plus ü.png';
+
+    const uploadRes = await request(app.server)
+      .post('/api/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('files', TINY_PNG, { filename, contentType: 'image/png' });
+    expect(uploadRes.status).toBe(201);
+    const assetId: string = uploadRes.body[0].id;
+
+    // Soft-delete: CopyObject assets/ → trash/ must succeed despite the unsafe name
+    const delRes = await request(app.server)
+      .delete(`/api/files/${assetId}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(delRes.status).toBe(204);
+
+    const trashed = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(trashed?.deletedAt).not.toBeNull();
+    expect(trashed?.storageKey).toBe(`trash/${assetId}/${filename}`);
+
+    // Restore: CopyObject trash/ → assets/ must succeed too
+    const restoreRes = await request(app.server)
+      .post(`/api/files/${assetId}/restore`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(restoreRes.status).toBe(200);
+
+    const restored = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(restored?.deletedAt).toBeNull();
+    expect(restored?.storageKey).toBe(`assets/${assetId}/${filename}`);
+
+    // The restored object must be intact and downloadable
+    const dlRes = await request(app.server)
+      .get(`/api/files/${assetId}/download?token=${token}`);
+    expect(dlRes.status).toBe(200);
+    expect(Buffer.from(dlRes.body)).toEqual(TINY_PNG);
+  });
+
   it('storageKey format preserved when root folder prefix is set', async () => {
     // Set a non-empty root folder prefix
     await setStorage({ ...MINIO_SETTINGS, s3_root_folder: 'test-prefix' });

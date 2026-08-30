@@ -28,7 +28,11 @@ export function CategoryProvider({ children }: { children: ReactNode }) {
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    listCategories().then(setCategories).catch(() => {});
+    // Don't swallow failures silently — an empty Taxonomy with no console trace
+    // made the MAS-621 mustChangePassword lockout invisible to diagnose
+    listCategories().then(setCategories).catch((err) => {
+      console.error('Failed to load categories', err);
+    });
   }, []);
 
   function setSelectedCategoryId(id: string | null) {

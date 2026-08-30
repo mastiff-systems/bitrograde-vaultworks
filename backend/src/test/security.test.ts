@@ -166,6 +166,450 @@ describe('Rate limit: POST /api/upload (max 20 / minute)', () => {
   });
 });
 
+// ─── Rate limit – GET /api/files ──────────────────────────────────────────────
+
+describe('Rate limit: GET /api/files (max 60 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-getfiles@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 61st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 60; i++) {
+      const r = await request(app.server)
+        .get('/api/files')
+        .set('Authorization', `Bearer ${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .get('/api/files')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – GET /api/files/:id ──────────────────────────────────────────
+
+describe('Rate limit: GET /api/files/:id (max 120 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-getfile@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 121st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 120; i++) {
+      const r = await request(app.server)
+        .get(`/api/files/${fakeId}`)
+        .set('Authorization', `Bearer ${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .get(`/api/files/${fakeId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – GET /api/files/:id/stream ───────────────────────────────────
+
+describe('Rate limit: GET /api/files/:id/stream (max 20 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-stream@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 21st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 20; i++) {
+      const r = await request(app.server)
+        .get(`/api/files/${fakeId}/stream?token=${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .get(`/api/files/${fakeId}/stream?token=${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – GET /api/files/:id/thumbnail ────────────────────────────────
+
+describe('Rate limit: GET /api/files/:id/thumbnail (max 60 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-thumbnail@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 61st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 60; i++) {
+      const r = await request(app.server)
+        .get(`/api/files/${fakeId}/thumbnail?token=${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .get(`/api/files/${fakeId}/thumbnail?token=${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – DELETE /api/files/:id ──────────────────────────────────────
+
+describe('Rate limit: DELETE /api/files/:id (max 10 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-delfile@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 11th request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .delete(`/api/files/${fakeId}`)
+        .set('Authorization', `Bearer ${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .delete(`/api/files/${fakeId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – GET /api/files/:id/download ────────────────────────────────
+
+describe('Rate limit: GET /api/files/:id/download (max 30 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-download@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 31st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 30; i++) {
+      const r = await request(app.server)
+        .get(`/api/files/${fakeId}/download?token=${token}`);
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .get(`/api/files/${fakeId}/download?token=${token}`);
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – PATCH /api/files/:id ───────────────────────────────────────
+
+describe('Rate limit: PATCH /api/files/:id (max 20 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-patchfile@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 21st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 20; i++) {
+      const r = await request(app.server)
+        .patch(`/api/files/${fakeId}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'renamed.txt' });
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .patch(`/api/files/${fakeId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'renamed.txt' });
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – POST /api/files/bulk-delete ─────────────────────────────────
+
+describe('Rate limit: POST /api/files/bulk-delete (max 20 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-bulkdelete@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 21st request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 20; i++) {
+      const r = await request(app.server)
+        .post('/api/files/bulk-delete')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ids: [fakeId] });
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-delete')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [fakeId] });
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – POST /api/files/bulk-download ───────────────────────────────
+
+describe('Rate limit: POST /api/files/bulk-download (max 10 / minute)', () => {
+  let app: FastifyInstance;
+  let token: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regRes = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-bulkdownload@example.com', password: 'password123' });
+    token = regRes.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('returns 429 on the 11th request within a minute', async () => {
+    let lastUnderLimitStatus: number | undefined;
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .post('/api/files/bulk-download')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ids: [fakeId] });
+      lastUnderLimitStatus = r.status;
+    }
+    expect(lastUnderLimitStatus).not.toBe(429);
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-download')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [fakeId] });
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+});
+
+// ─── Rate limit – per-client keying behind a proxy (MAS-665) ──────────────────
+// trustProxy defaults to 'loopback', and the test client connects from 127.0.0.1,
+// so a supertest request with X-Forwarded-For set is keyed exactly like a request
+// forwarded by the prod/dev nginx.
+
+describe('Rate limit keying: clients behind the same proxy get independent buckets', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('keys unauthenticated routes by forwarded client IP, not the proxy address', async () => {
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', '203.0.113.1')
+        .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+      expect(r.status).not.toBe(429);
+    }
+
+    // Client A exhausted its bucket
+    const exhausted = await request(app.server)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '203.0.113.1')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(exhausted.status).toBe(429);
+
+    // Client B behind the same proxy is unaffected
+    const otherClient = await request(app.server)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '203.0.113.2')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(otherClient.status).not.toBe(429);
+
+    // A direct (non-proxied) request has its own bucket too
+    const direct = await request(app.server)
+      .post('/api/auth/login')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(direct.status).not.toBe(429);
+  });
+});
+
+describe('Rate limit keying: authenticated routes key per user, not per IP', () => {
+  let app: FastifyInstance;
+  let tokenA: string;
+  let tokenB: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regA = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-usera@example.com', password: 'password123' });
+    tokenA = regA.body.token;
+    const regB = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-userb@example.com', password: 'password123' });
+    tokenB = regB.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('user B is not 429ed after user A exhausts a bucket from the same IP', async () => {
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .post('/api/files/bulk-download')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ ids: [fakeId] });
+      expect(r.status).not.toBe(429);
+    }
+
+    const exhausted = await request(app.server)
+      .post('/api/files/bulk-download')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ ids: [fakeId] });
+    expect(exhausted.status).toBe(429);
+
+    const otherUser = await request(app.server)
+      .post('/api/files/bulk-download')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({ ids: [fakeId] });
+    expect(otherUser.status).not.toBe(429);
+  });
+});
+
 // ─── CORS production fail-fast ────────────────────────────────────────────────
 
 describe('CORS production fail-fast', () => {

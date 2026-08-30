@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isPasswordChangeRequired, emitPasswordChangeRequired } from './passwordGate.js';
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? '' });
 
@@ -7,6 +8,14 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (isPasswordChangeRequired(err)) emitPasswordChangeRequired();
+    return Promise.reject(err);
+  },
+);
 
 export interface AdminStats {
   users: number;
@@ -59,42 +68,37 @@ export async function createUser(payload: CreateUserPayload): Promise<AdminUser>
 }
 
 export type AuditAction =
-  | 'UPLOAD'
-  | 'DOWNLOAD'
-  | 'VIEW'
-  | 'UPDATE'
-  | 'UPDATE_METADATA'
-  | 'DELETE'
-  | 'SHARE'
-  | 'REVOKE_SHARE';
+  | 'UPLOAD' | 'DOWNLOAD' | 'VIEW' | 'UPDATE' | 'DELETE'
+  | 'SHARE' | 'REVOKE_SHARE' | 'UPDATE_METADATA'
+  | 'LOGIN' | 'LOGOUT' | 'RESTORE' | 'USER_CREATED';
 
 export interface AuditLogEntry {
   id: string;
-  userId: string | null;
-  assetId: string | null;
   action: AuditAction;
+  asset_id: string | null;
+  asset_name: string | null;
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
+  ip_address: string | null;
   details: Record<string, unknown>;
-  createdAt: string;
-  user: { email: string } | null;
-  asset: { originalName: string } | null;
-}
-
-export interface AuditLogsFilters {
-  action?: AuditAction;
-  userId?: string;
-  assetId?: string;
-  startDate?: string;
-  endDate?: string;
-  page?: number;
-  limit?: number;
+  created_at: string;
 }
 
 export interface AuditLogsResponse {
-  data: AuditLogEntry[];
   total: number;
   page: number;
-  limit: number;
+  pageSize: number;
   totalPages: number;
+  logs: AuditLogEntry[];
+}
+
+export interface AuditLogsParams {
+  page?: number;
+  action?: AuditAction;
+  userId?: string;
+  from?: string;
+  to?: string;
 }
 
 export interface SmtpSettings {
@@ -121,15 +125,24 @@ export async function sendTestEmail(): Promise<{ success: boolean; error?: strin
   return data;
 }
 
-export async function fetchAuditLogs(filters: AuditLogsFilters = {}): Promise<AuditLogsResponse> {
-  const params = new URLSearchParams();
-  if (filters.action)    params.set('action',    filters.action);
-  if (filters.userId)    params.set('userId',    filters.userId);
-  if (filters.assetId)   params.set('assetId',   filters.assetId);
-  if (filters.startDate) params.set('startDate', filters.startDate);
-  if (filters.endDate)   params.set('endDate',   filters.endDate);
-  params.set('page',  String(filters.page  ?? 1));
-  params.set('limit', String(filters.limit ?? 50));
-  const { data } = await api.get<AuditLogsResponse>(`/api/audit-logs?${params.toString()}`);
+export async function fetchAuditLogs(params?: AuditLogsParams): Promise<AuditLogsResponse> {
+  const p: Record<string, string> = {};
+  if (params?.page) p.page = String(params.page);
+  if (params?.action) p.action = params.action;
+  if (params?.userId) p.userId = params.userId;
+  if (params?.from) p.from = params.from;
+  if (params?.to) p.to = params.to;
+  const { data } = await api.get<AuditLogsResponse>('/api/admin/audit-logs', { params: p });
+  return data;
+}
+
+export interface AuditUser {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+export async function fetchAuditUsers(): Promise<AuditUser[]> {
+  const { data } = await api.get<AuditUser[]>('/api/admin/audit-users');
   return data;
 }

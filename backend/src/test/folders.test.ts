@@ -15,22 +15,27 @@ import type { FastifyInstance } from 'fastify';
 import { createApp } from '../app.js';
 import { prisma } from '../db/client.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  streamUploadToS3: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
-    new Promise<void>((resolve, reject) => {
-      body.resume();
-      body.on('end', resolve);
-      body.on('error', reject);
+// Routes now use getStorageProvider() from storage/index.js — mock that module
+// instead of the old s3.js stubs.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockImplementation((_key: string, body: NodeJS.ReadableStream) =>
+      new Promise<void>((resolve, reject) => {
+        body.resume();
+        body.on('end', resolve);
+        body.on('error', reject);
+      }),
+    ),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from(''),
+      contentType: 'application/octet-stream',
+      contentLength: 0,
     }),
-  ),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from(''),
-    contentType: 'application/octet-stream',
-    contentLength: 0,
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
   }),
-  copyS3Object: vi.fn().mockResolvedValue(undefined),
+  invalidateStorageCache: vi.fn(),
 }));
 
 // Non-existent UUID that passes Zod v4's RFC-4122 version+variant checks
@@ -286,7 +291,8 @@ describe('Folders API', () => {
       .get('/api/files')
       .set('Authorization', `Bearer ${token}`);
     expect(filesRes.status).toBe(200);
-    expect(filesRes.body.some((a: { id: string }) => a.id === asset.id)).toBe(true);
+    // GET /api/files returns the pagination envelope {data, total, page, limit, totalPages}
+    expect(filesRes.body.data.some((a: { id: string }) => a.id === asset.id)).toBe(true);
   });
 
   it('DELETE /api/folders/:id — returns 404 for unknown folder', async () => {

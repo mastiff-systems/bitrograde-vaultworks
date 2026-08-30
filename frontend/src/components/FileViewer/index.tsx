@@ -35,9 +35,11 @@ interface FileViewerProps {
   assets?: Asset[];
   onClose: () => void;
   onOpenDetails?: () => void;
+  /** When set, overrides the stream URL used for preview (e.g. to show a specific version). */
+  urlOverride?: string;
 }
 
-export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewerProps) {
+export function FileViewer({ asset, assets, onClose, onOpenDetails, urlOverride }: FileViewerProps) {
   const [currentAsset, setCurrentAsset] = useState(asset);
   const [renderError, setRenderError] = useState<Error | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -45,7 +47,9 @@ export function FileViewer({ asset, assets, onClose, onOpenDetails }: FileViewer
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const { url, downloadHref, renderer } = useFilePreview(currentAsset);
+  const preview = useFilePreview(currentAsset);
+  const url = urlOverride ?? preview.url;
+  const { downloadHref, renderer } = preview;
 
   const curIndex = assets ? assets.findIndex((a) => a.id === currentAsset.id) : -1;
   const hasPrev = curIndex > 0;

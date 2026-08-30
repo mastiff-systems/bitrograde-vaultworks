@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/mastiff/development/bitrograde-vaultworks/scripts/paperclip-issue-update.sh:*)",
+      "Bash(/home/mastiff/development/bitrograde-vaultworks/scripts/paperclip:*)",
+      "Bash(curl:*)",
+      "Bash(env)",
+      "Bash(env:*)"
+    ],
+    "additionalDirectories": [
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/07bf90f3-b1ac-423c-8bbc-0d9dc7d45080",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/35fbe858-75cc-4d80-816a-0636b73d1e79",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/66b912c3-8d1a-4891-829b-3cd2b527cb55",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/85dd82db-8fd6-4405-9a98-c12c721b5a1a",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/90fe2f6b-8d59-43d6-b3be-3f09fbd71397",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/aa6a3042-5e45-4d32-8066-5daf6df80254",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/af498e32-b587-4ef8-86bc-03b07df0e1a7",
+      "/home/mastiff/.paperclip/instances/default/companies/b50e18ee-72b9-478b-aaf3-8d6095190734/acp-engine/agents/ee17d6ab-2d98-4ebb-a6f2-2b5a72d0f343",
+      "/home/mastiff/.paperclip/instances/default/workspaces/07bf90f3-b1ac-423c-8bbc-0d9dc7d45080",
+      "/home/mastiff/.paperclip/instances/default/workspaces/35fbe858-75cc-4d80-816a-0636b73d1e79",
+      "/home/mastiff/.paperclip/instances/default/workspaces/66b912c3-8d1a-4891-829b-3cd2b527cb55",
+      "/home/mastiff/.paperclip/instances/default/workspaces/85dd82db-8fd6-4405-9a98-c12c721b5a1a",
+      "/home/mastiff/.paperclip/instances/default/workspaces/90fe2f6b-8d59-43d6-b3be-3f09fbd71397",
+      "/home/mastiff/.paperclip/instances/default/workspaces/aa6a3042-5e45-4d32-8066-5daf6df80254",
+      "/home/mastiff/.paperclip/instances/default/workspaces/af498e32-b587-4ef8-86bc-03b07df0e1a7",
+      "/home/mastiff/.paperclip/instances/default/workspaces/ee17d6ab-2d98-4ebb-a6f2-2b5a72d0f343"
+    ],
+    "defaultMode": "default"
+  }
+}

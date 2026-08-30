@@ -14,6 +14,16 @@ const SECRET_KEYS = new Set(['s3_secret_key', 'smtp_password']);
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid ID') });
 
+const AuditLogsQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  action: z.nativeEnum(AuditAction).optional(),
+  userId: z.string().uuid().optional(),
+  assetId: z.string().uuid().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
 const SettingsBody = z.record(z.string(), z.string());
 
 const UserRoleBody = z.object({
@@ -128,11 +138,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         select: { id: true, email: true, role: true, mustChangePassword: true, createdAt: true },
       });
 
-      logAudit({
-        prisma,
+      void logAudit({
         userId: req.user.userId,
-        action: 'USER_CREATED',
-        metadata: { createdUserId: user.id, role: user.role },
+        action: AuditAction.USER_CREATED,
+        details: { createdUserId: user.id, role: user.role },
+        ipAddress: req.ip,
       });
 
       return reply.status(201).send({
@@ -197,16 +207,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  const AuditLogsQuerySchema = z.object({
-    assetId:  z.string().uuid().optional(),
-    userId:   z.string().uuid().optional(),
-    action:   z.enum(['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE', 'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'USER_CREATED']).optional(),
-    from:     z.string().datetime().optional(),
-    to:       z.string().datetime().optional(),
-    limit:    z.coerce.number().int().min(1).max(200).default(50),
-    cursor:   z.string().optional(),
-  });
-
   // GET /api/admin/audit-logs
   app.get('/api/admin/audit-logs', {
     ...opts,
@@ -215,63 +215,87 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         type: 'object',
         additionalProperties: false,
         properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          action: { type: 'string' },
+          userId: { type: 'string', format: 'uuid' },
           assetId: { type: 'string', format: 'uuid' },
-          userId:  { type: 'string', format: 'uuid' },
-          action:  { type: 'string', enum: ['UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'DELETE', 'SHARE', 'REVOKE_SHARE', 'UPDATE_METADATA', 'USER_CREATED'] },
-          from:    { type: 'string', format: 'date-time' },
-          to:      { type: 'string', format: 'date-time' },
-          limit:   { type: 'integer', minimum: 1, maximum: 200, default: 50 },
-          cursor:  { type: 'string' },
+          from: { type: 'string' },
+          to: { type: 'string' },
         },
       },
     },
   }, async (req, reply) => {
-    const parsed = AuditLogsQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: 'Invalid query parameters', details: parsed.error.flatten() });
-    }
-    const { assetId, userId, action, from, to, limit, cursor } = parsed.data;
+    const q = AuditLogsQuery.safeParse(req.query);
+    if (!q.success) return reply.status(400).send({ error: 'Invalid query', details: q.error.flatten() });
+    const { page, limit, action, userId, assetId, from, to } = q.data;
 
     const where: Prisma.AuditLogWhereInput = {};
+    if (action) where.action = action;
+    if (userId) where.userId = userId;
     if (assetId) where.assetId = assetId;
-    if (userId)  where.userId  = userId;
-    if (action)  where.action  = action as AuditAction;
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(from);
-      if (to)   where.createdAt.lte = new Date(to);
-    }
-
-    // Keyset cursor: base64-encoded JSON { createdAt: string, id: string }
-    if (cursor) {
-      try {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8')) as { createdAt: string; id: string };
-        where.OR = [
-          { createdAt: { lt: new Date(decoded.createdAt) } },
-          { createdAt: new Date(decoded.createdAt), id: { lt: decoded.id } },
-        ];
-      } catch {
-        return reply.status(400).send({ error: 'Invalid cursor' });
+      if (to) {
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        where.createdAt.lte = toDate;
       }
     }
 
-    const rows = await prisma.auditLog.findMany({
-      where,
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: limit + 1,
-      include: {
-        user:  { select: { email: true } },
-        asset: { select: { originalName: true } },
-      },
+    const [total, logs] = await Promise.all([
+      prisma.auditLog.count({ where }),
+      prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          action: true,
+          assetId: true,
+          assetName: true,
+          userName: true,
+          ipAddress: true,
+          details: true,
+          createdAt: true,
+          userId: true,
+          user: { select: { email: true } },
+        },
+      }),
+    ]);
+
+    return reply.send({
+      total,
+      page,
+      pageSize: limit,
+      totalPages: Math.ceil(total / limit),
+      logs: logs.map((l) => ({
+        id: l.id,
+        action: l.action,
+        asset_id: l.assetId,
+        asset_name: l.assetName,
+        user_id: l.userId,
+        user_name: l.userName,
+        user_email: l.user?.email ?? null,
+        ip_address: l.ipAddress,
+        details: l.details,
+        created_at: l.createdAt,
+      })),
     });
+  });
 
-    const hasMore = rows.length > limit;
-    const data = hasMore ? rows.slice(0, limit) : rows;
-    const last = data[data.length - 1];
-    const nextCursor = hasMore && last
-      ? Buffer.from(JSON.stringify({ createdAt: last.createdAt.toISOString(), id: last.id })).toString('base64')
-      : null;
-
-    return reply.send({ data, nextCursor });
+  // GET /api/admin/audit-users — user list for audit log filter dropdowns
+  app.get('/api/admin/audit-users', opts, async (_req, reply) => {
+    const users = await prisma.user.findMany({
+      select: { id: true, email: true, firstName: true, lastName: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return reply.send(users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: [u.firstName, u.lastName].filter(Boolean).join(' ') || null,
+    })));
   });
 }

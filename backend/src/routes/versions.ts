@@ -3,17 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
-import { verifyLocalToken } from '../auth/tokens.js';
-import { verifyKeycloakToken } from '../auth/keycloak.js';
-
-async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
-  if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
-  try {
-    const provider = process.env.AUTH_PROVIDER ?? 'local';
-    if (provider === 'keycloak') { await verifyKeycloakToken(token); } else { verifyLocalToken(token); }
-    return true;
-  } catch { reply.status(401).send({ error: 'Invalid token' }); return false; }
-}
+import { authenticateQueryToken } from '../auth/middleware.js';
+import { generateThumbnail } from '../lib/thumbnail.js';
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid asset ID') });
 const VersionParams = z.object({
@@ -126,6 +117,18 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     const newStorageKey = `assets/${params.id}/versions/${Date.now()}_${uploadFilename}`;
     await storage.upload(newStorageKey, uploadBuffer, uploadMime);
 
+    // Regenerate thumbnail from the new version if it's an image type.
+    let newThumbnailKey: string | undefined;
+    if (uploadMime.startsWith('image/')) {
+      const thumbBuffer = await generateThumbnail(uploadBuffer);
+      if (thumbBuffer) {
+        newThumbnailKey = `assets/${params.id}/thumbnail.webp`;
+        await storage.upload(newThumbnailKey, thumbBuffer, 'image/webp').catch(() => {
+          newThumbnailKey = undefined;
+        });
+      }
+    }
+
     const maxVersionRecord = await prisma.assetVersion.findFirst({
       where: { assetId: params.id },
       orderBy: { versionNumber: 'desc' },
@@ -178,6 +181,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
             storageKey: newStorageKey,
             sizeBytes: BigInt(uploadBuffer!.length),
             mimeType: uploadMime,
+            ...(newThumbnailKey !== undefined ? { thumbnailKey: newThumbnailKey } : {}),
           },
         });
 
@@ -223,7 +227,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const token = (req.query as Record<string, string>).token;
-      if (!await authenticateToken(token, reply)) return;
+      if (await authenticateQueryToken(token, reply) === false) return;
 
       const params = parseParams(VersionParams, req.params, reply);
       if (!params) return;
@@ -244,6 +248,34 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
         'Content-Disposition',
         `attachment; filename*=UTF-8''${filename}`,
       );
+      if (contentLength) reply.header('Content-Length', contentLength);
+
+      return reply.send(stream);
+    },
+  );
+
+  // Preview (inline stream) a specific version — used by the frontend viewer when
+  // the user clicks a version entry. Same as download but Content-Disposition is inline.
+  app.get<{ Params: { id: string; versionId: string } }>(
+    '/api/files/:id/versions/:versionId/preview',
+    async (req, reply) => {
+      const token = (req.query as Record<string, string>).token;
+      if (await authenticateQueryToken(token, reply) === false) return;
+
+      const params = parseParams(VersionParams, req.params, reply);
+      if (!params) return;
+
+      const version = await prisma.assetVersion.findFirst({
+        where: { id: params.versionId, assetId: params.id },
+        select: { storageKey: true, mimeType: true, versionNumber: true },
+      });
+      if (!version) return reply.status(404).send({ error: 'Version not found' });
+
+      const storage = await getStorageProvider();
+      const { stream, contentType, contentLength } = await storage.download(version.storageKey);
+
+      reply.header('Content-Type', contentType ?? version.mimeType ?? 'application/octet-stream');
+      reply.header('Content-Disposition', 'inline');
       if (contentLength) reply.header('Content-Length', contentLength);
 
       return reply.send(stream);

@@ -1,78 +1,87 @@
-import { useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage.js';
 import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
 import { AssetBrowser } from './pages/AssetBrowser.js';
-import { AdminPanel } from './pages/admin/AdminPanel.js';
-import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { ProfilePage } from './pages/Profile.js';
+import { AdminSettings } from './pages/admin/Settings.js';
+import { AdminUsers } from './pages/admin/Users.js';
+import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
+import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { Collections } from './pages/Collections.js';
 import { ResetPassword } from './pages/ResetPassword.js';
+import { ChangePassword } from './pages/ChangePassword.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
-import { UploadProvider } from './contexts/UploadContext.js';
-import type { Page } from './components/Layout.js';
+import type { ReactNode } from 'react';
+
+/** Redirects non-admin users to the dashboard root. */
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
 
 function AppShell() {
-  const { user } = useAuth();
-  const [page, setPage] = useState<Page>('dashboard');
-  const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
-
-  const handleNavigate = (p: Page) => {
-    if ((p === 'admin' || p === 'audit') && user?.role !== 'admin') return;
-    setPage(p);
-  };
-
-  const handleNavigateToAsset = (assetId: string) => {
-    setPendingAssetId(assetId);
-    setPage('dashboard');
-  };
-
   return (
-    <Layout page={page} onNavigate={handleNavigate}>
-      {page === 'dashboard' && <AssetBrowser initialDetailAssetId={pendingAssetId} />}
-      {page === 'admin' && user?.role === 'admin' && (
-        <AdminPanel
-          onNavigateToAsset={handleNavigateToAsset}
-          onNavigateToAudit={() => handleNavigate('audit')}
-        />
-      )}
-      {page === 'audit' && user?.role === 'admin' && (
-        <AdminAuditLog onNavigateToAsset={handleNavigateToAsset} />
-      )}
-      {page === 'profile' && <ProfilePage />}
-      {page === 'collections' && <Collections />}
-    </Layout>
+    <CategoryProvider>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<AssetBrowser />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/collections" element={<Collections />} />
+          <Route
+            path="/admin/settings"
+            element={
+              <AdminRoute>
+                <AdminSettings />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <AdminRoute>
+                <AdminUsers />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/taxonomy"
+            element={
+              <AdminRoute>
+                <TaxonomyManager />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="/admin/audit"
+            element={
+              <AdminRoute>
+                <AdminAuditLog onNavigateToAsset={() => {}} />
+              </AdminRoute>
+            }
+          />
+          {/* Catch-all: unknown paths → dashboard */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Layout>
+    </CategoryProvider>
   );
 }
 
 export function App() {
-  const { token } = useAuth();
+  const { token, mustChangePassword } = useAuth();
 
-  if (window.location.pathname === '/auth/callback') {
-    return <KeycloakCallback />;
-  }
-
-  if (window.location.pathname === '/reset-password') {
-    const params = new URLSearchParams(window.location.search);
-    const resetToken = params.get('token') ?? '';
-    return (
-      <ResetPassword
-        token={resetToken}
-        onDone={() => {
-          window.history.replaceState(null, '', '/');
-          window.location.reload();
-        }}
-      />
-    );
-  }
-
-  if (!token) return <LoginPage />;
   return (
-    <CategoryProvider>
-      <UploadProvider>
-        <AppShell />
-      </UploadProvider>
-    </CategoryProvider>
+    <Routes>
+      {/* Keycloak PKCE callback — accessible without a token */}
+      <Route path="/auth/callback" element={<KeycloakCallback />} />
+      {/* Password reset — accessible without a token */}
+      <Route path="/reset-password" element={<ResetPassword token={new URLSearchParams(window.location.search).get('token') ?? ''} onDone={() => { window.history.replaceState(null, '', '/'); window.location.reload(); }} />} />
+      {/* Everything else: gate on auth, then on the forced password change (MAS-626) —
+          the backend 403s all protected routes while mustChangePassword is set */}
+      <Route path="/*" element={token ? (mustChangePassword ? <ChangePassword /> : <AppShell />) : <LoginPage />} />
+    </Routes>
   );
 }

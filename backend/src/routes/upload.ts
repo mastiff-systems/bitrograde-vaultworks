@@ -2,12 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { Transform } from 'stream';
-import sharp from 'sharp';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
 import { createNotification } from '../notifications/service.js';
 import { generateDuplicateName } from '../lib/filename.js';
-import { logAudit } from '../lib/audit.js';
+import { logAudit, AuditAction } from '../lib/audit.js';
+import { generateThumbnail } from '../lib/thumbnail.js';
 
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
@@ -58,17 +58,6 @@ function detectAssetType(filename: string, mime: string): string {
   if (SCRIPT_EXTS.has(ext)) return 'script';
   if (mime.startsWith('image/') || IMAGE_EXTS.has(ext)) return 'image';
   return 'other';
-}
-
-async function generateThumbnail(buffer: Buffer): Promise<Buffer | null> {
-  try {
-    return await sharp(buffer)
-      .resize(400, 400, { fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 80 })
-      .toBuffer();
-  } catch {
-    return null;
-  }
 }
 
 export async function uploadRoutes(app: FastifyInstance): Promise<void> {
@@ -272,7 +261,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             resolutionW: meta.resolution_w,
             resolutionH: meta.resolution_h,
             durationSeconds: meta.duration_seconds,
-            uploadedBy: req.user?.userId ?? null,
+            uploadedBy: req.user.userId,
           },
           select: {
             id: true,
@@ -311,14 +300,12 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         throw err;
       }
 
-      logAudit({
-        prisma,
-        userId:    req.user?.userId ?? null,
-        assetId:   asset.id,
-        assetName: filename,
+      void logAudit({
+        userId: req.user.userId,
+        action: AuditAction.UPLOAD,
+        assetId: asset.id,
+        assetName: asset.originalName,
         ipAddress: req.ip,
-        action:    'UPLOAD',
-        metadata:  { userAgent: req.headers['user-agent'] },
       });
 
       uploaded.push({
@@ -399,6 +386,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             resolutionW: meta.resolution_w,
             resolutionH: meta.resolution_h,
             durationSeconds: meta.duration_seconds,
+            uploadedBy: req.user.userId,
           },
           select: {
             id: true,
@@ -436,6 +424,14 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         await storage.delete(storageKey).catch(() => {});
         throw err;
       }
+
+      void logAudit({
+        userId: req.user.userId,
+        action: AuditAction.UPLOAD,
+        assetId: asset.id,
+        assetName: asset.originalName,
+        ipAddress: req.ip,
+      });
 
       uploaded.push({
         id: asset.id,

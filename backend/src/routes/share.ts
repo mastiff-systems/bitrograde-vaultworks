@@ -73,13 +73,12 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
       const url = `${baseUrl}/api/share/${token}`;
 
       logAudit({
-        prisma,
         userId,
         assetId:   params.id,
         assetName: asset.originalName,
         ipAddress: req.ip,
         action:    'SHARE',
-        metadata:  { userAgent: req.headers['user-agent'], expiresInDays },
+        details:   { userAgent: req.headers['user-agent'], expiresInDays },
       });
 
       return reply.status(201).send({ token, url, expiresAt: expiresAt.toISOString() });
@@ -211,13 +210,12 @@ export async function shareRoutes(app: FastifyInstance): Promise<void> {
       await prisma.shareLink.deleteMany({ where });
 
       logAudit({
-        prisma,
         userId,
         assetId:   params.id,
         assetName: asset.originalName,
         ipAddress: req.ip,
         action:    'REVOKE_SHARE',
-        metadata:  { userAgent: req.headers['user-agent'] },
+        details:   { userAgent: req.headers['user-agent'] },
       });
 
       return reply.status(204).send();

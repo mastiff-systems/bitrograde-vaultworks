@@ -1,3 +1,10 @@
+/**
+ * @deprecated MAS-602 — do NOT import from this module in production code.
+ * These helpers talk straight to S3 and ignore the storage_type setting, which
+ * breaks deployments running on disk storage. Use getStorageProvider() from
+ * './index.js' instead. This file survives only because several test files
+ * still vi.mock it; delete it once those mocks are removed.
+ */
 import {
   S3Client,
   PutObjectCommand,
@@ -71,6 +78,20 @@ export async function copyS3Object(sourceKey: string, destKey: string): Promise<
       Key: prefixedKey(prefix, destKey),
     }),
   );
+}
+
+/**
+ * Move an S3 object by copying to destKey then deleting sourceKey.
+ * Throws if the copy fails (nothing has changed).
+ * Delete of the source is best-effort: a failure leaves an orphaned object at sourceKey
+ * but the DB will already point to destKey, so it will not be served or re-used.
+ * The orphan is recoverable by an operator and does not block downstream work.
+ */
+export async function moveS3Object(sourceKey: string, destKey: string): Promise<void> {
+  await copyS3Object(sourceKey, destKey);
+  await deleteFromS3(sourceKey).catch((err) => {
+    console.error(`[s3] moveS3Object: failed to delete source "${sourceKey}" after copy:`, err);
+  });
 }
 
 export async function getS3ObjectStream(

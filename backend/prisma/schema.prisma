@@ -12,6 +12,8 @@ model User {
   email                  String         @unique
   passwordHash           String         @map("password_hash")
   role                   String         @default("user")
+  firstName              String?        @map("first_name")
+  lastName               String?        @map("last_name")
   createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   passwordResetToken     String?        @map("password_reset_token") @db.Text
   passwordResetExpiresAt DateTime?      @map("password_reset_expires_at") @db.Timestamptz(6)
@@ -20,6 +22,7 @@ model User {
   assetVersions AssetVersion[]
   folders       Folder[]       @relation("FolderCreator")
   uploadedAssets Asset[]       @relation("AssetUploader")
+  deletedAssets  Asset[]       @relation("AssetDeleter")
   auditLogs     AuditLog[]
   collections   Collection[]
   shareLinks    ShareLink[]
@@ -66,6 +69,8 @@ model Asset {
   description     String?        @map("description")
   uploadedAt      DateTime       @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  deletedBy       String?        @map("deleted_by") @db.Uuid
   uploadedBy      String?        @map("uploaded_by") @db.Uuid
   categoryId      String?        @map("category_id") @db.Uuid
   subcategoryId   String?        @map("subcategory_id") @db.Uuid
@@ -83,10 +88,12 @@ model Asset {
   category        Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
   uploader        User?          @relation("AssetUploader", fields: [uploadedBy], references: [id], onDelete: SetNull)
+  deleter         User?          @relation("AssetDeleter", fields: [deletedBy], references: [id], onDelete: SetNull)
 
   @@index([categoryId])
   @@index([subcategoryId])
   @@index([uploadedBy])
+  @@index([deletedAt])
   @@map("assets")
 }
 
@@ -196,6 +203,9 @@ enum AuditAction {
   SHARE
   REVOKE_SHARE
   UPDATE_METADATA
+  LOGIN
+  LOGOUT
+  RESTORE
   USER_CREATED
 
   @@map("audit_action")
@@ -208,6 +218,7 @@ model AuditLog {
   action    AuditAction
   details   Json        @default("{}")
   assetName String?     @map("asset_name")
+  userName  String?     @map("user_name")
   ipAddress String?     @map("ip_address")
   createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 

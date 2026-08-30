@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isPasswordChangeRequired, emitPasswordChangeRequired } from './passwordGate.js';
 
 const TOKEN_KEY = 'vaultworks_token';
 
@@ -20,6 +21,7 @@ api.interceptors.response.use(
       localStorage.removeItem(TOKEN_KEY);
       window.location.reload();
     }
+    if (isPasswordChangeRequired(err)) emitPasswordChangeRequired();
     return Promise.reject(err);
   },
 );
@@ -40,9 +42,15 @@ export interface Asset {
   resolution_w?: number | null;
   resolution_h?: number | null;
   duration_seconds?: number | null;
+  // File audit metadata (populated by GET /api/files/:id only)
+  created_by_name?: string | null;
+  created_by_email?: string | null;
+  updated_by_name?: string | null;
+  updated_by_email?: string | null;
+  updated_at?: string | null;
 }
 
-interface PaginatedFilesResponse {
+export interface PaginatedFilesResponse {
   data: Asset[];
   total: number;
   page: number;
@@ -96,7 +104,7 @@ export async function findAssetByExactName(name: string): Promise<Pick<Asset, 'i
   return data.length > 0 ? data[0] : null;
 }
 
-export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
+export async function listFiles(params?: ListFilesParams): Promise<PaginatedFilesResponse> {
   const p: Record<string, string> = {};
   if (params?.q) p.q = params.q;
   if (params?.assetType) p.assetType = params.assetType;
@@ -108,7 +116,7 @@ export async function listFiles(params?: ListFilesParams): Promise<Asset[]> {
   if (params?.page) p.page = String(params.page);
   if (params?.tags?.length) p.tags = params.tags.join(',');
   const { data } = await api.get<PaginatedFilesResponse>('/api/files', { params: p });
-  return data.data;
+  return data;
 }
 
 export async function listTags(): Promise<Tag[]> {
@@ -190,6 +198,40 @@ export async function deleteFile(id: string): Promise<void> {
   await api.delete(`/api/files/${id}`);
 }
 
+/**
+ * Permanently purge a trashed asset — removes DB record and S3 objects.
+ * The asset must already be in the trash (soft-deleted) before calling this.
+ * Calls DELETE /api/files/:id/purge.
+ */
+export async function purgeFile(id: string): Promise<void> {
+  await api.delete(`/api/files/${id}/purge`);
+}
+
+/** Restore a trashed asset back to the active library. Calls POST /api/files/:id/restore. */
+export async function restoreFile(id: string): Promise<Asset> {
+  const { data } = await api.post<Asset>(`/api/files/${id}/restore`);
+  return data;
+}
+
+/** A trashed asset as returned by GET /api/trash. */
+export interface TrashedAsset {
+  id: string;
+  original_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  asset_type: '3d' | 'audio' | 'image' | 'other';
+  thumbnail_key: string | null;
+  deleted_at: string;
+  deleted_by: string | null;
+  storage_key: string;
+}
+
+/** Fetch all soft-deleted assets from the trash. Calls GET /api/trash. */
+export async function listTrashedFiles(): Promise<TrashedAsset[]> {
+  const { data } = await api.get<TrashedAsset[]>('/api/trash');
+  return data;
+}
+
 export interface BulkDeleteResult {
   deleted: string[];
   errors: { id: string; reason: string }[];
@@ -238,6 +280,7 @@ export async function revokeShareLinks(assetId: string): Promise<void> {
   await api.delete(`/api/files/${assetId}/share`);
 }
 
+
 export async function listVersions(assetId: string): Promise<AssetVersion[]> {
   const { data } = await api.get<AssetVersion[]>(`/api/files/${assetId}/versions`);
   return data;
@@ -269,6 +312,10 @@ export function versionDownloadUrl(assetId: string, versionId: string): string {
   return withToken(`/api/files/${assetId}/versions/${versionId}/download`);
 }
 
+export function versionStreamUrl(assetId: string, versionId: string): string {
+  return withToken(`/api/files/${assetId}/versions/${versionId}/preview`);
+}
+
 export function downloadUrl(id: string): string {
   return withToken(`/api/files/${id}/download`);
 }
@@ -281,3 +328,39 @@ export function thumbnailUrl(id: string): string {
   return withToken(`/api/files/${id}/thumbnail`);
 }
 
+// ── Profile API ───────────────────────────────────────────────────────────────
+
+export interface UserProfile {
+  userId: string;
+  email: string;
+  role: 'admin' | 'user';
+  firstName: string | null;
+  lastName: string | null;
+}
+
+/** Fetch the current user's profile (GET /api/auth/me). */
+export async function getProfile(): Promise<UserProfile> {
+  const { data } = await api.get<UserProfile>('/api/auth/me');
+  return data;
+}
+
+/** Update the current user's first/last name (PATCH /api/auth/profile). */
+export async function updateProfile(payload: {
+  firstName?: string | null;
+  lastName?: string | null;
+}): Promise<UserProfile> {
+  const { data } = await api.patch<UserProfile>('/api/auth/profile', payload);
+  return data;
+}
+
+/** Fetch a single asset by ID — includes attribution fields not in the list response. */
+export async function getAsset(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
+}
+
+/** Fetch a single file by ID — satisfies MAS-536 acceptance criterion. */
+export async function getFile(id: string): Promise<Asset> {
+  const { data } = await api.get<Asset>(`/api/files/${id}`);
+  return data;
+}

@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import { ThemeProvider } from './contexts/ThemeContext.js';
 import { AuthProvider } from './contexts/AuthContext.js';
@@ -12,13 +13,15 @@ if (!root) throw new Error('No #root element');
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary>
-      <ThemeProvider>
-        <AuthProvider>
-          <NotificationProvider>
-            <App />
-          </NotificationProvider>
-        </AuthProvider>
-      </ThemeProvider>
+      <BrowserRouter>
+        <ThemeProvider>
+          <AuthProvider>
+            <NotificationProvider>
+              <App />
+            </NotificationProvider>
+          </AuthProvider>
+        </ThemeProvider>
+      </BrowserRouter>
     </ErrorBoundary>
   </StrictMode>,
 );

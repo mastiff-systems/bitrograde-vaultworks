@@ -1,7 +1,27 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
+import { prisma } from '../db/client.js';
+
+// MAS-660 regression coverage below exercises the ?token= media/SSE routes,
+// which stream through getStorageProvider() — mock it so tests don't need
+// real object storage.
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue({
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'text/plain',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
+    move: vi.fn().mockResolvedValue(undefined),
+  }),
+  invalidateStorageCache: vi.fn(),
+}));
 
 let app: FastifyInstance;
 
@@ -157,6 +177,103 @@ describe('mustChangePassword gate', () => {
     const res = await request(app.server)
       .get('/api/files')
       .set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// MAS-660: the global preHandler's mustChangePassword gate (backend/src/app.ts)
+// exempts ?token= media/SSE routes so <img>/<video>/EventSource requests can
+// authenticate without an Authorization header. That exemption previously
+// skipped the mustChangePassword check entirely, letting a forced-change
+// account read/download real asset content and receive live notifications
+// before ever changing its password. Fixed via authenticateQueryToken()
+// (backend/src/auth/middleware.ts), reused by files.ts, versions.ts, and
+// notifications.ts.
+describe('mustChangePassword gate — ?token= media/SSE routes (MAS-660)', () => {
+  let adminToken: string;
+  let newUserToken: string;
+  let assetId: string;
+  let versionId: string;
+
+  beforeEach(async () => {
+    adminToken = await registerAndLogin('admin2@example.com', 'adminpass123');
+    await adminCreateUser(adminToken, 'newuser2@example.com', 'initial123');
+    const loginRes = await request(app.server)
+      .post('/api/auth/login')
+      .send({ email: 'newuser2@example.com', password: 'initial123' });
+    newUserToken = loginRes.body.token as string;
+    expect(loginRes.body.user.mustChangePassword).toBe(true);
+
+    const asset = await prisma.asset.create({
+      data: {
+        originalName: 'secret.txt',
+        storageKey: 'assets/secret.txt',
+        assetType: 'other',
+        thumbnailKey: 'assets/secret-thumb.webp',
+      },
+    });
+    assetId = asset.id;
+
+    const version = await prisma.assetVersion.create({
+      data: {
+        assetId: asset.id,
+        versionNumber: 1,
+        storageKey: 'assets/secret.txt',
+        mimeType: 'text/plain',
+      },
+    });
+    versionId = version.id;
+  });
+
+  it('blocks GET /api/files/:id/download?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(`/api/files/${assetId}/download?token=${newUserToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/password change required/i);
+  });
+
+  it('blocks GET /api/files/:id/stream?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(`/api/files/${assetId}/stream?token=${newUserToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('blocks GET /api/files/:id/thumbnail?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(`/api/files/${assetId}/thumbnail?token=${newUserToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('blocks GET /api/files/:id/versions/:versionId/download?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(
+      `/api/files/${assetId}/versions/${versionId}/download?token=${newUserToken}`,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('blocks GET /api/files/:id/versions/:versionId/preview?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(
+      `/api/files/${assetId}/versions/${versionId}/preview?token=${newUserToken}`,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it('blocks GET /api/notifications/stream?token= for a must-change-password user', async () => {
+    const res = await request(app.server).get(`/api/notifications/stream?token=${newUserToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/password change required/i);
+  });
+
+  it('still allows GET /api/files/:id/download?token= once the password has been changed', async () => {
+    const changeRes = await request(app.server)
+      .post('/api/auth/change-password')
+      .set('Authorization', `Bearer ${newUserToken}`)
+      .send({ currentPassword: 'initial123', newPassword: 'myNewPass99' });
+    expect(changeRes.status).toBe(200);
+
+    const res = await request(app.server).get(`/api/files/${assetId}/download?token=${newUserToken}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('still allows a normal (non-must-change) user to use the media token routes', async () => {
+    const res = await request(app.server).get(`/api/files/${assetId}/download?token=${adminToken}`);
     expect(res.status).toBe(200);
   });
 });

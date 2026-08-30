@@ -3,15 +3,26 @@ import request from 'supertest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, cleanDb } from './helpers.js';
 import { prisma } from '../db/client.js';
+import { StorageNotFoundError } from '../storage/provider.js';
 
-vi.mock('../storage/s3.js', () => ({
-  uploadToS3: vi.fn().mockResolvedValue(undefined),
-  deleteFromS3: vi.fn().mockResolvedValue(undefined),
-  getS3ObjectStream: vi.fn().mockResolvedValue({
-    stream: Buffer.from('file-content'),
-    contentType: 'text/plain',
-    contentLength: 12,
-  }),
+const { mockStorage } = vi.hoisted(() => ({
+  mockStorage: {
+    upload: vi.fn().mockResolvedValue(undefined),
+    streamUpload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue({
+      stream: Buffer.from('file-content'),
+      contentType: 'text/plain',
+      contentLength: 12,
+    }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    copy: vi.fn().mockResolvedValue(undefined),
+    move: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../storage/index.js', () => ({
+  getStorageProvider: vi.fn().mockResolvedValue(mockStorage),
+  invalidateStorageCache: vi.fn(),
 }));
 
 let app: FastifyInstance;
@@ -72,7 +83,7 @@ async function createAsset(ownerId: string | null, name = 'test.txt') {
 // ─── POST /api/files/bulk-delete ────────────────────────────────────────────
 
 describe('POST /api/files/bulk-delete', () => {
-  it('deletes multiple owned assets and removes them from the DB', async () => {
+  it('soft-deletes multiple owned assets (moved to trash), keeping the DB records', async () => {
     const a1 = await createAsset(userId, 'file1.txt');
     const a2 = await createAsset(userId, 'file2.txt');
 
@@ -85,12 +96,25 @@ describe('POST /api/files/bulk-delete', () => {
     expect(res.body.deleted).toEqual(expect.arrayContaining([a1.id, a2.id]));
     expect(res.body.errors).toHaveLength(0);
 
+    // Bulk delete is a soft-delete: records stay, marked deleted, keyed into trash/
     const remaining = await prisma.asset.findMany({ where: { id: { in: [a1.id, a2.id] } } });
-    expect(remaining).toHaveLength(0);
+    expect(remaining).toHaveLength(2);
+    for (const asset of remaining) {
+      expect(asset.deletedAt).not.toBeNull();
+      expect(asset.deletedBy).toBe(userId);
+      expect(asset.storageKey).toBe(`trash/${asset.id}/${asset.originalName}`);
+    }
+
+    // Trashed assets show up in the trash listing
+    const trashRes = await request(app.server)
+      .get('/api/trash')
+      .set('Authorization', `Bearer ${userToken}`);
+    expect(trashRes.status).toBe(200);
+    const trashIds = trashRes.body.map((a: { id: string }) => a.id);
+    expect(trashIds).toEqual(expect.arrayContaining([a1.id, a2.id]));
   });
 
-  it('calls deleteFromS3 for each deleted asset', async () => {
-    const { deleteFromS3 } = await import('../storage/s3.js');
+  it('moves each storage object to trash/ and never calls storage.delete', async () => {
     const a1 = await createAsset(userId, 's3_a.txt');
     const a2 = await createAsset(userId, 's3_b.txt');
 
@@ -99,8 +123,90 @@ describe('POST /api/files/bulk-delete', () => {
       .set('Authorization', `Bearer ${userToken}`)
       .send({ ids: [a1.id, a2.id] });
 
-    expect(deleteFromS3).toHaveBeenCalledWith(a1.storageKey);
-    expect(deleteFromS3).toHaveBeenCalledWith(a2.storageKey);
+    expect(mockStorage.move).toHaveBeenCalledWith(a1.storageKey, `trash/${a1.id}/s3_a.txt`);
+    expect(mockStorage.move).toHaveBeenCalledWith(a2.storageKey, `trash/${a2.id}/s3_b.txt`);
+    expect(mockStorage.delete).not.toHaveBeenCalled();
+  });
+
+  it('still soft-deletes when the storage object is already missing (StorageNotFoundError)', async () => {
+    const asset = await createAsset(userId, 'ghost.txt');
+    mockStorage.move.mockRejectedValueOnce(new StorageNotFoundError('source missing'));
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-delete')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toContain(asset.id);
+    expect(res.body.errors).toHaveLength(0);
+
+    const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(check?.deletedAt).not.toBeNull();
+    expect(check?.storageKey).toBe(`trash/${asset.id}/ghost.txt`);
+  });
+
+  it('reports a per-asset Storage error and leaves the DB row untouched on non-NotFound move failure', async () => {
+    const asset = await createAsset(userId, 'stuck.txt');
+    mockStorage.move.mockRejectedValueOnce(new Error('s3 exploded'));
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-delete')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toHaveLength(0);
+    expect(res.body.errors).toHaveLength(1);
+    expect(res.body.errors[0].id).toBe(asset.id);
+    expect(res.body.errors[0].reason).toBe('Storage error');
+
+    // Asset untouched: not trashed, storage key unchanged
+    const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(check?.deletedAt).toBeNull();
+    expect(check?.storageKey).toBe(asset.storageKey);
+  });
+
+  it('reports Not found for an already-trashed asset in the batch', async () => {
+    const trashed = await prisma.asset.create({
+      data: {
+        originalName: 'already-gone.txt',
+        storageKey: 'trash/x/already-gone.txt',
+        assetType: 'other',
+        uploadedBy: userId,
+        deletedAt: new Date(),
+        deletedBy: userId,
+      },
+    });
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-delete')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [trashed.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toHaveLength(0);
+    expect(res.body.errors).toHaveLength(1);
+    expect(res.body.errors[0].id).toBe(trashed.id);
+    expect(res.body.errors[0].reason).toBe('Not found');
+  });
+
+  it('bulk-trashed assets are restorable via POST /api/files/:id/restore', async () => {
+    const asset = await createAsset(userId, 'comeback.txt');
+
+    await request(app.server)
+      .post('/api/files/bulk-delete')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id] });
+
+    const restoreRes = await request(app.server)
+      .post(`/api/files/${asset.id}/restore`)
+      .set('Authorization', `Bearer ${userToken}`);
+
+    expect(restoreRes.status).toBe(200);
+    const check = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(check?.deletedAt).toBeNull();
+    expect(check?.storageKey).toBe(`assets/${asset.id}/comeback.txt`);
   });
 
   it('returns 200 with Unauthorized error when user tries to delete an asset they do not own', async () => {
@@ -137,8 +243,8 @@ describe('POST /api/files/bulk-delete', () => {
     expect(res.body.errors).toHaveLength(0);
   });
 
-  it('partial ownership mix — owned assets deleted, unowned go to errors', async () => {
-    // Per-asset model: owned asset is deleted successfully; unowned asset gets Unauthorized error.
+  it('partial ownership mix — owned assets soft-deleted, unowned go to errors', async () => {
+    // Per-asset model: owned asset is trashed successfully; unowned asset gets Unauthorized error.
     const ownedAsset = await createAsset(userId, 'mine.txt');
     const otherAsset = await createAsset(adminId, 'theirs.txt');
 
@@ -153,11 +259,13 @@ describe('POST /api/files/bulk-delete', () => {
     expect(res.body.errors[0].id).toBe(otherAsset.id);
     expect(res.body.errors[0].reason).toBe('Unauthorized');
 
-    // Owned asset should be gone; unowned asset must still exist
+    // Owned asset should be in the trash; unowned asset must be untouched
     const deleted = await prisma.asset.findUnique({ where: { id: ownedAsset.id } });
-    expect(deleted).toBeNull();
+    expect(deleted?.deletedAt).not.toBeNull();
+    expect(deleted?.storageKey).toBe(`trash/${ownedAsset.id}/mine.txt`);
     const kept = await prisma.asset.findUnique({ where: { id: otherAsset.id } });
-    expect(kept).not.toBeNull();
+    expect(kept?.deletedAt).toBeNull();
+    expect(kept?.storageKey).toBe(otherAsset.storageKey);
   });
 
   it('writes one DELETE audit log entry per deleted asset', async () => {
@@ -301,5 +409,20 @@ describe('POST /api/files/bulk-download', () => {
       .send({ ids: ['00000000-0000-0000-0000-000000000000'] });
 
     expect(res.status).toBe(401);
+  });
+
+  it('destroys the socket instead of hanging when storage download fails (MAS-602)', async () => {
+    const asset = await createAsset(userId, 'boom.txt');
+    mockStorage.download.mockRejectedValueOnce(new Error('storage exploded'));
+
+    // The handler has already hijacked the reply when the failure occurs, so no
+    // HTTP response can be sent — the connection must be destroyed so the client
+    // errors out immediately rather than waiting forever.
+    await expect(
+      request(app.server)
+        .post('/api/files/bulk-download')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({ ids: [asset.id] }),
+    ).rejects.toThrow();
   });
 });

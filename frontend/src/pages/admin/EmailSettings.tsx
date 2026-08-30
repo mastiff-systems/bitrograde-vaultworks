@@ -19,7 +19,17 @@ const DEFAULT_SETTINGS: SmtpSettings = {
   smtp_encryption: 'none',
 };
 
-export function EmailSettings() {
+interface EmailSettingsProps {
+  /** Render without the page wrapper/header, for embedding inside another page's tab. */
+  embedded?: boolean;
+}
+
+/** The API returns '' for a never-configured smtp_encryption, but only enum values are valid on save. */
+function normalizeSettings(s: SmtpSettings): SmtpSettings {
+  return { ...s, smtp_encryption: s.smtp_encryption || 'none' };
+}
+
+export function EmailSettings({ embedded = false }: EmailSettingsProps) {
   const [settings, setSettings] = useState<SmtpSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -30,7 +40,7 @@ export function EmailSettings() {
 
   useEffect(() => {
     fetchSmtpSettings()
-      .then((s) => setSettings(s))
+      .then((s) => setSettings(normalizeSettings(s)))
       .catch(() => setError('Failed to load email settings.'))
       .finally(() => setLoading(false));
   }, []);
@@ -44,8 +54,8 @@ export function EmailSettings() {
     setSaving(true);
     setError(null);
     try {
-      const updated = await updateSmtpSettings(settings);
-      setSettings(updated);
+      const updated = await updateSmtpSettings(normalizeSettings(settings));
+      setSettings(normalizeSettings(updated));
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {
@@ -75,20 +85,22 @@ export function EmailSettings() {
 
   if (loading) {
     return (
-      <div className="flex-1 p-8 flex items-center justify-center py-24">
+      <div className={`flex items-center justify-center py-24 ${embedded ? '' : 'flex-1 p-8'}`}>
         <div className="w-6 h-6 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="flex-1 p-8">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Email</h1>
-          <p className="page-subtitle">Configure outgoing SMTP settings for password resets and system notifications.</p>
+    <div className={embedded ? '' : 'flex-1 p-8'}>
+      {!embedded && (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Email</h1>
+            <p className="page-subtitle">Configure outgoing SMTP settings for password resets and system notifications.</p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="max-w-2xl">
         <div className="card p-6 mb-6">

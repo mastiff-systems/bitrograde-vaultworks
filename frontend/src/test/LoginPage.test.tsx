@@ -6,6 +6,8 @@ import { AuthProvider } from '../contexts/AuthContext';
 vi.mock('../api/auth.js', () => ({
   login: vi.fn(),
   register: vi.fn(),
+  // AuthContext hydrates mustChangePassword from /me on token restore
+  fetchMe: vi.fn().mockResolvedValue({ userId: 'id', email: 'user@example.com', mustChangePassword: false }),
 }));
 
 vi.mock('../auth/keycloak.js', () => ({

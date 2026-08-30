@@ -8,6 +8,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'stream';
 import { getS3Config } from '../db/settings.js';
+import { StorageNotFoundError } from './provider.js';
 import type { StorageProvider } from './provider.js';
 
 /**
@@ -15,8 +16,8 @@ import type { StorageProvider } from './provider.js';
  * such as MinIO, DigitalOcean Spaces).
  *
  * This is a class-based refactor of the standalone functions in s3.ts.
- * The original s3.ts is intentionally kept intact for the 4 route files that
- * still import from it directly; those will be migrated in a follow-up issue.
+ * As of MAS-602 no production code imports s3.ts anymore — only test mocks
+ * reference it. It can be deleted once those mocks are cleaned up.
  */
 export class S3StorageProvider implements StorageProvider {
   /**
@@ -96,14 +97,44 @@ export class S3StorageProvider implements StorageProvider {
     );
   }
 
+  /**
+   * Build the CopySource value for CopyObjectCommand. The AWS SDK does NOT
+   * URL-encode CopySource (it goes into the x-amz-copy-source header verbatim),
+   * so keys containing spaces, '%', '+', '#', '?' or non-ASCII characters must
+   * be encoded here. Each path segment is encoded individually to preserve the
+   * '/' separators. `Key:` params must stay unencoded — the SDK handles those.
+   */
+  private encodeCopySource(bucket: string, key: string): string {
+    const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+    return `${bucket}/${encodedKey}`;
+  }
+
   async copy(sourceKey: string, destKey: string): Promise<void> {
     const { client, bucket, prefix } = await this.getClient();
     await client.send(
       new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: `${bucket}/${this.prefixedKey(prefix, sourceKey)}`,
+        CopySource: this.encodeCopySource(bucket, this.prefixedKey(prefix, sourceKey)),
         Key: this.prefixedKey(prefix, destKey),
       }),
     );
+  }
+
+  async move(sourceKey: string, destKey: string): Promise<void> {
+    try {
+      await this.copy(sourceKey, destKey);
+    } catch (err) {
+      const name = (err as Error)?.name;
+      if (name === 'NoSuchKey' || name === 'NotFound') {
+        throw new StorageNotFoundError(sourceKey, err);
+      }
+      throw err;
+    }
+    // Delete of the source is best-effort: a failure leaves an orphaned object at
+    // sourceKey, but the caller's DB will already point at destKey, so it is never
+    // served or re-used. The orphan is recoverable by an operator.
+    await this.delete(sourceKey).catch((err) => {
+      console.error(`[s3] move: failed to delete source "${sourceKey}" after copy:`, err);
+    });
   }
 }

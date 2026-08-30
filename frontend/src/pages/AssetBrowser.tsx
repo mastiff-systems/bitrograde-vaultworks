@@ -13,6 +13,8 @@ import {
   downloadUrl,
   thumbnailUrl,
   versionDownloadUrl,
+  versionStreamUrl,
+  getAsset,
   bulkDelete,
   bulkDownload,
   type Asset,
@@ -108,10 +110,11 @@ function getUrlFilters() {
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
     folder: p.get('folder') ?? null,
+    preview: p.get('preview') ?? null,
   };
 }
 
-function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
+function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = false) {
   const p = new URLSearchParams();
   if (filters.q) p.set('q', filters.q);
   filters.exts.forEach((e) => p.append('ext', e));
@@ -121,8 +124,14 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>) {
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
   if (filters.folder) p.set('folder', filters.folder);
+  if (filters.preview) p.set('preview', filters.preview);
   const search = p.toString();
-  history.pushState(null, '', search ? `?${search}` : window.location.pathname);
+  const url = search ? `?${search}` : window.location.pathname;
+  if (replace) {
+    history.replaceState(null, '', url);
+  } else {
+    history.pushState(null, '', url);
+  }
 }
 
 // --- Types ---
@@ -255,6 +264,7 @@ function AssetCard({
   activeTagFilters,
   onClick,
   onDetails,
+  onDelete,
   onRemoveFromFolder,
   selectionMode,
   selected,
@@ -266,6 +276,7 @@ function AssetCard({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  onDelete?: () => void;
   /** When set (folder view active), shows a "Remove from folder" option in the context menu. */
   onRemoveFromFolder?: () => void;
   selectionMode?: boolean;
@@ -367,6 +378,17 @@ function AssetCard({
                       Remove from folder
                     </button>
                   )}
+                  {onDelete && (
+                    <button
+                      className="w-full text-left px-3 py-2 text-sm text-danger hover:text-danger hover:bg-surface-3 transition-colors flex items-center gap-2"
+                      onClick={() => { setMenuOpen(false); onDelete(); }}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                      </svg>
+                      Delete
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -422,13 +444,15 @@ function AssetCard({
 
 // --- Version History ---
 
-function VersionHistory({ assetId }: { assetId: string }) {
+function VersionHistory({ assetId, onVersionPreview }: { assetId: string; onVersionPreview?: (url: string) => void }) {
   const [versions, setVersions] = useState<AssetVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [message, setMessage] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  // Tracks which version is currently loaded in the preview panel
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -478,55 +502,78 @@ function VersionHistory({ assetId }: { assetId: string }) {
         </div>
       ) : (
         <div className="space-y-1.5">
-          {[...versions].reverse().map((v, idx) => (
-            <div
-              key={v.id}
-              className={`flex items-start gap-3 p-3 rounded-lg border ${idx === 0 ? 'border-accent/30 bg-accent/5' : 'border-border bg-surface-1'}`}
-            >
-              <div className="flex-shrink-0 mt-0.5">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${idx === 0 ? 'bg-accent text-white' : 'bg-surface-3 text-content-muted'}`}>
-                  v{v.version_number}
-                </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  {idx === 0 && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-light">
-                      Latest
-                    </span>
-                  )}
-                  <span className="text-xs text-content-muted">
-                    {formatDate(v.uploaded_at)}
-                  </span>
-                  {v.uploader && (
-                    <span className="text-xs text-content-muted truncate">
-                      · {v.uploader.email.split('@')[0]}
-                    </span>
-                  )}
-                </div>
-                {v.message && (
-                  <p className="text-xs text-content-secondary mt-0.5 leading-relaxed truncate">
-                    "{v.message}"
-                  </p>
-                )}
-                {v.size_bytes !== null && (
-                  <p className="text-[10px] text-content-muted mt-0.5 tabular-nums">
-                    {formatBytes(v.size_bytes)}
-                  </p>
-                )}
-              </div>
-              <a
-                href={versionDownloadUrl(assetId, v.id)}
-                download
-                className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
-                title="Download this version"
+          {[...versions].reverse().map((v, idx) => {
+            const isSelected = selectedVersionId === v.id;
+            const isLatest = idx === 0;
+            return (
+              <div
+                key={v.id}
+                onClick={onVersionPreview ? () => {
+                  setSelectedVersionId(v.id);
+                  onVersionPreview(versionStreamUrl(assetId, v.id));
+                } : undefined}
+                className={[
+                  'flex items-start gap-3 p-3 rounded-lg border transition-colors',
+                  // Clickable only when a preview handler is wired up
+                  onVersionPreview ? 'cursor-pointer' : '',
+                  // Border + background: selected takes highest priority, then latest, then default
+                  isSelected
+                    ? 'border-accent bg-accent/15 ring-1 ring-accent/30'
+                    : isLatest
+                    ? 'border-accent/30 bg-accent/5 hover:bg-accent/10'
+                    : 'border-border bg-surface-1 hover:bg-surface-2',
+                ].join(' ')}
+                role={onVersionPreview ? 'button' : undefined}
+                aria-pressed={onVersionPreview ? isSelected : undefined}
+                title={onVersionPreview ? `Preview version ${v.version_number}` : undefined}
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                </svg>
-              </a>
-            </div>
-          ))}
+                <div className="flex-shrink-0 mt-0.5">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isLatest ? 'bg-accent text-white' : 'bg-surface-3 text-content-muted'}`}>
+                    v{v.version_number}
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    {isLatest && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-light">
+                        Latest
+                      </span>
+                    )}
+                    <span className="text-xs text-content-muted">
+                      {formatDate(v.uploaded_at)}
+                    </span>
+                    {v.uploader && (
+                      <span className="text-xs text-content-muted truncate">
+                        · {v.uploader.email.split('@')[0]}
+                      </span>
+                    )}
+                  </div>
+                  {v.message && (
+                    <p className="text-xs text-content-secondary mt-0.5 leading-relaxed truncate">
+                      "{v.message}"
+                    </p>
+                  )}
+                  {v.size_bytes !== null && (
+                    <p className="text-[10px] text-content-muted mt-0.5 tabular-nums">
+                      {formatBytes(v.size_bytes)}
+                    </p>
+                  )}
+                </div>
+                {/* Download — stopPropagation so clicking this doesn't also trigger row-select */}
+                <a
+                  href={versionDownloadUrl(assetId, v.id)}
+                  download
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex-shrink-0 btn-ghost btn-sm text-[11px] text-content-muted hover:text-content-primary"
+                  title="Download this version"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  </svg>
+                </a>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -705,16 +752,23 @@ function ShareModal({ assetId, onClose }: { assetId: string; onClose: () => void
 
 // --- Asset Detail Modal ---
 
+/** Returns "First Last" if either name part exists, otherwise falls back to the email. */
+function resolveAttribution(name: string | null | undefined, email: string | null | undefined): string | null {
+  return name?.trim() || email?.trim() || null;
+}
+
 function AssetDetailModal({
   asset,
   onClose,
   onTagClick,
   onUpdate,
+  onVersionPreview,
 }: {
   asset: Asset;
   onClose: () => void;
   onTagClick: (name: string) => void;
   onUpdate: (updated: Asset) => void;
+  onVersionPreview?: (url: string) => void;
 }) {
   const { categories } = useCategoryContext();
   const [editingTags, setEditingTags] = useState(false);
@@ -724,6 +778,12 @@ function AssetDetailModal({
   const [deleting, setDeleting] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // Full asset detail (includes attribution fields not in list response)
+  const [fullAsset, setFullAsset] = useState<Asset | null>(null);
+  useEffect(() => {
+    getAsset(asset.id).then(setFullAsset).catch(() => {});
+  }, [asset.id]);
 
   // ── Folder membership state ─────────────────────────────────────────────────
   const [assetFolders, setAssetFolders] = useState<Folder[]>([]);
@@ -870,7 +930,7 @@ function AssetDetailModal({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Delete "${asset.original_name}"? This cannot be undone.`)) return;
+    if (!confirm(`Move "${asset.original_name}" to trash? You can restore it from the admin trash bin.`)) return;
     setDeleting(true);
     try {
       await deleteFile(asset.id);
@@ -1101,6 +1161,33 @@ function AssetDetailModal({
               <div className="label">MIME type</div>
               <div className="text-content-primary font-mono text-xs">{asset.mime_type ?? '—'}</div>
             </div>
+            {/* Attribution — populated from GET /api/files/:id */}
+            {fullAsset && (
+              <>
+                <div className="col-span-2">
+                  <div className="label">Created by</div>
+                  <div className="text-content-primary text-xs">
+                    {resolveAttribution(fullAsset.created_by_name, fullAsset.created_by_email) ?? 'Unknown'}
+                    <span className="text-content-muted ml-1.5">
+                      · {formatDate(fullAsset.uploaded_at)}
+                    </span>
+                  </div>
+                </div>
+                {fullAsset.updated_by_name || fullAsset.updated_by_email ? (
+                  <div className="col-span-2">
+                    <div className="label">Last updated by</div>
+                    <div className="text-content-primary text-xs">
+                      {resolveAttribution(fullAsset.updated_by_name, fullAsset.updated_by_email)}
+                      {fullAsset.updated_at && (
+                        <span className="text-content-muted ml-1.5">
+                          · {formatDate(fullAsset.updated_at)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
           )}
 
@@ -1292,7 +1379,7 @@ function AssetDetailModal({
           {!editingMeta && (
           <div>
             <div className="label mb-2.5">Version history</div>
-            <VersionHistory assetId={asset.id} />
+            <VersionHistory assetId={asset.id} onVersionPreview={onVersionPreview} />
           </div>
           )}
         </div>
@@ -1345,6 +1432,8 @@ function AssetListRow({
   activeTagFilters,
   onClick,
   onDetails,
+  onDelete,
+  onRemoveFromFolder,
   selectionMode,
   selected,
   onToggleSelect,
@@ -1355,6 +1444,9 @@ function AssetListRow({
   activeTagFilters: string[];
   onClick: () => void;
   onDetails: () => void;
+  onDelete?: () => void;
+  /** When set (folder view active), shows a "Remove from folder" action on the row. */
+  onRemoveFromFolder?: () => void;
   selectionMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
@@ -1464,6 +1556,30 @@ function AssetListRow({
             <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
           </svg>
         </button>
+        {onRemoveFromFolder && (
+          <button
+            onClick={onRemoveFromFolder}
+            className="btn-ghost btn-sm p-1.5 text-content-muted hover:text-danger"
+            aria-label="Remove from folder"
+            title="Remove from folder"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h18M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2m3 0v12a2 2 0 01-2 2H7a2 2 0 01-2-2V7h14z" />
+            </svg>
+          </button>
+        )}
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            className="btn-ghost btn-sm p-1.5 text-content-muted hover:text-danger"
+            aria-label="Delete"
+            title="Delete"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1647,6 +1763,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const [versionPreviewUrl, setVersionPreviewUrl] = useState<string | null>(null);
 
   // Selection state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -1721,7 +1838,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return;
+    if (!confirm(`Move ${selectedIds.size} selected asset${selectedIds.size > 1 ? 's' : ''} to trash? You can restore ${selectedIds.size > 1 ? 'them' : 'it'} from the admin trash bin.`)) return;
     setBulkActionPending(true);
     try {
       const result = await bulkDelete(Array.from(selectedIds));
@@ -1729,7 +1846,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       listTags().then(setAllTags).catch(() => {});
       exitSelectionMode();
       if (result.errors.length > 0) {
-        setError(`${result.deleted.length} deleted; ${result.errors.length} failed.`);
+        setError(`${result.deleted.length} moved to trash; ${result.errors.length} failed.`);
       }
     } catch {
       setError('Bulk delete failed. Please try again.');
@@ -1753,6 +1870,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   // Track popstate restores to avoid pushing a duplicate history entry
   const isRestoringFromHistory = useRef(false);
+  // Track whether the component has mounted so we use replaceState on first render
+  const didMountRef = useRef(false);
 
   // Restore filter state on browser back/forward
   useEffect(() => {
@@ -1767,10 +1886,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
       setActiveFolderId(filters.folder);
+      // Restore preview asset from URL: fast-path lookup in already-loaded list
+      if (filters.preview) {
+        const found = assets.find((a) => a.id === filters.preview) ?? null;
+        setPreviewAsset(found);
+      } else {
+        setPreviewAsset(null);
+      }
     }
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [assets]);
 
   // Restore category/subcategory from URL once categories are loaded
   const urlRestoredRef = useRef(false);
@@ -1796,14 +1922,22 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     if (!debouncedQuery && sort === 'relevance') setSort('newest');
   }, [debouncedQuery]);
 
-  // Sync URL (skip during popstate restores to avoid creating a duplicate forward entry)
+  // Sync URL (skip during popstate restores to avoid creating a duplicate forward entry).
+  // On mount, use replaceState so we don't push a duplicate entry when the URL already contains ?folder=abc etc.
   useEffect(() => {
     if (isRestoringFromHistory.current) {
       isRestoringFromHistory.current = false;
       return;
     }
-    pushUrlFilters({ q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort, category: selectedCategoryId, subcategory: selectedSubcategoryId, folder: activeFolderId });
-  }, [debouncedQuery, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId]);
+    const isMount = !didMountRef.current;
+    didMountRef.current = true;
+    pushUrlFilters(
+      { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
+        category: selectedCategoryId, subcategory: selectedSubcategoryId,
+        folder: activeFolderId, preview: previewAsset?.id ?? null },
+      isMount, // replaceState on first render, pushState on subsequent filter changes
+    );
+  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
 
 
   // Load tags
@@ -1812,12 +1946,31 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   }, []);
 
   // Load assets: branch on activeFolderId — folder view vs. all-assets view
+  const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId].join(' ');
+  const prevFilterKeyRef = useRef(filterKey);
   useEffect(() => {
+    // Filter change invalidates the current page; snap back to 1 and let the
+    // re-render trigger the actual fetch (avoids a wasted stale-page request).
+    const filtersChanged = prevFilterKeyRef.current !== filterKey;
+    prevFilterKeyRef.current = filterKey;
+    if (filtersChanged && page !== 1) {
+      setPage(1);
+      return;
+    }
+
     setLoading(true);
     setError(null);
+    let cancelled = false;
 
     const fetch = activeFolderId
-      ? listFolderAssets(activeFolderId, { limit: 200 }).then((page) => page.assets)
+      ? listFolderAssets(activeFolderId, { limit: 200 }).then((folderPage) => {
+          // Folder endpoint is cursor-based (no total envelope): count what we
+          // fetched and keep the page controls hidden.
+          if (cancelled) return;
+          setAssets(folderPage.assets);
+          setTotal(folderPage.assets.length);
+          setTotalPages(1);
+        })
       : listFiles({
           q: debouncedQuery || undefined,
           // Pass single type to API; multi-type handled client-side below
@@ -1825,13 +1978,20 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           tags: selectedTags.length > 0 ? selectedTags : undefined,
           categoryId: selectedCategoryId ?? undefined,
           subcategoryId: selectedSubcategoryId ?? undefined,
+          page,
+        }).then((res) => {
+          if (cancelled) return;
+          setAssets(res.data);
+          setTotal(res.total);
+          setTotalPages(res.totalPages);
         });
 
     fetch
-      .then(setAssets)
-      .catch(() => setError('Failed to load assets.'))
-      .finally(() => setLoading(false));
-  }, [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId]);
+      .catch(() => { if (!cancelled) setError('Failed to load assets.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [filterKey, page]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -1928,6 +2088,24 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       setAssets((prev) => prev.filter((a) => a.id !== assetId));
     } catch (err) {
       console.error('Failed to remove asset from folder', err);
+    }
+  }
+
+  /**
+   * Soft-delete an asset directly from the card context menu.
+   * Shows a confirm dialog, calls deleteFile (moves to trash), then removes the
+   * asset from the current view optimistically and refreshes tags.
+   */
+  async function handleDeleteFromCard(assetId: string) {
+    const asset = assets.find((a) => a.id === assetId);
+    const name = asset?.original_name ?? 'this file';
+    if (!confirm(`Move "${name}" to trash? You can restore it from the admin trash bin.`)) return;
+    try {
+      await deleteFile(assetId);
+      setAssets((prev) => prev.filter((a) => a.id !== assetId));
+      listTags().then(setAllTags).catch(() => {});
+    } catch (err) {
+      console.error('Failed to delete asset', err);
     }
   }
 
@@ -2233,6 +2411,29 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                   activeTagFilters={selectedTags}
                   onClick={() => setPreviewAsset(asset)}
                   onDetails={() => setDetailAsset(asset)}
+                  onDelete={() => handleDeleteFromCard(asset.id)}
+                  onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={toggleSelect}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Asset list */}
+          {!loading && displayed.length > 0 && viewMode === 'list' && (
+            <div className="card overflow-hidden">
+              {displayed.map((asset) => (
+                <AssetListRow
+                  key={asset.id}
+                  asset={asset}
+                  categoryName={asset.category_id ? categoryMap[asset.category_id] : undefined}
+                  onTagClick={toggleTag}
+                  activeTagFilters={selectedTags}
+                  onClick={() => setPreviewAsset(asset)}
+                  onDetails={() => setDetailAsset(asset)}
+                  onDelete={() => handleDeleteFromCard(asset.id)}
                   onRemoveFromFolder={activeFolderId ? () => handleRemoveFromFolder(asset.id) : undefined}
                   selectionMode={selectionMode}
                   selected={selectedIds.has(asset.id)}
@@ -2289,6 +2490,11 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           onClose={() => setDetailAsset(null)}
           onTagClick={toggleTag}
           onUpdate={handleAssetUpdate}
+          onVersionPreview={(url) => {
+            setVersionPreviewUrl(url);
+            // If no file viewer is open yet, open it for the detail asset
+            if (!previewAsset) setPreviewAsset(detailAsset);
+          }}
         />
       )}
 
@@ -2297,10 +2503,23 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         <FileViewer
           asset={previewAsset}
           assets={displayed}
-          onClose={() => setPreviewAsset(null)}
+          urlOverride={versionPreviewUrl ?? undefined}
+          onClose={() => {
+            setPreviewAsset(null);
+            setVersionPreviewUrl(null);
+            // Remove ?preview= from URL without adding a history entry so that
+            // pressing Back after an explicit close does not re-open the viewer.
+            pushUrlFilters(
+              { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
+                category: selectedCategoryId, subcategory: selectedSubcategoryId,
+                folder: activeFolderId, preview: null },
+              true, // replaceState
+            );
+          }}
           onOpenDetails={() => {
             setDetailAsset(previewAsset);
             setPreviewAsset(null);
+            setVersionPreviewUrl(null);
           }}
         />
       )}

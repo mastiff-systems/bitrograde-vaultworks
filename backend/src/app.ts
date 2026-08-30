@@ -17,6 +17,7 @@ import { collectionsRoutes } from './routes/collections.js';
 import { shareRoutes } from './routes/share.js';
 import { auditRoutes } from './routes/audit.js';
 import { authenticate } from './auth/middleware.js';
+import { startTrashPurgeJob } from './jobs/trashPurge.js';
 import { prisma } from './db/client.js';
 
 // Routes that use ?token= query param auth (browser can't set headers for media/SSE)
@@ -31,13 +32,26 @@ const AUTH_SKIP = [
 
 // Paths exempt from the mustChangePassword 403 gate (routes the user needs to change their password)
 const MUST_CHANGE_PW_EXEMPT = new Set(['/api/auth/me', '/api/auth/change-password']);
-const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/download$/;
+// Includes /preview for version thumbnails (MAS-570) and /download
+const ASSET_MEDIA_RE = /^\/api\/files\/[0-9a-f-]{36}\/(stream|thumbnail|download)$|^\/api\/files\/[0-9a-f-]{36}\/versions\/[0-9a-f-]{36}\/(download|preview)$/;
 // Public share download route — unauthenticated by design
 const SHARE_TOKEN_RE = /^\/api\/share\/[0-9a-f]{64}$/;
+
+// Both dev and prod sit behind nginx on the same host (proxy connects from 127.0.0.1),
+// but the app binds 0.0.0.0 — trusting only loopback means direct clients can't spoof
+// X-Forwarded-For to escape rate limiting. Override with TRUST_PROXY if topology changes
+// ('true', 'false', or any proxy-addr spec like an IP/CIDR list).
+function parseTrustProxy(value: string | undefined): boolean | string {
+  if (value === undefined || value === '') return 'loopback';
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return value;
+}
 
 export async function createApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.logger ?? false,
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     ajv: {
       customOptions: {
         // Do not silently strip extra fields — schemas with additionalProperties:false must reject them.
@@ -54,8 +68,16 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
     contentSecurityPolicy: process.env.HELMET_CSP ? undefined : false,
   });
 
-  // Rate limiting available opt-in per route via config.rateLimit
-  await app.register(rateLimit, { global: false });
+  // Rate limiting available opt-in per route via config.rateLimit.
+  // Runs at preHandler (after the auth hook below) so authenticated requests are
+  // keyed per user rather than per IP — users behind a shared NAT don't collide,
+  // and one user can't exhaust another's bucket. Unauthenticated routes key on
+  // req.ip, which resolves from X-Forwarded-For thanks to trustProxy above.
+  await app.register(rateLimit, {
+    global: false,
+    hook: 'preHandler',
+    keyGenerator: (req) => (req.user ? `user:${req.user.userId}` : `ip:${req.ip}`),
+  });
 
   const corsOrigin = process.env.CORS_ORIGIN;
   if (process.env.NODE_ENV === 'production' && !corsOrigin) {
@@ -107,6 +129,8 @@ export async function createApp(opts: { logger?: boolean } = {}): Promise<Fastif
   await app.register(auditRoutes);
 
   app.get('/health', async () => ({ status: 'ok' }));
+
+  startTrashPurgeJob();
 
   return app;
 }

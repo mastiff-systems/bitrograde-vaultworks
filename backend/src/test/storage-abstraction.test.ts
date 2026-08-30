@@ -164,7 +164,7 @@ describe('Scenario 1: Disk storage — full round trip', () => {
     expect(streamRes.text).toBe(content);
   });
 
-  it('delete removes file from disk and cleans up DB record', async () => {
+  it('delete moves file to trash on disk, purge removes bytes and DB record', async () => {
     const content = 'to be deleted';
 
     const uploadRes = await request(app.server)
@@ -174,19 +174,31 @@ describe('Scenario 1: Disk storage — full round trip', () => {
     expect(uploadRes.status).toBe(201);
     const assetId: string = uploadRes.body[0].id;
     const filePath = path.join(tmpDir, `assets/${assetId}/delme.txt`);
+    const trashPath = path.join(tmpDir, `trash/${assetId}/delme.txt`);
 
     // File must exist before delete
     await expect(fs.access(filePath)).resolves.toBeUndefined();
 
+    // Soft-delete: file moves to trash/, DB record marked deleted
     const delRes = await request(app.server)
       .delete(`/api/files/${assetId}`)
       .set('Authorization', `Bearer ${token}`);
     expect(delRes.status).toBe(204);
 
-    // File must be gone from disk
     await expect(fs.access(filePath)).rejects.toThrow();
+    await expect(fs.access(trashPath)).resolves.toBeUndefined();
 
-    // DB record must be gone
+    const trashed = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(trashed?.deletedAt).not.toBeNull();
+    expect(trashed?.storageKey).toBe(`trash/${assetId}/delme.txt`);
+
+    // Purge: bytes removed from disk, DB record gone
+    const purgeRes = await request(app.server)
+      .delete(`/api/files/${assetId}/purge`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(purgeRes.status).toBe(204);
+
+    await expect(fs.access(trashPath)).rejects.toThrow();
     const dbRecord = await prisma.asset.findUnique({ where: { id: assetId } });
     expect(dbRecord).toBeNull();
   });
@@ -207,7 +219,7 @@ describe('Scenario 1: Disk storage — full round trip', () => {
     expect(thumbStat.size).toBeGreaterThan(0);
   });
 
-  it('delete also removes thumbnail from disk', async () => {
+  it('delete moves thumbnail to trash on disk, purge removes it', async () => {
     const uploadRes = await request(app.server)
       .post('/api/upload')
       .set('Authorization', `Bearer ${token}`)
@@ -217,6 +229,7 @@ describe('Scenario 1: Disk storage — full round trip', () => {
     expect(thumbnailKey).toBeTruthy();
 
     const thumbPath = path.join(tmpDir, thumbnailKey as string);
+    const trashThumbPath = path.join(tmpDir, `trash/${assetId}/thumbnail.webp`);
     await expect(fs.access(thumbPath)).resolves.toBeUndefined();
 
     const delRes = await request(app.server)
@@ -224,8 +237,16 @@ describe('Scenario 1: Disk storage — full round trip', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(delRes.status).toBe(204);
 
-    // Thumbnail must be gone from disk
+    // Thumbnail must have moved from its live path into trash/
     await expect(fs.access(thumbPath)).rejects.toThrow();
+    await expect(fs.access(trashThumbPath)).resolves.toBeUndefined();
+
+    // Purge removes the trashed thumbnail bytes
+    const purgeRes = await request(app.server)
+      .delete(`/api/files/${assetId}/purge`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(purgeRes.status).toBe(204);
+    await expect(fs.access(trashThumbPath)).rejects.toThrow();
   });
 
   it('storageKey in DB uses assets/{uuid}/{filename} format', async () => {
@@ -299,7 +320,7 @@ describe('Scenario 2: S3 storage — key format and operations unchanged', () =>
     expect(dlRes.text).toBe(content);
   });
 
-  it('delete removes asset from S3 and DB', async () => {
+  it('delete trashes asset in S3, purge removes it from S3 and DB', async () => {
     const uploadRes = await request(app.server)
       .post('/api/upload')
       .set('Authorization', `Bearer ${token}`)
@@ -307,19 +328,67 @@ describe('Scenario 2: S3 storage — key format and operations unchanged', () =>
     expect(uploadRes.status).toBe(201);
     const assetId: string = uploadRes.body[0].id;
 
+    // Soft-delete: object moves to trash/ in S3, DB record marked deleted
     const delRes = await request(app.server)
       .delete(`/api/files/${assetId}`)
       .set('Authorization', `Bearer ${token}`);
     expect(delRes.status).toBe(204);
 
-    // DB record must be gone
-    const dbAsset = await prisma.asset.findUnique({ where: { id: assetId } });
-    expect(dbAsset).toBeNull();
+    const trashed = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(trashed?.deletedAt).not.toBeNull();
+    expect(trashed?.storageKey).toBe(`trash/${assetId}/s3del.txt`);
 
-    // Attempting to download returns 404 (asset gone from DB)
+    // Trashed assets are not downloadable
     const dlRes = await request(app.server)
       .get(`/api/files/${assetId}/download?token=${token}`);
     expect(dlRes.status).toBe(404);
+
+    // Purge: DB record gone
+    const purgeRes = await request(app.server)
+      .delete(`/api/files/${assetId}/purge`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(purgeRes.status).toBe(204);
+    const dbAsset = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(dbAsset).toBeNull();
+  });
+
+  it('soft-delete → restore round-trip works for filenames with spaces, %, + and non-ASCII (MAS-664)', async () => {
+    // CopyObject is the only S3 op that needs URL-encoding; this exercises it
+    // twice (delete moves to trash/, restore moves back to assets/).
+    const filename = 'my file (1) 100% +plus ü.png';
+
+    const uploadRes = await request(app.server)
+      .post('/api/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('files', TINY_PNG, { filename, contentType: 'image/png' });
+    expect(uploadRes.status).toBe(201);
+    const assetId: string = uploadRes.body[0].id;
+
+    // Soft-delete: CopyObject assets/ → trash/ must succeed despite the unsafe name
+    const delRes = await request(app.server)
+      .delete(`/api/files/${assetId}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(delRes.status).toBe(204);
+
+    const trashed = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(trashed?.deletedAt).not.toBeNull();
+    expect(trashed?.storageKey).toBe(`trash/${assetId}/${filename}`);
+
+    // Restore: CopyObject trash/ → assets/ must succeed too
+    const restoreRes = await request(app.server)
+      .post(`/api/files/${assetId}/restore`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(restoreRes.status).toBe(200);
+
+    const restored = await prisma.asset.findUnique({ where: { id: assetId } });
+    expect(restored?.deletedAt).toBeNull();
+    expect(restored?.storageKey).toBe(`assets/${assetId}/${filename}`);
+
+    // The restored object must be intact and downloadable
+    const dlRes = await request(app.server)
+      .get(`/api/files/${assetId}/download?token=${token}`);
+    expect(dlRes.status).toBe(200);
+    expect(Buffer.from(dlRes.body)).toEqual(TINY_PNG);
   });
 
   it('storageKey format preserved when root folder prefix is set', async () => {
@@ -485,12 +554,21 @@ describe('Scenario 4: Edge cases', () => {
       .delete(`/api/files/${asset.id}`)
       .set('Authorization', `Bearer ${token}`);
 
-    // Must return 204 — DiskStorageProvider.delete() silently swallows ENOENT
+    // Must return 204 — a missing storage object is tolerated (DB is source of truth),
+    // otherwise the asset would be an undeletable ghost.
     expect(delRes.status).toBe(204);
 
-    // DB record must still be cleaned up
+    // DB record must still be soft-deleted
     const check = await prisma.asset.findUnique({ where: { id: asset.id } });
-    expect(check).toBeNull();
+    expect(check?.deletedAt).not.toBeNull();
+
+    // Purge is equally ENOENT-tolerant and removes the DB record for good
+    const purgeRes = await request(app.server)
+      .delete(`/api/files/${asset.id}/purge`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(purgeRes.status).toBe(204);
+    const purged = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(purged).toBeNull();
   });
 
   it('double-delete: second DELETE returns 404, not 500', async () => {

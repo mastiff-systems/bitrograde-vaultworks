@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { Asset } from './client.js';
+import { isPasswordChangeRequired, emitPasswordChangeRequired } from './passwordGate.js';
 
 const TOKEN_KEY = 'vaultworks_token';
 
@@ -20,6 +21,7 @@ api.interceptors.response.use(
       localStorage.removeItem(TOKEN_KEY);
       window.location.reload();
     }
+    if (isPasswordChangeRequired(err)) emitPasswordChangeRequired();
     return Promise.reject(err);
   },
 );

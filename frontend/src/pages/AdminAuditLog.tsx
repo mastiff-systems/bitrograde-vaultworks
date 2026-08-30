@@ -12,10 +12,15 @@ const ACTION_STYLES: Record<AuditAction, string> = {
   DELETE:          'bg-danger/15 text-danger',
   SHARE:           'bg-purple-500/15 text-purple-400',
   REVOKE_SHARE:    'bg-orange-500/15 text-orange-400',
+  LOGIN:           'bg-teal-500/15 text-teal-400',
+  LOGOUT:          'bg-surface-4 text-content-muted',
+  RESTORE:         'bg-sky-500/15 text-sky-400',
+  USER_CREATED:    'bg-indigo-500/15 text-indigo-400',
 };
 
 const ACTIONS: AuditAction[] = [
-  'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'UPDATE_METADATA', 'DELETE', 'SHARE', 'REVOKE_SHARE',
+  'UPLOAD', 'DOWNLOAD', 'VIEW', 'UPDATE', 'UPDATE_METADATA', 'DELETE',
+  'SHARE', 'REVOKE_SHARE', 'LOGIN', 'LOGOUT', 'RESTORE', 'USER_CREATED',
 ];
 
 function formatDateTime(d: string): string {
@@ -50,22 +55,19 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
   // Filter applied state (drives fetch)
   const [action, setAction]       = useState<AuditAction | ''>('');
   const [userId, setUserId]       = useState('');
-  const [assetId, setAssetId]     = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate]     = useState('');
+  const [from, setFrom]           = useState('');
+  const [to, setTo]               = useState('');
 
   // Pending text input state (committed on Enter/blur)
-  const [userIdInput, setUserIdInput]   = useState('');
-  const [assetIdInput, setAssetIdInput] = useState('');
+  const [userIdInput, setUserIdInput] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
   const load = (p: number, opts: {
     action?: AuditAction | '';
     userId?: string;
-    assetId?: string;
-    startDate?: string;
-    endDate?: string;
+    from?: string;
+    to?: string;
   }) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
@@ -75,15 +77,14 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
     setError(null);
 
     fetchAuditLogs({
-      action:    opts.action    || undefined,
-      userId:    opts.userId    || undefined,
-      assetId:   opts.assetId   || undefined,
-      startDate: opts.startDate ? new Date(opts.startDate).toISOString() : undefined,
-      endDate:   opts.endDate   ? new Date(opts.endDate).toISOString()   : undefined,
+      action: opts.action  || undefined,
+      userId: opts.userId  || undefined,
+      from:   opts.from    ? new Date(opts.from).toISOString() : undefined,
+      to:     opts.to      ? new Date(opts.to).toISOString()   : undefined,
       page: p,
     }).then((res) => {
       if (ctrl.signal.aborted) return;
-      setRows(res.data);
+      setRows(res.logs);
       setTotal(res.total);
       setTotalPages(res.totalPages);
       setLoading(false);
@@ -96,68 +97,60 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
 
   // Initial load
   useEffect(() => {
-    load(1, { action, userId, assetId, startDate, endDate });
+    load(1, { action, userId, from, to });
     return () => abortRef.current?.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [action, userId, assetId, startDate, endDate]);
+  }, [action, userId, from, to]);
 
   const applyFilter = (overrides: Partial<{
     action: AuditAction | '';
     userId: string;
-    assetId: string;
-    startDate: string;
-    endDate: string;
+    from: string;
+    to: string;
   }>) => {
     const next = {
-      action:    'action'    in overrides ? overrides.action!    : action,
-      userId:    'userId'    in overrides ? overrides.userId!    : userId,
-      assetId:   'assetId'   in overrides ? overrides.assetId!   : assetId,
-      startDate: 'startDate' in overrides ? overrides.startDate! : startDate,
-      endDate:   'endDate'   in overrides ? overrides.endDate!   : endDate,
+      action: 'action' in overrides ? overrides.action! : action,
+      userId: 'userId' in overrides ? overrides.userId! : userId,
+      from:   'from'   in overrides ? overrides.from!   : from,
+      to:     'to'     in overrides ? overrides.to!     : to,
     };
     setPage(1);
-    if ('action'    in overrides) setAction(next.action);
-    if ('userId'    in overrides) setUserId(next.userId);
-    if ('assetId'   in overrides) setAssetId(next.assetId);
-    if ('startDate' in overrides) setStartDate(next.startDate);
-    if ('endDate'   in overrides) setEndDate(next.endDate);
+    if ('action' in overrides) setAction(next.action);
+    if ('userId' in overrides) setUserId(next.userId);
+    if ('from'   in overrides) setFrom(next.from);
+    if ('to'     in overrides) setTo(next.to);
     load(1, next);
   };
 
   const commitUserId = () => {
     if (userIdInput !== userId) applyFilter({ userId: userIdInput });
   };
-  const commitAssetId = () => {
-    if (assetIdInput !== assetId) applyFilter({ assetId: assetIdInput });
-  };
 
   const handleClear = () => {
     setUserIdInput('');
-    setAssetIdInput('');
     setPage(1);
     setAction('');
     setUserId('');
-    setAssetId('');
-    setStartDate('');
-    setEndDate('');
-    load(1, { action: '', userId: '', assetId: '', startDate: '', endDate: '' });
+    setFrom('');
+    setTo('');
+    load(1, { action: '', userId: '', from: '', to: '' });
   };
 
   const handlePrev = () => {
     if (page <= 1) return;
     const prev = page - 1;
     setPage(prev);
-    load(prev, { action, userId, assetId, startDate, endDate });
+    load(prev, { action, userId, from, to });
   };
 
   const handleNext = () => {
     if (page >= totalPages) return;
     const next = page + 1;
     setPage(next);
-    load(next, { action, userId, assetId, startDate, endDate });
+    load(next, { action, userId, from, to });
   };
 
-  const hasFilters = action || userId || assetId || startDate || endDate;
+  const hasFilters = action || userId || from || to;
 
   if (user?.role !== 'admin') {
     return (
@@ -208,25 +201,13 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
           aria-label="Filter by user ID"
         />
 
-        {/* Asset ID */}
-        <input
-          type="text"
-          placeholder="Asset ID (UUID)"
-          value={assetIdInput}
-          onChange={(e) => setAssetIdInput(e.target.value)}
-          onBlur={commitAssetId}
-          onKeyDown={(e) => e.key === 'Enter' && commitAssetId()}
-          className="input-field text-sm h-9 px-3 w-56"
-          aria-label="Filter by asset ID"
-        />
-
         {/* Date range */}
         <div className="flex items-center gap-2">
           <label className="text-xs text-content-secondary whitespace-nowrap">From</label>
           <input
             type="datetime-local"
-            value={startDate}
-            onChange={(e) => applyFilter({ startDate: e.target.value })}
+            value={from}
+            onChange={(e) => applyFilter({ from: e.target.value })}
             className="input-field text-sm h-9 px-3"
             aria-label="Start date"
           />
@@ -235,8 +216,8 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
           <label className="text-xs text-content-secondary whitespace-nowrap">To</label>
           <input
             type="datetime-local"
-            value={endDate}
-            onChange={(e) => applyFilter({ endDate: e.target.value })}
+            value={to}
+            onChange={(e) => applyFilter({ to: e.target.value })}
             className="input-field text-sm h-9 px-3"
             aria-label="End date"
           />
@@ -283,10 +264,10 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
                   rows.map((row) => (
                     <tr key={row.id}>
                       <td className="text-content-secondary text-sm whitespace-nowrap">
-                        {formatDateTime(row.createdAt)}
+                        {formatDateTime(row.created_at)}
                       </td>
                       <td className="text-content-primary text-sm">
-                        {row.user?.email ?? (
+                        {row.user_email ?? (
                           <span className="text-content-muted italic">deleted user</span>
                         )}
                       </td>
@@ -296,15 +277,15 @@ export function AdminAuditLog({ onNavigateToAsset }: Props = {}) {
                         </span>
                       </td>
                       <td className="text-sm">
-                        {row.asset ? (
+                        {row.asset_name ? (
                           <button
-                            onClick={() => row.assetId && onNavigateToAsset?.(row.assetId)}
+                            onClick={() => row.asset_id && onNavigateToAsset?.(row.asset_id)}
                             className="text-accent-light font-medium hover:underline text-left"
                           >
-                            {row.asset.originalName}
+                            {row.asset_name}
                           </button>
                         ) : (
-                          <span className="text-content-muted italic">deleted asset</span>
+                          <span className="text-content-muted italic">—</span>
                         )}
                       </td>
                       <td className="text-xs text-content-muted max-w-xs truncate" title={formatMetadata(row.details)}>

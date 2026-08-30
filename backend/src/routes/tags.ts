@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { requireAdmin } from '../auth/middleware.js';
 import { parseBody, parseParams } from '../lib/validate.js';
+import { logAudit, AuditAction } from '../lib/audit.js';
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid ID') });
 const CreateTagBody = z.object({ name: z.string().min(1).max(100) });
@@ -147,7 +148,16 @@ export async function tagsRoutes(app: FastifyInstance): Promise<void> {
 
     const updated = await prisma.asset.findUnique({
       where: { id: params.id },
-      select: { tags: { select: { tag: { select: { id: true, name: true } } } } },
+      select: { originalName: true, tags: { select: { tag: { select: { id: true, name: true } } } } },
+    });
+
+    void logAudit({
+      userId: req.user.userId,
+      action: AuditAction.UPDATE_METADATA,
+      assetId: params.id,
+      assetName: updated?.originalName ?? undefined,
+      ipAddress: req.ip,
+      details: { updated: 'tags' },
     });
 
     return reply.send({ tags: updated?.tags.map((at) => at.tag) ?? [] });

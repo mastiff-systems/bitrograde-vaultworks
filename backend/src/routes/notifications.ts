@@ -3,8 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
-import { verifyLocalToken } from '../auth/tokens.js';
-import { verifyKeycloakToken } from '../auth/keycloak.js';
+import { authenticateQueryToken } from '../auth/middleware.js';
 import { parseParams } from '../lib/validate.js';
 import { registerSseClient } from '../notifications/service.js';
 
@@ -112,21 +111,8 @@ export async function notificationsRoutes(app: FastifyInstance): Promise<void> {
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
   }, async (req, reply) => {
     const token = (req.query as Record<string, string>).token;
-    if (!token) return reply.status(401).send({ error: 'token required' });
-
-    let userId: string;
-    try {
-      const provider = process.env.AUTH_PROVIDER ?? 'local';
-      if (provider === 'keycloak') {
-        const payload = await verifyKeycloakToken(token);
-        userId = payload.userId;
-      } else {
-        const payload = verifyLocalToken(token);
-        userId = payload.userId;
-      }
-    } catch {
-      return reply.status(401).send({ error: 'Invalid token' });
-    }
+    const userId = await authenticateQueryToken(token, reply);
+    if (userId === false) return;
 
     const stream = new PassThrough();
     const cleanup = registerSseClient(userId, stream);

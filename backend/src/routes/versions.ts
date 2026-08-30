@@ -3,18 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
 import { parseParams } from '../lib/validate.js';
-import { verifyLocalToken } from '../auth/tokens.js';
-import { verifyKeycloakToken } from '../auth/keycloak.js';
+import { authenticateQueryToken } from '../auth/middleware.js';
 import { generateThumbnail } from '../lib/thumbnail.js';
-
-async function authenticateToken(token: string | undefined, reply: Parameters<typeof parseParams>[2]): Promise<boolean> {
-  if (!token) { reply.status(401).send({ error: 'token required' }); return false; }
-  try {
-    const provider = process.env.AUTH_PROVIDER ?? 'local';
-    if (provider === 'keycloak') { await verifyKeycloakToken(token); } else { verifyLocalToken(token); }
-    return true;
-  } catch { reply.status(401).send({ error: 'Invalid token' }); return false; }
-}
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid asset ID') });
 const VersionParams = z.object({
@@ -237,7 +227,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const token = (req.query as Record<string, string>).token;
-      if (!await authenticateToken(token, reply)) return;
+      if (await authenticateQueryToken(token, reply) === false) return;
 
       const params = parseParams(VersionParams, req.params, reply);
       if (!params) return;
@@ -270,7 +260,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     '/api/files/:id/versions/:versionId/preview',
     async (req, reply) => {
       const token = (req.query as Record<string, string>).token;
-      if (!await authenticateToken(token, reply)) return;
+      if (await authenticateQueryToken(token, reply) === false) return;
 
       const params = parseParams(VersionParams, req.params, reply);
       if (!params) return;

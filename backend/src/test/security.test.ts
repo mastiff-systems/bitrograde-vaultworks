@@ -516,6 +516,100 @@ describe('Rate limit: POST /api/files/bulk-download (max 10 / minute)', () => {
   });
 });
 
+// ─── Rate limit – per-client keying behind a proxy (MAS-665) ──────────────────
+// trustProxy defaults to 'loopback', and the test client connects from 127.0.0.1,
+// so a supertest request with X-Forwarded-For set is keyed exactly like a request
+// forwarded by the prod/dev nginx.
+
+describe('Rate limit keying: clients behind the same proxy get independent buckets', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('keys unauthenticated routes by forwarded client IP, not the proxy address', async () => {
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', '203.0.113.1')
+        .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+      expect(r.status).not.toBe(429);
+    }
+
+    // Client A exhausted its bucket
+    const exhausted = await request(app.server)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '203.0.113.1')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(exhausted.status).toBe(429);
+
+    // Client B behind the same proxy is unaffected
+    const otherClient = await request(app.server)
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '203.0.113.2')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(otherClient.status).not.toBe(429);
+
+    // A direct (non-proxied) request has its own bucket too
+    const direct = await request(app.server)
+      .post('/api/auth/login')
+      .send({ email: 'proxied@example.com', password: 'wrongpassword' });
+    expect(direct.status).not.toBe(429);
+  });
+});
+
+describe('Rate limit keying: authenticated routes key per user, not per IP', () => {
+  let app: FastifyInstance;
+  let tokenA: string;
+  let tokenB: string;
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+
+  beforeAll(async () => {
+    await cleanDb();
+    app = await buildRateLimitedApp();
+    const regA = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-usera@example.com', password: 'password123' });
+    tokenA = regA.body.token;
+    const regB = await request(app.server)
+      .post('/api/auth/register')
+      .send({ email: 'ratelimit-userb@example.com', password: 'password123' });
+    tokenB = regB.body.token;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('user B is not 429ed after user A exhausts a bucket from the same IP', async () => {
+    for (let i = 0; i < 10; i++) {
+      const r = await request(app.server)
+        .post('/api/files/bulk-download')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ ids: [fakeId] });
+      expect(r.status).not.toBe(429);
+    }
+
+    const exhausted = await request(app.server)
+      .post('/api/files/bulk-download')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ ids: [fakeId] });
+    expect(exhausted.status).toBe(429);
+
+    const otherUser = await request(app.server)
+      .post('/api/files/bulk-download')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({ ids: [fakeId] });
+    expect(otherUser.status).not.toBe(429);
+  });
+});
+
 // ─── CORS production fail-fast ────────────────────────────────────────────────
 
 describe('CORS production fail-fast', () => {

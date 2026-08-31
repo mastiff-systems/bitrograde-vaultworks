@@ -5,7 +5,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
-import { StorageNotFoundError } from '../storage/provider.js';
 import { parseParams, parseBody } from '../lib/validate.js';
 import { authenticateQueryToken } from '../auth/middleware.js';
 import { generateDuplicateName } from '../lib/filename.js';
@@ -750,10 +749,19 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const { userId, role } = req.user;
     const ids = [...new Set(body.ids)];
 
-    // Trashed assets are invisible to bulk ops — they report as Not found
+    // Trashed assets are invisible to bulk ops — they report as Not found.
+    // versions included so each asset's COMPLETE object set (main + thumbnail +
+    // every version file) is enumerated in this one query — no per-asset N+1.
     const assets = await prisma.asset.findMany({
       where: { id: { in: ids }, deletedAt: null },
-      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
+      select: {
+        id: true,
+        storageKey: true,
+        thumbnailKey: true,
+        uploadedBy: true,
+        originalName: true,
+        versions: { select: { id: true, storageKey: true } },
+      },
     });
 
     const deleted: string[] = [];
@@ -770,49 +778,53 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const storage = await getStorageProvider();
 
     for (const asset of authorizedAssets) {
-      const trashKey = `trash/${asset.id}/${asset.originalName}`;
-      const trashThumbnailKey = asset.thumbnailKey ? `trash/${asset.id}/thumbnail.webp` : null;
+      const set = {
+        assetId: asset.id,
+        originalName: asset.originalName,
+        storageKey: asset.storageKey,
+        thumbnailKey: asset.thumbnailKey,
+        uploadedBy: asset.uploadedBy,
+        versions: asset.versions,
+        uniqueKeys: collectUniqueKeys(asset),
+      };
 
-      // Move main storage object. A missing source object is tolerated: the DB is the
-      // source of truth, and refusing to trash an asset whose bytes are already gone
-      // would leave an undeletable ghost. Any other storage error fails this asset only —
-      // the DB row is untouched, so it must not proceed to the update below.
+      // Move every physical object to trash/ (main + thumbnail + every version file).
+      // Main-move throw means the DB row is untouched, so this asset fails alone with
+      // 'Storage error' and the loop continues; thumbnail/version moves are best-effort
+      // and missing sources are tolerated (the DB is the source of truth).
+      let rewrites: Map<string, string>;
       try {
-        await storage.move(asset.storageKey, trashKey);
+        rewrites = await moveAssetObjects(storage, req.log, set, 'trash');
       } catch (err) {
-        if (!(err instanceof StorageNotFoundError)) {
-          req.log.error({ assetId: asset.id, storageKey: asset.storageKey, err }, 'bulk-delete: storage move to trash failed');
-          errors.push({ id: asset.id, reason: 'Storage error' });
-          continue;
-        }
-        req.log.warn({ assetId: asset.id, storageKey: asset.storageKey }, 'bulk-delete: storage object already missing — trashing DB record only');
+        req.log.error({ assetId: asset.id, storageKey: asset.storageKey, err }, 'bulk-delete: storage move to trash failed');
+        errors.push({ id: asset.id, reason: 'Storage error' });
+        continue;
       }
 
-      // Move thumbnail (best-effort — log failure, do not abort)
-      let thumbnailMoved = false;
-      if (asset.thumbnailKey && trashThumbnailKey) {
-        try {
-          await storage.move(asset.thumbnailKey, trashThumbnailKey);
-          thumbnailMoved = true;
-        } catch (err) {
-          req.log.warn({ assetId: asset.id, err }, 'bulk-delete: failed to move thumbnail to trash');
-        }
-      }
-
-      // Soft-delete in DB — storageKey always reflects the successful main move;
-      // thumbnailKey only updated to the new trash path if the thumbnail move succeeded.
+      // Soft-delete in DB — asset + every version row whose object moved, atomically,
+      // so a crash can't leave the asset trashed with half-rewritten version keys.
       // deletedAt: null in the where clause guards the race where another request
       // trashed the asset between our findMany and this update (P2025 → Not found).
       try {
-        await prisma.asset.update({
-          where: { id: asset.id, deletedAt: null },
-          data: {
-            deletedAt: new Date(),
-            deletedBy: userId,
-            storageKey: trashKey,
-            thumbnailKey: thumbnailMoved ? trashThumbnailKey : asset.thumbnailKey,
-          },
-        });
+        await prisma.$transaction([
+          prisma.asset.update({
+            where: { id: asset.id, deletedAt: null },
+            data: {
+              deletedAt: new Date(),
+              deletedBy: userId,
+              storageKey: applyRewrite(rewrites, set.storageKey)!,
+              thumbnailKey: applyRewrite(rewrites, set.thumbnailKey),
+            },
+          }),
+          ...set.versions
+            .filter((v) => rewrites.has(v.storageKey))
+            .map((v) =>
+              prisma.assetVersion.update({
+                where: { id: v.id },
+                data: { storageKey: rewrites.get(v.storageKey)! },
+              }),
+            ),
+        ]);
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
           errors.push({ id: asset.id, reason: 'Not found' });

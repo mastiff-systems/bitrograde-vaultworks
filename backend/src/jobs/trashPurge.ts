@@ -2,27 +2,36 @@ import cron from 'node-cron';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
+import { collectUniqueKeys, deleteAssetObjects } from '../lib/assetTrash.js';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-async function purgeExpiredAssets(): Promise<void> {
+export async function purgeExpiredAssets(): Promise<void> {
   const cutoff = new Date(Date.now() - THIRTY_DAYS_MS);
 
+  // versions included so the COMPLETE object set (main + thumbnail + every version
+  // file) is captured while the AssetVersion rows still exist — the delete cascade
+  // below destroys the rows that hold the version storage keys.
   const expired = await prisma.asset.findMany({
     where: { deletedAt: { lt: cutoff } },
-    select: { id: true, storageKey: true, thumbnailKey: true, originalName: true },
+    select: {
+      id: true,
+      storageKey: true,
+      thumbnailKey: true,
+      originalName: true,
+      versions: { select: { storageKey: true } },
+    },
   });
 
   const storage = await getStorageProvider();
   for (const asset of expired) {
+    const uniqueKeys = collectUniqueKeys(asset);
+
     // Delete DB record first; if storage fails the record is gone — an orphaned object is
     // recoverable, a zombie DB record that never purges is not.
     await prisma.asset.delete({ where: { id: asset.id } });
 
-    await storage.delete(asset.storageKey);
-    if (asset.thumbnailKey) {
-      await storage.delete(asset.thumbnailKey);
-    }
+    await deleteAssetObjects(storage, { uniqueKeys });
 
     // assetId must go in details: the asset row is already deleted, so a real
     // assetId FK reference would make the audit insert fail.

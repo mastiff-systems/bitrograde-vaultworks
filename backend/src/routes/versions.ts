@@ -33,7 +33,8 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
-    const asset = await prisma.asset.findUnique({ where: { id: params.id }, select: { id: true } });
+    // deletedAt: null — trashed assets 404 here like they do on every other route
+    const asset = await prisma.asset.findFirst({ where: { id: params.id, deletedAt: null }, select: { id: true } });
     if (!asset) return reply.status(404).send({ error: 'Asset not found' });
 
     const versions = await prisma.assetVersion.findMany({
@@ -79,8 +80,10 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
     const params = parseParams(UuidParams, req.params, reply);
     if (!params) return;
 
-    const asset = await prisma.asset.findUnique({
-      where: { id: params.id },
+    // deletedAt: null — uploading a version to a trashed asset would write fresh
+    // objects under assets/{id}/ while the rest of the set sits in trash/
+    const asset = await prisma.asset.findFirst({
+      where: { id: params.id, deletedAt: null },
       select: { id: true, storageKey: true, sizeBytes: true, mimeType: true },
     });
     if (!asset) return reply.status(404).send({ error: 'Asset not found' });
@@ -233,7 +236,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       if (!params) return;
 
       const version = await prisma.assetVersion.findFirst({
-        where: { id: params.versionId, assetId: params.id },
+        where: { id: params.versionId, assetId: params.id, asset: { deletedAt: null } },
         select: { storageKey: true, mimeType: true, versionNumber: true, asset: { select: { originalName: true } } },
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });
@@ -266,7 +269,7 @@ export async function versionsRoutes(app: FastifyInstance): Promise<void> {
       if (!params) return;
 
       const version = await prisma.assetVersion.findFirst({
-        where: { id: params.versionId, assetId: params.id },
+        where: { id: params.versionId, assetId: params.id, asset: { deletedAt: null } },
         select: { storageKey: true, mimeType: true, versionNumber: true },
       });
       if (!version) return reply.status(404).send({ error: 'Version not found' });

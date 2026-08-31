@@ -5,11 +5,18 @@ import { v4 as uuidv4 } from 'uuid';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { getStorageProvider } from '../storage/index.js';
-import { StorageNotFoundError } from '../storage/provider.js';
 import { parseParams, parseBody } from '../lib/validate.js';
 import { authenticateQueryToken } from '../auth/middleware.js';
 import { generateDuplicateName } from '../lib/filename.js';
 import { logAudit, AuditAction } from '../lib/audit.js';
+import {
+  type AssetObjectSet,
+  applyRewrite,
+  collectUniqueKeys,
+  deleteAssetObjects,
+  loadAssetObjectSet,
+  moveAssetObjects,
+} from '../lib/assetTrash.js';
 import { ZipArchive } from 'archiver';
 
 const UuidParams = z.object({ id: z.string().uuid('Invalid file ID') });
@@ -742,10 +749,19 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const { userId, role } = req.user;
     const ids = [...new Set(body.ids)];
 
-    // Trashed assets are invisible to bulk ops — they report as Not found
+    // Trashed assets are invisible to bulk ops — they report as Not found.
+    // versions included so each asset's COMPLETE object set (main + thumbnail +
+    // every version file) is enumerated in this one query — no per-asset N+1.
     const assets = await prisma.asset.findMany({
       where: { id: { in: ids }, deletedAt: null },
-      select: { id: true, storageKey: true, thumbnailKey: true, uploadedBy: true, originalName: true },
+      select: {
+        id: true,
+        storageKey: true,
+        thumbnailKey: true,
+        uploadedBy: true,
+        originalName: true,
+        versions: { select: { id: true, storageKey: true } },
+      },
     });
 
     const deleted: string[] = [];
@@ -762,49 +778,53 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     const storage = await getStorageProvider();
 
     for (const asset of authorizedAssets) {
-      const trashKey = `trash/${asset.id}/${asset.originalName}`;
-      const trashThumbnailKey = asset.thumbnailKey ? `trash/${asset.id}/thumbnail.webp` : null;
+      const set = {
+        assetId: asset.id,
+        originalName: asset.originalName,
+        storageKey: asset.storageKey,
+        thumbnailKey: asset.thumbnailKey,
+        uploadedBy: asset.uploadedBy,
+        versions: asset.versions,
+        uniqueKeys: collectUniqueKeys(asset),
+      };
 
-      // Move main storage object. A missing source object is tolerated: the DB is the
-      // source of truth, and refusing to trash an asset whose bytes are already gone
-      // would leave an undeletable ghost. Any other storage error fails this asset only —
-      // the DB row is untouched, so it must not proceed to the update below.
+      // Move every physical object to trash/ (main + thumbnail + every version file).
+      // Main-move throw means the DB row is untouched, so this asset fails alone with
+      // 'Storage error' and the loop continues; thumbnail/version moves are best-effort
+      // and missing sources are tolerated (the DB is the source of truth).
+      let rewrites: Map<string, string>;
       try {
-        await storage.move(asset.storageKey, trashKey);
+        rewrites = await moveAssetObjects(storage, req.log, set, 'trash');
       } catch (err) {
-        if (!(err instanceof StorageNotFoundError)) {
-          req.log.error({ assetId: asset.id, storageKey: asset.storageKey, err }, 'bulk-delete: storage move to trash failed');
-          errors.push({ id: asset.id, reason: 'Storage error' });
-          continue;
-        }
-        req.log.warn({ assetId: asset.id, storageKey: asset.storageKey }, 'bulk-delete: storage object already missing — trashing DB record only');
+        req.log.error({ assetId: asset.id, storageKey: asset.storageKey, err }, 'bulk-delete: storage move to trash failed');
+        errors.push({ id: asset.id, reason: 'Storage error' });
+        continue;
       }
 
-      // Move thumbnail (best-effort — log failure, do not abort)
-      let thumbnailMoved = false;
-      if (asset.thumbnailKey && trashThumbnailKey) {
-        try {
-          await storage.move(asset.thumbnailKey, trashThumbnailKey);
-          thumbnailMoved = true;
-        } catch (err) {
-          req.log.warn({ assetId: asset.id, err }, 'bulk-delete: failed to move thumbnail to trash');
-        }
-      }
-
-      // Soft-delete in DB — storageKey always reflects the successful main move;
-      // thumbnailKey only updated to the new trash path if the thumbnail move succeeded.
+      // Soft-delete in DB — asset + every version row whose object moved, atomically,
+      // so a crash can't leave the asset trashed with half-rewritten version keys.
       // deletedAt: null in the where clause guards the race where another request
       // trashed the asset between our findMany and this update (P2025 → Not found).
       try {
-        await prisma.asset.update({
-          where: { id: asset.id, deletedAt: null },
-          data: {
-            deletedAt: new Date(),
-            deletedBy: userId,
-            storageKey: trashKey,
-            thumbnailKey: thumbnailMoved ? trashThumbnailKey : asset.thumbnailKey,
-          },
-        });
+        await prisma.$transaction([
+          prisma.asset.update({
+            where: { id: asset.id, deletedAt: null },
+            data: {
+              deletedAt: new Date(),
+              deletedBy: userId,
+              storageKey: applyRewrite(rewrites, set.storageKey)!,
+              thumbnailKey: applyRewrite(rewrites, set.thumbnailKey),
+            },
+          }),
+          ...set.versions
+            .filter((v) => rewrites.has(v.storageKey))
+            .map((v) =>
+              prisma.assetVersion.update({
+                where: { id: v.id },
+                data: { storageKey: rewrites.get(v.storageKey)! },
+              }),
+            ),
+        ]);
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
           errors.push({ id: asset.id, reason: 'Not found' });
@@ -940,61 +960,50 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const { userId, role } = req.user;
 
-    // Step 1: Fetch current asset (live only) — need storageKey/thumbnailKey for S3 moves
-    const existing = await prisma.asset.findFirst({
-      where: { id: params.id, deletedAt: null },
-      select: { originalName: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
-    });
-    if (!existing) return reply.status(404).send({ error: 'Not found' });
+    // Step 1: Enumerate the complete object set (main + thumbnail + every version file)
+    const set = await loadAssetObjectSet(params.id, { deleted: false });
+    if (!set) return reply.status(404).send({ error: 'Not found' });
 
     // Ownership check: only admin or the uploader can delete
-    if (role !== 'admin' && existing.uploadedBy !== userId) {
+    if (role !== 'admin' && set.uploadedBy !== userId) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    // Step 2: Compute trash keys
-    const trashKey = `trash/${params.id}/${existing.originalName}`;
-    const trashThumbnailKey = existing.thumbnailKey ? `trash/${params.id}/thumbnail.webp` : null;
-
-    // Step 3: Move main storage object (fail-hard — nothing has changed yet if this throws).
-    // A missing source object is tolerated: the DB is the source of truth, and refusing
-    // to trash an asset whose bytes are already gone would leave an undeletable ghost.
+    // Step 2: Move every physical object to trash/ (main fail-hard — nothing has
+    // changed yet if it throws; thumbnail/version moves best-effort; missing sources
+    // tolerated — the DB is the source of truth).
     const storage = await getStorageProvider();
-    try {
-      await storage.move(existing.storageKey, trashKey);
-    } catch (err) {
-      if (!(err instanceof StorageNotFoundError)) throw err;
-      req.log.warn({ assetId: params.id, storageKey: existing.storageKey }, 'soft-delete: storage object already missing — trashing DB record only');
-    }
+    const rewrites = await moveAssetObjects(storage, req.log, set, 'trash');
 
-    // Step 4: Move thumbnail (best-effort — log failure, do not abort)
-    let thumbnailMoved = false;
-    if (existing.thumbnailKey && trashThumbnailKey) {
-      try {
-        await storage.move(existing.thumbnailKey, trashThumbnailKey);
-        thumbnailMoved = true;
-      } catch (err) {
-        console.error(`[files] soft-delete: failed to move thumbnail for asset ${params.id}:`, err);
-      }
-    }
-
-    // Step 5: Update DB — storageKey always reflects the successful main move;
-    // thumbnailKey only updated to the new trash path if the thumbnail move succeeded.
+    // Step 3: Update DB — asset + every version row whose object moved, atomically,
+    // so a crash can't leave the asset trashed with half-rewritten version keys.
+    // deletedAt: null in the where clause guards the race where another request
+    // trashed the asset between our load and this transaction (P2025 → 404).
     let asset: { originalName: string };
     try {
-      asset = await prisma.asset.update({
-        where: { id: params.id, deletedAt: null },
-        data: {
-          deletedAt: new Date(),
-          deletedBy: req.user.userId,
-          storageKey: trashKey,
-          thumbnailKey: thumbnailMoved ? trashThumbnailKey : existing.thumbnailKey,
-        },
-        select: { originalName: true },
-      });
+      [asset] = await prisma.$transaction([
+        prisma.asset.update({
+          where: { id: params.id, deletedAt: null },
+          data: {
+            deletedAt: new Date(),
+            deletedBy: req.user.userId,
+            storageKey: applyRewrite(rewrites, set.storageKey)!,
+            thumbnailKey: applyRewrite(rewrites, set.thumbnailKey),
+          },
+          select: { originalName: true },
+        }),
+        ...set.versions
+          .filter((v) => rewrites.has(v.storageKey))
+          .map((v) =>
+            prisma.assetVersion.update({
+              where: { id: v.id },
+              data: { storageKey: rewrites.get(v.storageKey)! },
+            }),
+          ),
+      ]);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
-        // Race condition: another request deleted the asset between our findFirst and update
+        // Race condition: another request deleted the asset between our load and update
         return reply.status(404).send({ error: 'Not found' });
       }
       throw err;
@@ -1053,58 +1062,49 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const { userId, role } = req.user;
 
-    // Step 1: Fetch current asset (trashed only) — need storageKey/thumbnailKey for S3 moves.
+    // Step 1: Enumerate the complete trashed object set (main + thumbnail + versions).
     // assetSelect does not include internal S3 fields, so we fetch them separately here.
-    const existing = await prisma.asset.findFirst({
-      where: { id: params.id, deletedAt: { not: null } },
-      select: { originalName: true, storageKey: true, thumbnailKey: true, uploadedBy: true },
-    });
-    if (!existing) return reply.status(404).send({ error: 'Not found or not in trash' });
+    const set = await loadAssetObjectSet(params.id, { deleted: true });
+    if (!set) return reply.status(404).send({ error: 'Not found or not in trash' });
 
     // Ownership check: only admin or the uploader can restore (mirrors the soft-delete handler)
-    if (role !== 'admin' && existing.uploadedBy !== userId) {
+    if (role !== 'admin' && set.uploadedBy !== userId) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
-    // Step 2: Compute restore keys
-    const restoreKey = `assets/${params.id}/${existing.originalName}`;
-    const restoreThumbnailKey = existing.thumbnailKey ? `assets/${params.id}/thumbnail.webp` : null;
-
-    // Step 3: Move main storage object (fail-hard — nothing has changed yet if this throws).
-    // Skip the move if storageKey is already at the restore path (e.g. legacy data never trashed).
+    // Step 2: Move every physical object back to assets/ — the exact inverse of the
+    // soft-delete move (main fail-hard, thumbnail/version moves best-effort, already-
+    // at-target keys skipped, e.g. legacy data never trashed).
     const storage = await getStorageProvider();
-    if (existing.storageKey !== restoreKey) {
-      await storage.move(existing.storageKey, restoreKey);
-    }
+    const rewrites = await moveAssetObjects(storage, req.log, set, 'restore');
 
-    // Step 4: Move thumbnail (best-effort — log failure, do not abort)
-    let thumbnailMoved = false;
-    if (existing.thumbnailKey && restoreThumbnailKey && existing.thumbnailKey !== restoreThumbnailKey) {
-      try {
-        await storage.move(existing.thumbnailKey, restoreThumbnailKey);
-        thumbnailMoved = true;
-      } catch (err) {
-        console.error(`[files] restore: failed to move thumbnail for asset ${params.id}:`, err);
-      }
-    }
-
-    // Step 5: Update DB — restore asset, update storage keys to match S3 state.
-    // thumbnailKey only updated to the restore path if the thumbnail move succeeded.
+    // Step 3: Update DB — restore asset + rewrite version keys to match S3 state,
+    // atomically. Keys without a successful move keep their old (still correct) value.
     let asset: { originalName: string } & AssetSelect;
     try {
-      asset = await prisma.asset.update({
-        where: { id: params.id, deletedAt: { not: null } },
-        data: {
-          deletedAt: null,
-          deletedBy: null,
-          storageKey: restoreKey,
-          thumbnailKey: thumbnailMoved ? restoreThumbnailKey : existing.thumbnailKey,
-        },
-        select: { ...assetSelect, originalName: true },
-      });
+      [asset] = await prisma.$transaction([
+        prisma.asset.update({
+          where: { id: params.id, deletedAt: { not: null } },
+          data: {
+            deletedAt: null,
+            deletedBy: null,
+            storageKey: applyRewrite(rewrites, set.storageKey)!,
+            thumbnailKey: applyRewrite(rewrites, set.thumbnailKey),
+          },
+          select: { ...assetSelect, originalName: true },
+        }),
+        ...set.versions
+          .filter((v) => rewrites.has(v.storageKey))
+          .map((v) =>
+            prisma.assetVersion.update({
+              where: { id: v.id },
+              data: { storageKey: rewrites.get(v.storageKey)! },
+            }),
+          ),
+      ]);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
-        // Race condition: another request restored or purged the asset between our findFirst and update
+        // Race condition: another request restored or purged the asset between our load and update
         return reply.status(404).send({ error: 'Not found or not in trash' });
       }
       throw err;
@@ -1131,28 +1131,25 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
 
     const { userId, role } = req.user;
 
-    // Step 1: Fetch BEFORE deleting. Purge is irreversible, so the ownership check
-    // must run while the row still exists — deleting first destroys the very data
-    // the check depends on (and the asset itself) for unauthorized callers.
-    const existing = await prisma.asset.findFirst({
-      where: { id: params.id, deletedAt: { not: null } },
-      select: { uploadedBy: true },
-    });
-    if (!existing) return reply.status(404).send({ error: 'Not found or not in trash' });
+    // Step 1: Enumerate BEFORE deleting. Purge is irreversible, so the ownership check
+    // must run while the row still exists — and the delete cascade destroys the very
+    // AssetVersion rows that hold the version storage keys, so the complete object set
+    // must be captured up front or the version objects are orphaned forever.
+    const set = await loadAssetObjectSet(params.id, { deleted: true });
+    if (!set) return reply.status(404).send({ error: 'Not found or not in trash' });
 
     // Step 2: Ownership check: only admin or the uploader can purge (mirrors the soft-delete handler)
-    if (role !== 'admin' && existing.uploadedBy !== userId) {
+    if (role !== 'admin' && set.uploadedBy !== userId) {
       return reply.status(403).send({ error: 'Forbidden' });
     }
 
     // Step 3: Delete. The where clause still re-asserts deletedAt so a concurrent
-    // restore between the fetch and here cannot purge a live asset.
-    let assetForS3: { storageKey: string; thumbnailKey: string | null; originalName: string };
+    // restore between the fetch and here cannot purge a live asset (P2025 → 404,
+    // and no storage deletion happens).
     try {
       // Only allow purging assets that are already in the trash
-      assetForS3 = await prisma.asset.delete({
+      await prisma.asset.delete({
         where: { id: params.id, deletedAt: { not: null } },
-        select: { storageKey: true, thumbnailKey: true, originalName: true },
       });
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
@@ -1166,18 +1163,17 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     void logAudit({
       userId: req.user.userId,
       action: AuditAction.DELETE,
-      assetName: assetForS3.originalName,
+      assetName: set.originalName,
       ipAddress: req.ip,
       details: { purgedAssetId: params.id },
     });
 
     // Await storage deletions so failures are surfaced to the caller instead of silently orphaning objects.
-    // Both providers treat deleting a non-existent key as success (S3 DeleteObject is idempotent; disk tolerates ENOENT).
+    // Deletes every unique physical object (main + thumbnail + every version file) so no
+    // S3 object outlives its DB row. Both providers treat deleting a non-existent key as
+    // success (S3 DeleteObject is idempotent; disk tolerates ENOENT).
     const storage = await getStorageProvider();
-    await storage.delete(assetForS3.storageKey);
-    if (assetForS3.thumbnailKey) {
-      await storage.delete(assetForS3.thumbnailKey);
-    }
+    await deleteAssetObjects(storage, set);
 
     return reply.status(204).send();
   });

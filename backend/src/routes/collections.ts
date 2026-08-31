@@ -25,23 +25,23 @@ const AddAssetsSchema = z.object({
 });
 
 export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
-  // GET /api/collections — list user's collections with asset count + first thumbnail
+  // GET /api/collections — list all collections with asset count + first thumbnail.
+  // Collections are shared-read across the library (like assets and folders):
+  // everyone can see and filter by them; only the owner or an admin can modify.
   app.get('/api/collections', {
     preHandler: [authenticate],
     config: { rateLimit: { max: process.env.VITEST ? 10000 : 60, timeWindow: '1 minute' } },
-  }, async (req, reply) => {
-    const userId = req.user.userId;
-
+  }, async (_req, reply) => {
     const collections = await prisma.collection.findMany({
-      where: { createdBy: userId },
       orderBy: { createdAt: 'desc' },
       include: {
         assets: {
+          where: { asset: { deletedAt: null } },
           take: 1,
           orderBy: { addedAt: 'asc' },
           include: { asset: { select: { id: true, thumbnailKey: true, assetType: true } } },
         },
-        _count: { select: { assets: true } },
+        _count: { select: { assets: { where: { asset: { deletedAt: null } } } } },
       },
     });
 
@@ -50,6 +50,7 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
         id: c.id,
         name: c.name,
         description: c.description,
+        created_by: c.createdBy,
         asset_count: c._count.assets,
         preview_asset: c.assets[0]?.asset ?? null,
         created_at: c.createdAt,
@@ -89,6 +90,7 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
       id: collection.id,
       name: collection.name,
       description: collection.description,
+      created_by: collection.createdBy,
       asset_count: 0,
       preview_asset: null,
       created_at: collection.createdAt,
@@ -131,6 +133,7 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
       where: { id: params.id },
       include: {
         assets: {
+          where: { asset: { deletedAt: null } },
           orderBy: { addedAt: 'asc' },
           skip: offset,
           take: limit,
@@ -154,19 +157,17 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
             },
           },
         },
-        _count: { select: { assets: true } },
+        _count: { select: { assets: { where: { asset: { deletedAt: null } } } } },
       },
     });
 
     if (!collection) return reply.status(404).send({ error: 'Not found' });
-    if (collection.createdBy !== req.user.userId) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
 
     return reply.send({
       id: collection.id,
       name: collection.name,
       description: collection.description,
+      created_by: collection.createdBy,
       asset_count: collection._count.assets,
       limit,
       offset,
@@ -191,7 +192,7 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  // PATCH /api/collections/:id — update name/description (owner-only)
+  // PATCH /api/collections/:id — update name/description (owner or admin)
   app.patch<{ Params: { id: string } }>('/api/collections/:id', {
     preHandler: [authenticate],
     schema: {
@@ -221,7 +222,9 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
 
     const existing = await prisma.collection.findUnique({ where: { id: params.id } });
     if (!existing) return reply.status(404).send({ error: 'Not found' });
-    if (existing.createdBy !== req.user.userId) return reply.status(403).send({ error: 'Forbidden' });
+    if (existing.createdBy !== req.user.userId && req.user.role !== 'admin') {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     const updated = await prisma.collection.update({
       where: { id: params.id },
@@ -235,12 +238,13 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
       id: updated.id,
       name: updated.name,
       description: updated.description,
+      created_by: updated.createdBy,
       created_at: updated.createdAt,
       updated_at: updated.updatedAt,
     });
   });
 
-  // DELETE /api/collections/:id — delete collection (owner-only)
+  // DELETE /api/collections/:id — delete collection (owner or admin)
   app.delete<{ Params: { id: string } }>('/api/collections/:id', {
     preHandler: [authenticate],
     schema: {
@@ -259,13 +263,17 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
 
     const existing = await prisma.collection.findUnique({ where: { id: params.id } });
     if (!existing) return reply.status(404).send({ error: 'Not found' });
-    if (existing.createdBy !== req.user.userId) return reply.status(403).send({ error: 'Forbidden' });
+    if (existing.createdBy !== req.user.userId && req.user.role !== 'admin') {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
 
     await prisma.collection.delete({ where: { id: params.id } });
     return reply.status(204).send();
   });
 
-  // POST /api/collections/:id/assets — add assets (owner-only, upsert)
+  // POST /api/collections/:id/assets — add assets (any authenticated user, upsert).
+  // Membership is shared-library organization like folders, so assignment is not
+  // owner-gated — anyone can attach assets to a shared collection (e.g. at upload).
   app.post<{ Params: { id: string } }>('/api/collections/:id/assets', {
     preHandler: [authenticate],
     schema: {
@@ -300,10 +308,10 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
 
     const existing = await prisma.collection.findUnique({ where: { id: params.id } });
     if (!existing) return reply.status(404).send({ error: 'Not found' });
-    if (existing.createdBy !== req.user.userId) return reply.status(403).send({ error: 'Forbidden' });
 
+    // Trashed assets cannot be assigned — they're invisible in the library.
     const foundAssets = await prisma.asset.findMany({
-      where: { id: { in: body.assetIds } },
+      where: { id: { in: body.assetIds }, deletedAt: null },
       select: { id: true },
     });
     const foundIds = new Set(foundAssets.map((a) => a.id));
@@ -329,7 +337,8 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ added: newIds.length });
   });
 
-  // DELETE /api/collections/:id/assets/:assetId — remove asset from collection (owner-only)
+  // DELETE /api/collections/:id/assets/:assetId — remove asset from collection
+  // (any authenticated user — membership is shared-library organization)
   app.delete<{ Params: { id: string; assetId: string } }>(
     '/api/collections/:id/assets/:assetId',
     {
@@ -352,7 +361,6 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
 
       const existing = await prisma.collection.findUnique({ where: { id: params.id } });
       if (!existing) return reply.status(404).send({ error: 'Not found' });
-      if (existing.createdBy !== req.user.userId) return reply.status(403).send({ error: 'Forbidden' });
 
       const deleted = await prisma.collectionAsset.deleteMany({
         where: { collectionId: params.id, assetId: params.assetId },

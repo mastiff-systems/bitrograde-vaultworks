@@ -13,6 +13,7 @@ import { ResetPassword } from './pages/ResetPassword.js';
 import { ChangePassword } from './pages/ChangePassword.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
+import { UploadProvider } from './contexts/UploadContext.js';
 import type { ReactNode } from 'react';
 
 /** Redirects non-admin users to the dashboard root. */
@@ -25,47 +26,49 @@ function AdminRoute({ children }: { children: ReactNode }) {
 function AppShell() {
   return (
     <CategoryProvider>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<AssetBrowser />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/collections" element={<Collections />} />
-          <Route
-            path="/admin/settings"
-            element={
-              <AdminRoute>
-                <AdminSettings />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/admin/users"
-            element={
-              <AdminRoute>
-                <AdminUsers />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/admin/taxonomy"
-            element={
-              <AdminRoute>
-                <TaxonomyManager />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="/admin/audit"
-            element={
-              <AdminRoute>
-                <AdminAuditLog onNavigateToAsset={() => {}} />
-              </AdminRoute>
-            }
-          />
-          {/* Catch-all: unknown paths → dashboard */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
+      <UploadProvider>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<AssetBrowser />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/collections" element={<Collections />} />
+            <Route
+              path="/admin/settings"
+              element={
+                <AdminRoute>
+                  <AdminSettings />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/users"
+              element={
+                <AdminRoute>
+                  <AdminUsers />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/taxonomy"
+              element={
+                <AdminRoute>
+                  <TaxonomyManager />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/admin/audit"
+              element={
+                <AdminRoute>
+                  <AdminAuditLog onNavigateToAsset={() => {}} />
+                </AdminRoute>
+              }
+            />
+            {/* Catch-all: unknown paths → dashboard */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </UploadProvider>
     </CategoryProvider>
   );
 }

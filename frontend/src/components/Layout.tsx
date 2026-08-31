@@ -205,9 +205,9 @@ export function Layout({ children }: Props) {
 
           {/* Centered search + upload — dashboard only, absolute in header */}
           {isDashboard && (
-            <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 w-56 sm:w-[400px] lg:w-[580px] pointer-events-none">
+            <div className="flex items-center gap-2 flex-1 min-w-0 mx-2 sm:absolute sm:left-1/2 sm:-translate-x-1/2 sm:flex-none sm:min-w-0 sm:mx-0 sm:w-[400px] lg:w-[580px] pointer-events-none">
               {/* Search */}
-              <div className="relative flex-1 pointer-events-auto">
+              <div className="relative flex-1 min-w-0 pointer-events-auto">
                 <svg
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-content-muted pointer-events-none"
                   fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"
@@ -257,8 +257,9 @@ export function Layout({ children }: Props) {
             </div>
           )}
 
-          {/* Spacer — pushes controls to the right */}
-          <div className="flex-1" />
+          {/* Spacer — pushes controls to the right; on mobile the dashboard
+              search group is in-flow and takes this space itself */}
+          <div className={isDashboard ? 'hidden sm:block sm:flex-1' : 'flex-1'} />
 
           {/* Right controls */}
           <div className="flex items-center gap-1 flex-shrink-0 ml-1">

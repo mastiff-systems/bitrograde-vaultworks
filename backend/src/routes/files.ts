@@ -43,13 +43,22 @@ const FilesQuerySchema = z.object({
  * The visited-set guards against pre-existing cycles in corrupted data.
  */
 async function collectFolderIds(folderId: string, includeDescendants: boolean): Promise<string[]> {
+  // MAS-715: a trashed folder is nonexistent to reads. Its memberships persist
+  // (restore reproduces the structure), so it must resolve to NO folder IDs —
+  // the empty set matches zero assets, same response as a nonexistent folder.
+  const root = await prisma.folder.findFirst({
+    where: { id: folderId, deletedAt: null },
+    select: { id: true },
+  });
+  if (!root) return [];
+
   const ids = [folderId];
   if (!includeDescendants) return ids;
   const visited = new Set(ids);
   let frontier = ids;
   while (frontier.length > 0) {
     const children = await prisma.folder.findMany({
-      where: { parentFolderId: { in: frontier } },
+      where: { parentFolderId: { in: frontier }, deletedAt: null },
       select: { id: true },
     });
     frontier = children.map((c) => c.id).filter((id) => !visited.has(id));

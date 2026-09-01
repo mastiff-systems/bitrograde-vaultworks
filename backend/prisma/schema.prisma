@@ -21,6 +21,7 @@ model User {
   notifications Notification[]
   assetVersions AssetVersion[]
   folders       Folder[]       @relation("FolderCreator")
+  deletedFolders Folder[]      @relation("FolderDeleter")
   uploadedAssets Asset[]       @relation("AssetUploader")
   deletedAssets  Asset[]       @relation("AssetDeleter")
   auditLogs     AuditLog[]
@@ -162,21 +163,25 @@ model Setting {
 }
 
 model Folder {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name            String
   description     String?
-  createdByUserId String?  @map("created_by_user_id") @db.Uuid
-  parentFolderId  String?  @map("parent_folder_id") @db.Uuid
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  createdByUserId String?   @map("created_by_user_id") @db.Uuid
+  parentFolderId  String?   @map("parent_folder_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+  deletedByUserId String?   @map("deleted_by_user_id") @db.Uuid
 
   createdBy User?         @relation("FolderCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  deletedBy User?         @relation("FolderDeleter", fields: [deletedByUserId], references: [id], onDelete: SetNull)
   parent    Folder?       @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Cascade)
   children  Folder[]      @relation("FolderChildren")
   assets    FolderAsset[]
 
   @@index([createdByUserId])
   @@index([parentFolderId])
+  @@index([deletedAt])
   @@map("folders")
 }
 

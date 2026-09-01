@@ -9,7 +9,7 @@
  *  - Trash → restore round-trip preserves folder membership (MAS-690 seam)
  *  - Purge removes membership rows via DB cascade
  *  - Bulk-delete across a nested subtree, then restore
- *  - Deleting a folder cascades descendant folders; assets always survive
+ *  - Deleting a folder trashes descendant folders (MAS-715); assets always survive
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
@@ -333,7 +333,7 @@ describe('Nested folders API (MAS-710)', () => {
     expect(restored.body.total).toBe(3);
   });
 
-  it('deleting a folder cascades descendant folders; assets survive untrashed', async () => {
+  it('deleting a folder trashes descendant folders; assets survive untrashed', async () => {
     const { a, d, assetA, assetB, assetC } = await seedSubtree();
 
     const del = await request(app.server)
@@ -341,7 +341,7 @@ describe('Nested folders API (MAS-710)', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(del.status).toBe(204);
 
-    // B and C are gone with A; D remains
+    // B and C are trashed with A and invisible to listings; D remains
     const folders = await request(app.server)
       .get('/api/folders')
       .set('Authorization', `Bearer ${token}`);
@@ -355,6 +355,8 @@ describe('Nested folders API (MAS-710)', () => {
     for (const id of [assetA.id, assetB.id, assetC.id]) {
       expect(liveIds).toContain(id);
     }
-    expect(await prisma.folderAsset.count()).toBe(0);
+    // MAS-715: DELETE is now a soft-delete — memberships persist so a restore
+    // reproduces the exact structure (full lifecycle covered in folder-trash.test.ts)
+    expect(await prisma.folderAsset.count()).toBe(3);
   });
 });

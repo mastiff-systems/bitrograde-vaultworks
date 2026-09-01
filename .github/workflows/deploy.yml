@@ -1,10 +1,16 @@
 name: Deploy
 
+# MAS-735: This workflow targets self-hosted runners on the app server
+# (146.190.133.156), where deploy-prod.sh / deploy-dev.sh actually live.
+# The only registered self-hosted runner (`openclaw-self-hosted`) is on
+# the agent-runner host (openclaw), which has neither script, so every
+# push-triggered run failed in ~10s with exit 127 and zero real deploys
+# ever happened. Real deploys remain manual SSH per the runbook
+# (docs/MAS-580 dev workflow). Gated to workflow_dispatch so pushes to
+# develop/main stop producing failing Actions runs; re-enable the push
+# trigger only after a runner is properly registered on 146.190.133.156.
 on:
-  push:
-    branches:
-      - main
-      - develop
+  workflow_dispatch:
 
 jobs:
   deploy-prod:

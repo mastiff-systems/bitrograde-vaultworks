@@ -1,17 +1,33 @@
 /**
- * MAS-368: Folder feature — all 7 REST endpoints.
+ * MAS-368: Folder feature — REST endpoints.
+ * MAS-710: nested hierarchy — tree/breadcrumb endpoints, trashed assets excluded
+ * from listings and counts.
+ * MAS-715: folder trash lifecycle — DELETE is now a soft-delete (deletedAt) of the
+ * folder and its whole live subtree; trashed folders are invisible to every read
+ * path (treated as nonexistent) until restored or purged. Assets are never trashed
+ * by folder operations: folder_assets memberships are M2M and persist untouched so
+ * a restore reproduces the exact structure.
  *
  * Routes:
- *   GET    /api/folders                      — list folders (with asset count)
- *   POST   /api/folders                      — create folder
- *   PATCH  /api/folders/:id                  — rename / reparent (guards circular ancestor)
- *   DELETE /api/folders/:id                  — hard delete; memberships cascade, assets persist
- *   GET    /api/folders/:id/assets           — cursor-paginated asset list
+ *   GET    /api/folders                      — list folders (with asset count; trashed excluded)
+ *   GET    /api/folders/tree                 — full nested tree (or one subtree via ?folderId; trashed excluded)
+ *   POST   /api/folders                      — create folder (trashed parent rejected as nonexistent)
+ *   GET    /api/folders/:id/path             — breadcrumb ancestors, root → self (404 if trashed)
+ *   PATCH  /api/folders/:id                  — rename / reparent (guards circular ancestor; trashed parent rejected)
+ *   DELETE /api/folders/:id                  — trash: soft-deletes the folder + all live descendants in one
+ *                                              transaction; memberships persist, assets untouched
+ *   POST   /api/folders/:id/restore          — restore a trashed folder + all its trashed descendants;
+ *                                              re-parents to root if its own parent is trashed/gone
+ *   POST   /api/folders/:id/purge            — hard-delete a trashed folder; DB cascade removes descendants
+ *                                              + memberships, assets persist (admin or folder creator)
+ *   GET    /api/trash/folders                — top-level trashed folders with descendant counts
+ *   GET    /api/folders/:id/assets           — cursor-paginated asset list (404 if folder trashed)
  *   POST   /api/folders/:id/assets           — add assets (bulk, skipDuplicates)
  *   DELETE /api/folders/:id/assets/:assetId  — remove one membership
  */
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { parseBody, parseParams } from '../lib/validate.js';
 
@@ -51,6 +67,10 @@ const ListFoldersQuery = z.object({
 const ListAssetsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().uuid().optional(),
+});
+
+const TreeQuery = z.object({
+  folderId: z.string().uuid().optional(), // return only this folder's subtree
 });
 
 // ─── Shared asset select (mirrors files.ts) ──────────────────────────────────
@@ -135,6 +155,7 @@ function formatFolder(f: {
   };
 }
 
+// asset_count excludes trashed assets so folder badges match what listings show
 const folderSelect = {
   id: true,
   name: true,
@@ -143,8 +164,39 @@ const folderSelect = {
   parentFolderId: true,
   createdAt: true,
   updatedAt: true,
-  _count: { select: { assets: true } },
+  _count: { select: { assets: { where: { asset: { deletedAt: null } } } } },
 } as const;
+
+// ─── Subtree walk ────────────────────────────────────────────────────────────
+
+/**
+ * Collect `rootId` plus all descendant folder IDs whose trash state matches
+ * `state` ('live' → deletedAt null, 'trashed' → deletedAt set). App-level BFS:
+ * folder counts are small (MAS-708 §2), so iterative queries beat a recursive
+ * CTE and keep the walk inside the caller's transaction client.
+ */
+async function collectSubtreeIds(
+  tx: Pick<typeof prisma, 'folder'>,
+  rootId: string,
+  state: 'live' | 'trashed',
+): Promise<string[]> {
+  const deletedAt = state === 'live' ? null : { not: null };
+  const ids = [rootId];
+  const visited = new Set(ids);
+  let frontier = ids;
+  while (frontier.length > 0) {
+    const children = await tx.folder.findMany({
+      where: { parentFolderId: { in: frontier }, deletedAt },
+      select: { id: true },
+    });
+    frontier = children.map((c) => c.id).filter((id) => !visited.has(id));
+    for (const id of frontier) {
+      visited.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
 
 // ─── Circular ancestor guard ─────────────────────────────────────────────────
 
@@ -179,13 +231,16 @@ export async function foldersRoutes(app: FastifyInstance) {
     if (!qResult.success) return reply.status(400).send({ error: 'Invalid query' });
     const { parentFolderId, assetId } = qResult.data;
 
-    // Build where clause: parentFolderId filter + optional assetId membership filter
-    const where: Record<string, unknown> =
-      parentFolderId === 'root'
+    // Build where clause: parentFolderId filter + optional assetId membership filter.
+    // Trashed folders are invisible to listings (MAS-715).
+    const where: Record<string, unknown> = {
+      deletedAt: null,
+      ...(parentFolderId === 'root'
         ? { parentFolderId: null }
         : parentFolderId
           ? { parentFolderId }
-          : {};
+          : {}),
+    };
 
     if (assetId) {
       where.assets = { some: { assetId } };
@@ -195,14 +250,86 @@ export async function foldersRoutes(app: FastifyInstance) {
     return reply.send(folders.map(formatFolder));
   });
 
+  // GET /api/folders/tree
+  // Returns the full folder forest as nested nodes (children sorted by name),
+  // or a single subtree when ?folderId=<uuid> is given. Folder counts are tiny,
+  // so fetch-all + in-memory assembly beats a recursive CTE for now (MAS-708 §2).
+  app.get('/api/folders/tree', async (req, reply) => {
+    const qResult = TreeQuery.safeParse(req.query);
+    if (!qResult.success) return reply.status(400).send({ error: 'Invalid query' });
+    const { folderId } = qResult.data;
+
+    const folders = await prisma.folder.findMany({
+      where: { deletedAt: null },
+      select: folderSelect,
+      orderBy: { name: 'asc' },
+    });
+
+    type TreeNode = ReturnType<typeof formatFolder> & { children: TreeNode[] };
+    const nodes = new Map<string, TreeNode>(
+      folders.map((f) => [f.id, { ...formatFolder(f), children: [] as TreeNode[] }]),
+    );
+    const roots: TreeNode[] = [];
+    for (const f of folders) {
+      const node = nodes.get(f.id)!;
+      const parent = f.parentFolderId ? nodes.get(f.parentFolderId) : undefined;
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    }
+
+    if (folderId) {
+      const subtree = nodes.get(folderId);
+      if (!subtree) return reply.status(404).send({ error: 'Folder not found' });
+      return reply.send([subtree]);
+    }
+    return reply.send(roots);
+  });
+
+  // GET /api/folders/:id/path
+  // Breadcrumb: ancestor chain ordered root → … → the folder itself.
+  app.get('/api/folders/:id/path', async (req, reply) => {
+    const params = parseParams(FolderIdParams, req.params, reply);
+    if (!params) return;
+
+    // Trashed folders are nonexistent to reads (MAS-715). Ancestors of a live
+    // folder are live by invariant (trash cascades down), so only the target
+    // itself needs the check.
+    const target = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!target) return reply.status(404).send({ error: 'Folder not found' });
+
+    const path: { id: string; name: string; parent_folder_id: string | null }[] = [];
+    let current: string | null = params.id;
+    const visited = new Set<string>(); // safety guard against pre-existing cycles
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      const row: { id: string; name: string; parentFolderId: string | null } | null =
+        await prisma.folder.findUnique({
+          where: { id: current },
+          select: { id: true, name: true, parentFolderId: true },
+        });
+      if (!row) break;
+      path.unshift({ id: row.id, name: row.name, parent_folder_id: row.parentFolderId });
+      current = row.parentFolderId;
+    }
+
+    if (path.length === 0) return reply.status(404).send({ error: 'Folder not found' });
+    return reply.send(path);
+  });
+
   // POST /api/folders
   app.post('/api/folders', async (req, reply) => {
     const body = parseBody(CreateFolderBody, req.body, reply);
     if (!body) return;
 
-    // Verify parentFolderId exists if provided
+    // Verify parentFolderId exists (and is not trashed) if provided
     if (body.parentFolderId) {
-      const parent = await prisma.folder.findUnique({ where: { id: body.parentFolderId }, select: { id: true } });
+      const parent = await prisma.folder.findFirst({
+        where: { id: body.parentFolderId, deletedAt: null },
+        select: { id: true },
+      });
       if (!parent) return reply.status(404).send({ error: 'Parent folder not found' });
     }
 
@@ -228,7 +355,10 @@ export async function foldersRoutes(app: FastifyInstance) {
     const body = parseBody(UpdateFolderBody, req.body, reply);
     if (!body) return;
 
-    const existing = await prisma.folder.findUnique({ where: { id: params.id }, select: { id: true } });
+    const existing = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
     if (!existing) return reply.status(404).send({ error: 'Folder not found' });
 
     // Guard against circular parent reference
@@ -239,7 +369,11 @@ export async function foldersRoutes(app: FastifyInstance) {
       const cycle = await wouldCreateCycle(params.id, body.parentFolderId);
       if (cycle) return reply.status(409).send({ error: 'Circular parent reference detected' });
 
-      const parent = await prisma.folder.findUnique({ where: { id: body.parentFolderId }, select: { id: true } });
+      // Trashed parent rejected the same way as a nonexistent one (MAS-715)
+      const parent = await prisma.folder.findFirst({
+        where: { id: body.parentFolderId, deletedAt: null },
+        select: { id: true },
+      });
       if (!parent) return reply.status(404).send({ error: 'Parent folder not found' });
     }
 
@@ -262,15 +396,148 @@ export async function foldersRoutes(app: FastifyInstance) {
   });
 
   // DELETE /api/folders/:id
+  // Trash (soft-delete): stamps deletedAt/deletedByUserId on the folder and every
+  // live descendant in ONE transaction. Assets are NOT trashed — folder_assets
+  // memberships are M2M and persist untouched, so restore reproduces the exact
+  // structure. 404 if the folder is already trashed or nonexistent.
   app.delete('/api/folders/:id', async (req, reply) => {
     const params = parseParams(FolderIdParams, req.params, reply);
     if (!params) return;
 
-    const existing = await prisma.folder.findUnique({ where: { id: params.id }, select: { id: true } });
-    if (!existing) return reply.status(404).send({ error: 'Folder not found' });
+    const userId = req.user?.userId ?? null;
 
-    await prisma.folder.delete({ where: { id: params.id } });
+    const trashed = await prisma.$transaction(async (tx) => {
+      const existing = await tx.folder.findFirst({
+        where: { id: params.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!existing) return false;
+
+      const ids = await collectSubtreeIds(tx, params.id, 'live');
+      await tx.folder.updateMany({
+        where: { id: { in: ids }, deletedAt: null },
+        data: { deletedAt: new Date(), deletedByUserId: userId },
+      });
+      return true;
+    });
+
+    if (!trashed) return reply.status(404).send({ error: 'Folder not found' });
     return reply.status(204).send();
+  });
+
+  // POST /api/folders/:id/restore
+  // Clears deletedAt/deletedByUserId on the folder and ALL its trashed descendants
+  // (one transaction). If the folder's own parent is trashed or gone, it is
+  // re-parented to root so restore always succeeds — same principle as asset
+  // restore. Deliberate simplification (MAS-715): a descendant trashed separately
+  // BEFORE its ancestor is also resurrected by the ancestor's restore.
+  app.post('/api/folders/:id/restore', async (req, reply) => {
+    const params = parseParams(FolderIdParams, req.params, reply);
+    if (!params) return;
+
+    const restored = await prisma.$transaction(async (tx) => {
+      const folder = await tx.folder.findFirst({
+        where: { id: params.id, deletedAt: { not: null } },
+        select: { id: true, parentFolderId: true },
+      });
+      if (!folder) return null;
+
+      const ids = await collectSubtreeIds(tx, params.id, 'trashed');
+      await tx.folder.updateMany({
+        where: { id: { in: ids } },
+        data: { deletedAt: null, deletedByUserId: null },
+      });
+
+      // Re-parent to root when the original parent no longer exists as a live
+      // folder (trashed or hard-deleted); the parent is never part of the
+      // restored subtree, so its state is unaffected by the updateMany above.
+      if (folder.parentFolderId) {
+        const parent = await tx.folder.findFirst({
+          where: { id: folder.parentFolderId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!parent) {
+          await tx.folder.update({ where: { id: params.id }, data: { parentFolderId: null } });
+        }
+      }
+
+      return tx.folder.findUniqueOrThrow({ where: { id: params.id }, select: folderSelect });
+    });
+
+    if (!restored) return reply.status(404).send({ error: 'Not found or not in trash' });
+    return reply.status(200).send(formatFolder(restored));
+  });
+
+  // POST /api/folders/:id/purge
+  // Hard-delete of a TRASHED folder row; the DB cascade removes descendant folders
+  // and folder_assets memberships, assets persist. Same authz as asset purge:
+  // admin or the folder's creator. 404 if the folder is not in the trash.
+  app.post('/api/folders/:id/purge', async (req, reply) => {
+    const params = parseParams(FolderIdParams, req.params, reply);
+    if (!params) return;
+
+    const { userId, role } = req.user;
+
+    const folder = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: { not: null } },
+      select: { id: true, createdByUserId: true },
+    });
+    if (!folder) return reply.status(404).send({ error: 'Not found or not in trash' });
+
+    if (role !== 'admin' && folder.createdByUserId !== userId) {
+      return reply.status(403).send({ error: 'Forbidden' });
+    }
+
+    // The where clause re-asserts deletedAt so a concurrent restore between the
+    // fetch and here cannot purge a live folder (P2025 → 404).
+    try {
+      await prisma.folder.delete({ where: { id: params.id, deletedAt: { not: null } } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        return reply.status(404).send({ error: 'Not found or not in trash' });
+      }
+      throw err;
+    }
+
+    return reply.status(204).send();
+  });
+
+  // GET /api/trash/folders
+  // Top-level trashed folders only (parent null, live, or gone), each with its
+  // trashed-descendant count. Separate route from GET /api/trash so the asset
+  // trash response shape stays untouched.
+  app.get('/api/trash/folders', async (_req, reply) => {
+    const all = await prisma.folder.findMany({
+      where: { deletedAt: { not: null } },
+      select: { id: true, name: true, parentFolderId: true, deletedAt: true, deletedByUserId: true },
+      orderBy: { deletedAt: 'desc' },
+    });
+
+    const trashedIds = new Set(all.map((f) => f.id));
+    const childrenOf = new Map<string, string[]>();
+    for (const f of all) {
+      if (f.parentFolderId && trashedIds.has(f.parentFolderId)) {
+        const siblings = childrenOf.get(f.parentFolderId) ?? [];
+        siblings.push(f.id);
+        childrenOf.set(f.parentFolderId, siblings);
+      }
+    }
+
+    function countDescendants(id: string): number {
+      const kids = childrenOf.get(id) ?? [];
+      return kids.length + kids.reduce((sum, kid) => sum + countDescendants(kid), 0);
+    }
+
+    const topLevel = all.filter((f) => !f.parentFolderId || !trashedIds.has(f.parentFolderId));
+    return reply.send(
+      topLevel.map((f) => ({
+        id: f.id,
+        name: f.name,
+        deleted_at: f.deletedAt,
+        deleted_by: f.deletedByUserId,
+        descendant_count: countDescendants(f.id),
+      })),
+    );
   });
 
   // GET /api/folders/:id/assets
@@ -281,13 +548,18 @@ export async function foldersRoutes(app: FastifyInstance) {
     if (!qResult.success) return reply.status(400).send({ error: 'Invalid query' });
     const { limit, cursor } = qResult.data;
 
-    const folder = await prisma.folder.findUnique({ where: { id: params.id }, select: { id: true } });
+    const folder = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
     if (!folder) return reply.status(404).send({ error: 'Folder not found' });
 
     // Cursor-based pagination: WHERE asset_id > cursor ORDER BY asset_id ASC LIMIT limit+1
+    // Trashed assets stay members (restore puts them back) but never appear here.
     const rows = await prisma.folderAsset.findMany({
       where: {
         folderId: params.id,
+        asset: { deletedAt: null },
         ...(cursor ? { assetId: { gt: cursor } } : {}),
       },
       orderBy: { assetId: 'asc' },
@@ -312,7 +584,10 @@ export async function foldersRoutes(app: FastifyInstance) {
     const body = parseBody(AddAssetsBody, req.body, reply);
     if (!body) return;
 
-    const folder = await prisma.folder.findUnique({ where: { id: params.id }, select: { id: true } });
+    const folder = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
     if (!folder) return reply.status(404).send({ error: 'Folder not found' });
 
     // Validate all assetIds exist
@@ -337,8 +612,9 @@ export async function foldersRoutes(app: FastifyInstance) {
     const params = parseParams(FolderAssetParams, req.params, reply);
     if (!params) return;
 
-    const membership = await prisma.folderAsset.findUnique({
-      where: { folderId_assetId: { folderId: params.id, assetId: params.assetId } },
+    // Membership lookups treat trashed folders as nonexistent (MAS-715)
+    const membership = await prisma.folderAsset.findFirst({
+      where: { folderId: params.id, assetId: params.assetId, folder: { deletedAt: null } },
       select: { folderId: true },
     });
     if (!membership) return reply.status(404).send({ error: 'Folder or membership not found' });

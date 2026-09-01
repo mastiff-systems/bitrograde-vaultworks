@@ -26,7 +26,8 @@ import { Step2MetadataForm } from '../components/UploadWizard/Step2MetadataForm'
 import { Step3ReviewSubmit } from '../components/UploadWizard/Step3ReviewSubmit';
 import { useUploadWizard } from '../components/UploadWizard/useUploadWizard';
 import { UploadWizard } from '../components/UploadWizard';
-import type { WizardAction, WizardState } from '../components/UploadWizard/useUploadWizard';
+import type { WizardState, WizardAction } from '../components/UploadWizard/useUploadWizard';
+import type { Dispatch } from 'react';
 import type { Asset } from '../api/client';
 import type { Collection } from '../api/collections';
 
@@ -133,7 +134,7 @@ function renderStep2(
   const utils = render(
     <Step2MetadataForm
       state={state}
-      dispatch={dispatch}
+      dispatch={dispatch as Dispatch<WizardAction>}
       categories={[]}
       categoriesLoading={false}
       categoriesError={null}

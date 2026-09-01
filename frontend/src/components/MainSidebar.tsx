@@ -76,14 +76,16 @@ function FilterIcon({ className }: { className?: string }) {
 
 interface FolderRowProps {
   folder: Folder;
+  /** Folder names from root → parent (this folder's own name is appended on select). */
+  ancestry: string[];
   activeFolderId: string | null;
-  onSelectFolder: (id: string | null) => void;
+  onSelectFolder: (id: string | null, path?: string[]) => void;
   onDeleted: () => void;
   onRenamed: (updated: Folder) => void;
   depth?: number;
 }
 
-function FolderRow({ folder, activeFolderId, onSelectFolder, onDeleted, onRenamed, depth = 0 }: FolderRowProps) {
+function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted, onRenamed, depth = 0 }: FolderRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<Folder[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
@@ -92,6 +94,7 @@ function FolderRow({ folder, activeFolderId, onSelectFolder, onDeleted, onRename
   const renameRef = useRef<HTMLInputElement>(null);
 
   const isActive = activeFolderId === folder.id;
+  const path = [...ancestry, folder.name];
 
   async function handleExpand() {
     if (expanded) { setExpanded(false); return; }
@@ -152,7 +155,7 @@ function FolderRow({ folder, activeFolderId, onSelectFolder, onDeleted, onRename
         className={`group flex items-center gap-1 px-2 py-1 rounded cursor-pointer select-none text-sm
           ${isActive ? 'bg-accent/20 text-accent' : 'hover:bg-surface-3 text-content-secondary hover:text-content'}`}
         style={{ paddingLeft: `${8 + indent}px` }}
-        onClick={renaming ? undefined : () => onSelectFolder(folder.id)}
+        onClick={renaming ? undefined : () => onSelectFolder(folder.id, path)}
         onDoubleClick={(e) => { e.stopPropagation(); setRenaming(true); setRenameValue(folder.name); }}
       >
         {/* Expand chevron */}
@@ -208,6 +211,7 @@ function FolderRow({ folder, activeFolderId, onSelectFolder, onDeleted, onRename
             <FolderRow
               key={child.id}
               folder={child}
+              ancestry={path}
               activeFolderId={activeFolderId}
               onSelectFolder={onSelectFolder}
               onDeleted={() => setChildren((prev) => (prev ?? []).filter((c) => c.id !== child.id))}
@@ -227,7 +231,8 @@ function FolderRow({ folder, activeFolderId, onSelectFolder, onDeleted, onRename
 
 export interface MainSidebarProps {
   activeFolderId: string | null;
-  onSelectFolder: (id: string | null) => void;
+  /** `path` (names root → self) is provided on folder selection; `[]` for "All assets". */
+  onSelectFolder: (id: string | null, path?: string[]) => void;
   /** Filter sub-groups (File type, Tags, …) rendered inside the Filters section. */
   children?: ReactNode;
   hasFilters: boolean;
@@ -385,6 +390,7 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
                   <FolderRow
                     key={folder.id}
                     folder={folder}
+                    ancestry={[]}
                     activeFolderId={activeFolderId}
                     onSelectFolder={onSelectFolder}
                     onDeleted={() => setFolders((prev) => prev.filter((f) => f.id !== folder.id))}

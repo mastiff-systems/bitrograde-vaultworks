@@ -82,6 +82,8 @@ export interface ListFilesParams {
   mimeType?: string;
   categoryId?: string;
   subcategoryId?: string;
+  /** Filter to assets in this collection (MAS-711 backend filter). */
+  collectionId?: string;
   format?: string;
   limit?: number;
   page?: number;
@@ -111,6 +113,7 @@ export async function listFiles(params?: ListFilesParams): Promise<PaginatedFile
   if (params?.mimeType) p.mimeType = params.mimeType;
   if (params?.categoryId) p.categoryId = params.categoryId;
   if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
+  if (params?.collectionId) p.collectionId = params.collectionId;
   if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
   if (params?.page) p.page = String(params.page);

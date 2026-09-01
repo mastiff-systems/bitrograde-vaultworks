@@ -1,11 +1,15 @@
 /**
- * MAS-368: Folder feature — all 7 REST endpoints.
+ * MAS-368: Folder feature — REST endpoints.
+ * MAS-710: nested hierarchy — tree/breadcrumb endpoints, trashed assets excluded
+ * from listings and counts.
  *
  * Routes:
  *   GET    /api/folders                      — list folders (with asset count)
+ *   GET    /api/folders/tree                 — full nested tree (or one subtree via ?folderId)
  *   POST   /api/folders                      — create folder
+ *   GET    /api/folders/:id/path             — breadcrumb ancestors, root → self
  *   PATCH  /api/folders/:id                  — rename / reparent (guards circular ancestor)
- *   DELETE /api/folders/:id                  — hard delete; memberships cascade, assets persist
+ *   DELETE /api/folders/:id                  — hard delete; memberships + descendant folders cascade, assets persist
  *   GET    /api/folders/:id/assets           — cursor-paginated asset list
  *   POST   /api/folders/:id/assets           — add assets (bulk, skipDuplicates)
  *   DELETE /api/folders/:id/assets/:assetId  — remove one membership
@@ -51,6 +55,10 @@ const ListFoldersQuery = z.object({
 const ListAssetsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().uuid().optional(),
+});
+
+const TreeQuery = z.object({
+  folderId: z.string().uuid().optional(), // return only this folder's subtree
 });
 
 // ─── Shared asset select (mirrors files.ts) ──────────────────────────────────
@@ -135,6 +143,7 @@ function formatFolder(f: {
   };
 }
 
+// asset_count excludes trashed assets so folder badges match what listings show
 const folderSelect = {
   id: true,
   name: true,
@@ -143,7 +152,7 @@ const folderSelect = {
   parentFolderId: true,
   createdAt: true,
   updatedAt: true,
-  _count: { select: { assets: true } },
+  _count: { select: { assets: { where: { asset: { deletedAt: null } } } } },
 } as const;
 
 // ─── Circular ancestor guard ─────────────────────────────────────────────────
@@ -193,6 +202,62 @@ export async function foldersRoutes(app: FastifyInstance) {
 
     const folders = await prisma.folder.findMany({ where, select: folderSelect, orderBy: { name: 'asc' } });
     return reply.send(folders.map(formatFolder));
+  });
+
+  // GET /api/folders/tree
+  // Returns the full folder forest as nested nodes (children sorted by name),
+  // or a single subtree when ?folderId=<uuid> is given. Folder counts are tiny,
+  // so fetch-all + in-memory assembly beats a recursive CTE for now (MAS-708 §2).
+  app.get('/api/folders/tree', async (req, reply) => {
+    const qResult = TreeQuery.safeParse(req.query);
+    if (!qResult.success) return reply.status(400).send({ error: 'Invalid query' });
+    const { folderId } = qResult.data;
+
+    const folders = await prisma.folder.findMany({ select: folderSelect, orderBy: { name: 'asc' } });
+
+    type TreeNode = ReturnType<typeof formatFolder> & { children: TreeNode[] };
+    const nodes = new Map<string, TreeNode>(
+      folders.map((f) => [f.id, { ...formatFolder(f), children: [] as TreeNode[] }]),
+    );
+    const roots: TreeNode[] = [];
+    for (const f of folders) {
+      const node = nodes.get(f.id)!;
+      const parent = f.parentFolderId ? nodes.get(f.parentFolderId) : undefined;
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    }
+
+    if (folderId) {
+      const subtree = nodes.get(folderId);
+      if (!subtree) return reply.status(404).send({ error: 'Folder not found' });
+      return reply.send([subtree]);
+    }
+    return reply.send(roots);
+  });
+
+  // GET /api/folders/:id/path
+  // Breadcrumb: ancestor chain ordered root → … → the folder itself.
+  app.get('/api/folders/:id/path', async (req, reply) => {
+    const params = parseParams(FolderIdParams, req.params, reply);
+    if (!params) return;
+
+    const path: { id: string; name: string; parent_folder_id: string | null }[] = [];
+    let current: string | null = params.id;
+    const visited = new Set<string>(); // safety guard against pre-existing cycles
+    while (current !== null && !visited.has(current)) {
+      visited.add(current);
+      const row: { id: string; name: string; parentFolderId: string | null } | null =
+        await prisma.folder.findUnique({
+          where: { id: current },
+          select: { id: true, name: true, parentFolderId: true },
+        });
+      if (!row) break;
+      path.unshift({ id: row.id, name: row.name, parent_folder_id: row.parentFolderId });
+      current = row.parentFolderId;
+    }
+
+    if (path.length === 0) return reply.status(404).send({ error: 'Folder not found' });
+    return reply.send(path);
   });
 
   // POST /api/folders
@@ -285,9 +350,11 @@ export async function foldersRoutes(app: FastifyInstance) {
     if (!folder) return reply.status(404).send({ error: 'Folder not found' });
 
     // Cursor-based pagination: WHERE asset_id > cursor ORDER BY asset_id ASC LIMIT limit+1
+    // Trashed assets stay members (restore puts them back) but never appear here.
     const rows = await prisma.folderAsset.findMany({
       where: {
         folderId: params.id,
+        asset: { deletedAt: null },
         ...(cursor ? { assetId: { gt: cursor } } : {}),
       },
       orderBy: { assetId: 'asc' },

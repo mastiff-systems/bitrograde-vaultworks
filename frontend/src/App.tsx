@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { LoginPage } from './components/LoginPage.js';
 import { KeycloakCallback } from './components/KeycloakCallback.js';
 import { Layout } from './components/Layout.js';
@@ -6,8 +6,6 @@ import { AssetBrowser } from './pages/AssetBrowser.js';
 import { ProfilePage } from './pages/Profile.js';
 import { AdminSettings } from './pages/admin/Settings.js';
 import { AdminUsers } from './pages/admin/Users.js';
-import { TaxonomyManager } from './pages/admin/TaxonomyManager.js';
-import { AdminAuditLog } from './pages/AdminAuditLog.js';
 import { Collections } from './pages/Collections.js';
 import { ResetPassword } from './pages/ResetPassword.js';
 import { ChangePassword } from './pages/ChangePassword.js';
@@ -23,13 +21,21 @@ function AdminRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** Dashboard route: `/?asset=<id>` opens that asset's details panel
+    (used by the Settings → Logs asset click-through, MAS-736). */
+function AssetBrowserRoute() {
+  const location = useLocation();
+  const assetId = new URLSearchParams(location.search).get('asset');
+  return <AssetBrowser initialDetailAssetId={assetId} />;
+}
+
 function AppShell() {
   return (
     <CategoryProvider>
       <UploadProvider>
         <Layout>
           <Routes>
-            <Route path="/" element={<AssetBrowser />} />
+            <Route path="/" element={<AssetBrowserRoute />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/collections" element={<Collections />} />
             <Route
@@ -45,22 +51,6 @@ function AppShell() {
               element={
                 <AdminRoute>
                   <AdminUsers />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="/admin/taxonomy"
-              element={
-                <AdminRoute>
-                  <TaxonomyManager />
-                </AdminRoute>
-              }
-            />
-            <Route
-              path="/admin/audit"
-              element={
-                <AdminRoute>
-                  <AdminAuditLog onNavigateToAsset={() => {}} />
                 </AdminRoute>
               }
             />

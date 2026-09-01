@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchStats, fetchAuditLogs, fetchAuditUsers } from '../../api/admin.js';
 import type { AdminStats, AuditLogEntry, AuditLogsParams, AuditAction, AuditUser } from '../../api/admin.js';
 import {
@@ -12,6 +13,7 @@ import {
 import type { TrashedAsset, TrashedFolder } from '../../api/client.js';
 import { StorageSettings } from './StorageSettings.js';
 import { EmailSettings } from './EmailSettings.js';
+import { TaxonomyManager } from './TaxonomyManager.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -70,6 +72,7 @@ interface LogTableProps {
 }
 
 function LogTable({ mode }: LogTableProps) {
+  const navigate = useNavigate();
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -229,7 +232,21 @@ function LogTable({ mode }: LogTableProps) {
                 </td>
                 <td><ActionBadge action={log.action} /></td>
                 <td className="text-sm text-content-secondary max-w-[200px] truncate">
-                  {log.asset_name ?? '—'}
+                  {log.asset_name ? (
+                    log.asset_id ? (
+                      <button
+                        onClick={() => navigate(`/?asset=${log.asset_id}`)}
+                        className="text-accent-light font-medium hover:underline text-left truncate max-w-full"
+                        title={`Open ${log.asset_name}`}
+                      >
+                        {log.asset_name}
+                      </button>
+                    ) : (
+                      log.asset_name
+                    )
+                  ) : (
+                    '—'
+                  )}
                 </td>
                 <td className="text-xs text-content-muted font-mono">
                   {log.ip_address ?? '—'}
@@ -574,13 +591,36 @@ function TrashTab() {
   );
 }
 
+// ─── About Tab ──────────────────────────────────────────────────────────────
+
+// Single-column key/value layout with room for future rows (git SHA, build
+// time, deploy status) as the MAS-730 versioning rollout exposes them.
+function AboutTab() {
+  const rows: Array<{ label: string; value: string }> = [
+    { label: 'Version', value: `v${__APP_VERSION__}` },
+  ];
+
+  return (
+    <div className="max-w-md">
+      <div className="card divide-y divide-border/50">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm text-content-secondary">{row.label}</span>
+            <span className="text-sm text-content-primary font-medium tabular-nums">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export function AdminSettings() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'logs' | 'trash'>('storage');
+  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'taxonomy' | 'trash' | 'logs' | 'about'>('storage');
 
   useEffect(() => {
     fetchStats()
@@ -623,7 +663,14 @@ export function AdminSettings() {
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 border-b border-border mb-6">
-        {(['storage', 'email', 'trash', 'logs'] as const).map((tab) => (
+        {([
+          ['storage', 'Storage'],
+          ['email', 'Email'],
+          ['taxonomy', 'Taxonomy'],
+          ['trash', 'Trash'],
+          ['logs', 'Logs'],
+          ['about', 'About'],
+        ] as const).map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -633,7 +680,7 @@ export function AdminSettings() {
                 : 'border-transparent text-content-secondary hover:text-content-primary'
             }`}
           >
-            {tab === 'storage' ? 'Storage' : tab === 'email' ? 'Email' : tab === 'trash' ? 'Trash' : 'Logs'}
+            {label}
           </button>
         ))}
       </div>
@@ -657,11 +704,17 @@ export function AdminSettings() {
       {/* Email tab */}
       {!loading && activeTab === 'email' && <EmailSettings embedded />}
 
+      {/* Taxonomy tab */}
+      {!loading && activeTab === 'taxonomy' && <TaxonomyManager embedded />}
+
       {/* Trash tab */}
       {!loading && activeTab === 'trash' && <TrashTab />}
 
       {/* Logs tab */}
       {!loading && activeTab === 'logs' && <LogsTab />}
+
+      {/* About tab */}
+      {!loading && activeTab === 'about' && <AboutTab />}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import type { WizardState } from './useUploadWizard.js';
 import type { Category } from '../../api/categories.js';
+import type { Collection } from '../../api/collections.js';
 import { ALLOWED_LICENSES } from './constants.js';
 
 function formatBytes(b: number): string {
@@ -12,6 +13,7 @@ function formatBytes(b: number): string {
 interface Props {
   state: WizardState;
   categories: Category[];
+  collections?: Collection[];
 }
 
 function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -23,7 +25,7 @@ function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
-export function Step3ReviewSubmit({ state, categories }: Props) {
+export function Step3ReviewSubmit({ state, categories, collections = [] }: Props) {
   const { metadata, file } = state;
   const isSubmitting = state.step === 'submitting';
   const isError = state.step === 'error';
@@ -69,6 +71,10 @@ export function Step3ReviewSubmit({ state, categories }: Props) {
         <ReviewRow
           label="Location"
           value={['All assets', ...state.folder.path].join(' › ')}
+        />
+        <ReviewRow
+          label="Collection"
+          value={collections.find((c) => c.id === state.collectionId)?.name}
         />
         <ReviewRow label="Category" value={categoryName} />
         <ReviewRow label="Subcategory" value={subcategoryName} />

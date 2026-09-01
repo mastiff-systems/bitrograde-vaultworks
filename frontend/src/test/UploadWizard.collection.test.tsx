@@ -129,7 +129,7 @@ function renderStep2(
     onCreateCollection?: (name: string) => Promise<void>;
   } = {},
 ) {
-  const dispatch = opts.dispatch ?? vi.fn();
+  const dispatch = (opts.dispatch ?? vi.fn()) as ReturnType<typeof vi.fn> & ((action: WizardAction) => void);
   const state = makeWizardState(stateOverrides);
   const utils = render(
     <Step2MetadataForm

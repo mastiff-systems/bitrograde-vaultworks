@@ -20,6 +20,11 @@ export interface WizardPrefill {
 interface Props {
   open: boolean;
   onClose: () => void;
+  /**
+   * Notifies the parent of a successful upload (e.g. to add the asset to the
+   * grid). Must NOT close the wizard: the 'done' step stays visible so the
+   * user sees the confirmation and any attach-failure warnings (MAS-717).
+   */
   onComplete: (asset: Asset) => void;
   prefill?: WizardPrefill;
 }

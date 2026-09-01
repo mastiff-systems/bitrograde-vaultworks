@@ -2,6 +2,8 @@ import { useCallback, useEffect, useReducer, useState } from 'react';
 import type { Asset } from '../../api/client.js';
 import { uploadWithMetadata } from '../../api/client.js';
 import { listCategories, type Category } from '../../api/categories.js';
+import { addAssetsToFolder } from '../../api/folders.js';
+import type { FolderSelection } from './FolderPickerDialog.js';
 
 export interface WizardState {
   step: 'file' | 'metadata' | 'review' | 'submitting' | 'done' | 'error';
@@ -17,6 +19,10 @@ export interface WizardState {
     description: string;
     tags: string[];
   };
+  /** Destination folder (MAS-712); `id: null` = vault root ("All assets"). */
+  folder: FolderSelection;
+  /** Upload succeeded but adding the asset to the chosen folder failed. */
+  folderAttachFailed: boolean;
   uploadedAsset: Asset | null;
   uploadProgress: number;
   error: string | null;
@@ -30,9 +36,10 @@ export type WizardAction =
   | { type: 'SET_CATEGORY'; categoryId: string | null }
   | { type: 'SET_METADATA'; patch: Partial<WizardState['metadata']> }
   | { type: 'SET_CUSTOM_NAME'; name: string }
+  | { type: 'SET_FOLDER'; selection: FolderSelection }
   | { type: 'SUBMIT_START' }
   | { type: 'SUBMIT_PROGRESS'; pct: number }
-  | { type: 'SUBMIT_SUCCESS'; asset: Asset }
+  | { type: 'SUBMIT_SUCCESS'; asset: Asset; folderAttachFailed?: boolean }
   | { type: 'SUBMIT_ERROR'; message: string }
   | { type: 'RETRY' }
   | { type: 'RESET' };
@@ -53,6 +60,8 @@ const initialState: WizardState = {
   detectedDimensions: null,
   detectedDuration: null,
   metadata: initialMetadata,
+  folder: { id: null, path: [] },
+  folderAttachFailed: false,
   uploadedAsset: null,
   uploadProgress: 0,
   error: null,
@@ -88,12 +97,20 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
       return { ...state, metadata: { ...state.metadata, categoryId: action.categoryId, subcategoryId: null } };
     case 'SET_METADATA':
       return { ...state, metadata: { ...state.metadata, ...action.patch } };
+    case 'SET_FOLDER':
+      return { ...state, folder: action.selection };
     case 'SUBMIT_START':
       return { ...state, step: 'submitting', uploadProgress: 0, error: null };
     case 'SUBMIT_PROGRESS':
       return { ...state, uploadProgress: action.pct };
     case 'SUBMIT_SUCCESS':
-      return { ...state, step: 'done', uploadedAsset: action.asset, uploadProgress: 100 };
+      return {
+        ...state,
+        step: 'done',
+        uploadedAsset: action.asset,
+        uploadProgress: 100,
+        folderAttachFailed: action.folderAttachFailed ?? false,
+      };
     case 'SUBMIT_ERROR':
       return { ...state, step: 'error', error: action.message };
     case 'RETRY':
@@ -221,7 +238,18 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
         },
         (pct) => dispatch({ type: 'SUBMIT_PROGRESS', pct }),
       );
-      dispatch({ type: 'SUBMIT_SUCCESS', asset });
+      // Destination folder is a membership row, not upload metadata — attach
+      // after the upload succeeds. A failure here must not fail the upload.
+      let folderAttachFailed = false;
+      if (state.folder.id) {
+        try {
+          await addAssetsToFolder(state.folder.id, [asset.id]);
+        } catch (err) {
+          console.error('Failed to add uploaded asset to folder:', err);
+          folderAttachFailed = true;
+        }
+      }
+      dispatch({ type: 'SUBMIT_SUCCESS', asset, folderAttachFailed });
       onComplete(asset);
     } catch (err) {
       dispatch({ type: 'SUBMIT_ERROR', message: extractErrorMessage(err) });

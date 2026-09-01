@@ -79,6 +79,12 @@ export function UploadWizard({ open, onClose, onComplete }: Props) {
                 <p className="text-sm text-content-muted mt-1">
                   {state.uploadedAsset?.original_name} has been added to your vault.
                 </p>
+                {state.folderAttachFailed && (
+                  <p className="text-xs text-amber-400 mt-2 max-w-xs">
+                    The file uploaded, but couldn't be added to the selected folder.
+                    You can add it from the asset's details.
+                  </p>
+                )}
               </div>
               <div className="flex gap-3 mt-2">
                 <button

@@ -85,6 +85,8 @@ function makeWizardState(overrides: Partial<WizardState> = {}): WizardState {
       description: '',
       tags: [],
     },
+    folder: { id: null, path: [] },
+    folderAttachFailed: false,
     uploadedAsset: null,
     uploadProgress: 0,
     error: null,

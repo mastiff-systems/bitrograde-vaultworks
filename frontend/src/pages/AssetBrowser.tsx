@@ -34,7 +34,7 @@ import {
   type Folder,
 } from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
-import { FolderPanel } from '../components/FolderPanel.js';
+import { MainSidebar } from '../components/MainSidebar.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
@@ -1731,7 +1731,6 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const upload = useUpload();
@@ -2126,106 +2125,75 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         </div>
       )}
 
-      {/* Filter sidebar */}
-      <aside className={`flex-shrink-0 border-r border-border flex flex-col bg-surface-1 transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-10'}`}>
-        {/* Sidebar header with collapse toggle */}
-        <div className={`px-2 py-3.5 border-b border-border flex items-center ${sidebarOpen ? 'justify-between px-4' : 'justify-center'}`}>
-          {sidebarOpen && (
-            <>
-              <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
-              {hasFilters && (
-                <button
-                  onClick={clearFilters}
-                  className="text-xs text-accent-light hover:text-accent transition-colors"
-                >
-                  Clear all
-                </button>
-              )}
-            </>
-          )}
-          <button
-            onClick={() => setSidebarOpen((o) => !o)}
-            aria-label={sidebarOpen ? 'Collapse filters' : 'Expand filters'}
-            className={`flex-shrink-0 p-1 rounded text-content-muted hover:text-content-primary hover:bg-surface-3 transition-colors ${sidebarOpen ? '' : 'mx-auto'}`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              {sidebarOpen
-                ? <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                : <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              }
-            </svg>
-          </button>
-        </div>
+      {/* Unified sidebar: Folders tree + Filters (MAS-712) */}
+      <MainSidebar
+        activeFolderId={activeFolderId}
+        onSelectFolder={setActiveFolderId}
+        hasFilters={hasFilters}
+        onClearFilters={clearFilters}
+      >
+        {/* File type filter — dynamic from loaded assets */}
+        {availableExts.length > 0 && (
+          <div className="px-4 py-3 border-b border-border/50">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              File type
+            </div>
+            {availableExts.map(({ ext, count }) => (
+              <label
+                key={ext}
+                className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedExts.includes(ext)}
+                  onChange={() => toggleExt(ext)}
+                  className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                />
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
+                <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
+                  .{ext}
+                </span>
+                <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
+              </label>
+            ))}
+          </div>
+        )}
 
-        {sidebarOpen && (
-          <div className="overflow-y-auto flex-1">
-            {/* File type filter — dynamic from loaded assets */}
-            {availableExts.length > 0 && (
-              <div className="px-4 py-3 border-b border-border/50">
-                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-                  File type
-                </div>
-                {availableExts.map(({ ext, count }) => (
+        {/* Tags filter */}
+        {allTags.length > 0 && (
+          <div className="px-4 py-3">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              Tags
+            </div>
+            <div className="space-y-0.5 max-h-72 overflow-y-auto">
+              {allTags.map((tag) => {
+                const p = tagPalette(tag.name);
+                return (
                   <label
-                    key={ext}
+                    key={tag.id}
                     className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
                   >
                     <input
                       type="checkbox"
-                      checked={selectedExts.includes(ext)}
-                      onChange={() => toggleExt(ext)}
-                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                      checked={selectedTags.includes(tag.name)}
+                      onChange={() => toggleTag(tag.name)}
+                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
                     />
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
-                    <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
-                      .{ext}
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
+                    >
+                      {tag.name}
                     </span>
-                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
+                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                      {tag.asset_count}
+                    </span>
                   </label>
-                ))}
-              </div>
-            )}
-
-            {/* Tags filter */}
-            {allTags.length > 0 && (
-              <div className="px-4 py-3">
-                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-                  Tags
-                </div>
-                <div className="space-y-0.5 max-h-72 overflow-y-auto">
-                  {allTags.map((tag) => {
-                    const p = tagPalette(tag.name);
-                    return (
-                      <label
-                        key={tag.id}
-                        className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedTags.includes(tag.name)}
-                          onChange={() => toggleTag(tag.name)}
-                          className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
-                        />
-                        <span
-                          className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
-                        >
-                          {tag.name}
-                        </span>
-                        <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
-                          {tag.asset_count}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                );
+              })}
+            </div>
           </div>
         )}
-      </aside>
-
-      {/* Folder sidebar */}
-      <FolderPanel activeFolderId={activeFolderId} onSelectFolder={setActiveFolderId} />
+      </MainSidebar>
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

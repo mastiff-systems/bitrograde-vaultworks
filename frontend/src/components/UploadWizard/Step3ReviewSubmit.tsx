@@ -66,6 +66,10 @@ export function Step3ReviewSubmit({ state, categories }: Props) {
       {/* Metadata summary */}
       <div className="card p-4 bg-surface-1 space-y-0">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-content-muted mb-2">Metadata</p>
+        <ReviewRow
+          label="Location"
+          value={['All assets', ...state.folder.path].join(' › ')}
+        />
         <ReviewRow label="Category" value={categoryName} />
         <ReviewRow label="Subcategory" value={subcategoryName} />
         <ReviewRow label="License" value={licenseName} />

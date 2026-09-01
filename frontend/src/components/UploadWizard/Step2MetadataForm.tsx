@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import type { WizardState, WizardAction } from './useUploadWizard.js';
 import type { Category } from '../../api/categories.js';
 import { ALLOWED_LICENSES, MAX_CUSTOM_NAME_CHARS, MAX_DESCRIPTION_CHARS, MAX_TAGS, MAX_TAG_LENGTH } from './constants.js';
+import { FolderPickerDialog } from './FolderPickerDialog.js';
+import { FolderIcon } from '../MainSidebar.js';
 
 interface Props {
   state: WizardState;
@@ -19,6 +21,7 @@ function formatDuration(seconds: number): string {
 
 export function Step2MetadataForm({ state, dispatch, categories, categoriesLoading, categoriesError }: Props) {
   const [tagInput, setTagInput] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement>(null);
   const { metadata } = state;
 
@@ -95,6 +98,35 @@ export function Step2MetadataForm({ state, dispatch, categories, categoriesLoadi
         {!customNameEmpty && customNameTooLong && (
           <p id="custom-name-hint" className="text-[10px] text-danger mt-1">File name must be 255 characters or fewer.</p>
         )}
+      </div>
+
+      {/* Location — destination folder (MAS-712) */}
+      <div>
+        <label className="label">Location</label>
+        <div className="flex items-center gap-2">
+          <div className="input flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto whitespace-nowrap cursor-default">
+            <FolderIcon className="w-4 h-4 shrink-0 text-content-muted" />
+            <span className="text-sm text-content-secondary">All assets</span>
+            {state.folder.path.map((name, i) => (
+              <span key={i} className="flex items-center gap-1.5 text-sm text-content-secondary">
+                <span className="text-content-muted">›</span>
+                {name}
+              </span>
+            ))}
+          </div>
+          <button className="btn-secondary btn-sm shrink-0" onClick={() => setPickerOpen(true)}>
+            Change
+          </button>
+        </div>
+        <FolderPickerDialog
+          open={pickerOpen}
+          initial={state.folder}
+          onCancel={() => setPickerOpen(false)}
+          onChoose={(selection) => {
+            dispatch({ type: 'SET_FOLDER', selection });
+            setPickerOpen(false);
+          }}
+        />
       </div>
 
       {/* Category */}

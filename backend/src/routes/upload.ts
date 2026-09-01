@@ -12,6 +12,7 @@ import { generateThumbnail } from '../lib/thumbnail.js';
 const UploadMetaSchema = z.object({
   category_id: z.string().uuid().optional(),
   subcategory_id: z.string().uuid().optional(),
+  collection_id: z.string().uuid().optional(),
   license: z.string().max(255).optional(),
   description: z.string().max(2000).optional(),
   tags: z.array(z.string().max(100)).max(20).optional(),
@@ -26,6 +27,7 @@ function coerceMeta(fields: Record<string, string>): UploadMeta {
   const raw: Record<string, unknown> = {};
   if (fields.category_id) raw.category_id = fields.category_id;
   if (fields.subcategory_id) raw.subcategory_id = fields.subcategory_id;
+  if (fields.collection_id) raw.collection_id = fields.collection_id;
   if (fields.license) raw.license = fields.license;
   if (fields.description) raw.description = fields.description;
   if (fields.tags) {
@@ -204,6 +206,13 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: 'subcategory_id does not belong to category_id' });
       }
     }
+    if (meta.collection_id) {
+      const coll = await prisma.collection.findUnique({ where: { id: meta.collection_id }, select: { id: true } });
+      if (!coll) {
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
+        return reply.status(400).send({ error: 'collection_id does not exist' });
+      }
+    }
 
     // ── Buffered files (images) ──────────────────────────────────────────────
     // Upload to S3 + generate thumbnail, then create DB record.
@@ -294,6 +303,12 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             });
           }
         }
+        if (meta.collection_id) {
+          await prisma.collectionAsset.createMany({
+            data: [{ collectionId: meta.collection_id, assetId: id }],
+            skipDuplicates: true,
+          });
+        }
       } catch (err) {
         await storage.delete(storageKey).catch(() => {});
         if (thumbnailKey) await storage.delete(thumbnailKey).catch(() => {});
@@ -324,6 +339,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         resolution_w: asset.resolutionW,
         resolution_h: asset.resolutionH,
         duration_seconds: asset.durationSeconds,
+        collection_id: meta.collection_id ?? null,
       });
 
       // Fire-and-forget notifications — don't block the upload response
@@ -419,6 +435,12 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
             });
           }
         }
+        if (meta.collection_id) {
+          await prisma.collectionAsset.createMany({
+            data: [{ collectionId: meta.collection_id, assetId: id }],
+            skipDuplicates: true,
+          });
+        }
       } catch (err) {
         // Storage object already exists; clean it up to avoid orphans.
         await storage.delete(storageKey).catch(() => {});
@@ -449,6 +471,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         resolution_w: asset.resolutionW,
         resolution_h: asset.resolutionH,
         duration_seconds: asset.durationSeconds,
+        collection_id: meta.collection_id ?? null,
       });
 
       // Fire-and-forget notifications — don't block the upload response

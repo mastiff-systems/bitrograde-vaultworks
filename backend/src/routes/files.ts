@@ -29,6 +29,7 @@ const FilesQuerySchema = z.object({
   mimeType: z.string().optional(),
   categoryId: z.string().uuid().optional(),
   subcategoryId: z.string().uuid().optional(),
+  collectionId: z.string().uuid().optional(),
   format: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -112,6 +113,7 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           mimeType: { type: 'string' },
           categoryId: { type: 'string', format: 'uuid' },
           subcategoryId: { type: 'string', format: 'uuid' },
+          collectionId: { type: 'string', format: 'uuid' },
           format: { type: 'string' },
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
@@ -175,6 +177,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       if (params.format) {
         const prefix = `${params.format}/%`;
         extraFilters = Prisma.sql`${extraFilters} AND a.mime_type LIKE ${prefix}`;
+      }
+      if (params.collectionId) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
+          SELECT ca.asset_id FROM collection_assets ca
+          WHERE ca.collection_id = ${params.collectionId}::uuid
+        )`;
       }
       if (tagNames.length > 0) {
         extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
@@ -279,6 +287,9 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     }
     if (params.format) {
       conditions.push({ mimeType: { startsWith: `${params.format}/` } });
+    }
+    if (params.collectionId) {
+      conditions.push({ collectionAssets: { some: { collectionId: params.collectionId } } });
     }
     for (const name of tagNames) {
       conditions.push({ tags: { some: { tag: { name } } } });

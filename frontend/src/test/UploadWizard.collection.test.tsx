@@ -26,7 +26,7 @@ import { Step2MetadataForm } from '../components/UploadWizard/Step2MetadataForm'
 import { Step3ReviewSubmit } from '../components/UploadWizard/Step3ReviewSubmit';
 import { useUploadWizard } from '../components/UploadWizard/useUploadWizard';
 import { UploadWizard } from '../components/UploadWizard';
-import type { WizardState } from '../components/UploadWizard/useUploadWizard';
+import type { WizardAction, WizardState } from '../components/UploadWizard/useUploadWizard';
 import type { Asset } from '../api/client';
 import type { Collection } from '../api/collections';
 
@@ -128,7 +128,7 @@ function renderStep2(
     onCreateCollection?: (name: string) => Promise<void>;
   } = {},
 ) {
-  const dispatch = opts.dispatch ?? vi.fn();
+  const dispatch = (opts.dispatch ?? vi.fn()) as ReturnType<typeof vi.fn> & ((action: WizardAction) => void);
   const state = makeWizardState(stateOverrides);
   const utils = render(
     <Step2MetadataForm

@@ -129,7 +129,7 @@ describe('MainSidebar integration', () => {
 
   // ── Select ────────────────────────────────────────────────────────────────
 
-  it('selecting a folder fires onSelectFolder with the folder id', async () => {
+  it('selecting a folder fires onSelectFolder with the folder id and path', async () => {
     vi.mocked(foldersApi.listFolders).mockResolvedValue([
       makeFolder({ id: 'folder-abc', name: 'Product Photos' }),
     ]);
@@ -138,7 +138,7 @@ describe('MainSidebar integration', () => {
 
     await waitFor(() => screen.getByText('Product Photos'));
     fireEvent.click(screen.getByText('Product Photos'));
-    expect(onSelect).toHaveBeenCalledWith('folder-abc');
+    expect(onSelect).toHaveBeenCalledWith('folder-abc', ['Product Photos']);
   });
 
   it('clicking "All assets" fires onSelectFolder with null', async () => {
@@ -166,7 +166,8 @@ describe('MainSidebar integration', () => {
 
     await waitFor(() => screen.getByText('Heroes'));
     fireEvent.click(screen.getByText('Heroes'));
-    expect(onSelect).toHaveBeenCalledWith('child-1');
+    // Child rows report their full ancestry path (used by wizard prefill, MAS-713)
+    expect(onSelect).toHaveBeenCalledWith('child-1', ['Characters', 'Heroes']);
   });
 
   it('caches children across collapse/re-expand (no refetch)', async () => {

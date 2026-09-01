@@ -279,6 +279,27 @@ export async function bulkDelete(ids: string[]): Promise<BulkDeleteResult> {
   return data;
 }
 
+export interface BulkUpdatePayload {
+  /** uuid to assign, null to clear category (also clears subcategory) */
+  categoryId?: string | null;
+  /** only valid alongside categoryId; must belong to it */
+  subcategoryId?: string | null;
+  /** tag-name deltas — existing unrelated tags are preserved */
+  addTags?: string[];
+  removeTags?: string[];
+}
+
+export interface BulkUpdateResult {
+  updated: string[];
+  errors: { id: string; reason: string }[];
+}
+
+/** Bulk metadata edit (category/subcategory + tag add/remove deltas). Server caps ids at 100 per call. */
+export async function bulkUpdate(ids: string[], payload: BulkUpdatePayload): Promise<BulkUpdateResult> {
+  const { data } = await api.post<BulkUpdateResult>('/api/files/bulk-update', { ids, ...payload });
+  return data;
+}
+
 export async function bulkDownload(ids: string[]): Promise<void> {
   const resp = await api.post('/api/files/bulk-download', { ids }, { responseType: 'blob' });
   const url = URL.createObjectURL(resp.data as Blob);

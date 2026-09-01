@@ -26,7 +26,6 @@ import {
   type ShareLink,
 } from '../api/client.js';
 import {
-  listFolderAssets,
   listFolders,
   listFoldersForAsset,
   addAssetsToFolder,
@@ -110,6 +109,7 @@ function getUrlFilters() {
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
     folder: p.get('folder') ?? null,
+    collection: p.get('collection') ?? null,
     preview: p.get('preview') ?? null,
   };
 }
@@ -124,6 +124,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = fal
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
   if (filters.folder) p.set('folder', filters.folder);
+  if (filters.collection) p.set('collection', filters.collection);
   if (filters.preview) p.set('preview', filters.preview);
   const search = p.toString();
   const url = search ? `?${search}` : window.location.pathname;
@@ -1737,6 +1738,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [sort, setSort] = useState<SortKey>(initial.sort);
   // Active folder: null = show all assets, uuid = show folder assets
   const [activeFolderId, setActiveFolderId] = useState<string | null>(initial.folder);
+  // Breadcrumb (names root → self) of the active folder, known only when the
+  // user picked it in the sidebar this session; null when restored from URL.
+  // Used to prefill the Upload Wizard's Location field (MAS-713).
+  const [activeFolderPath, setActiveFolderPath] = useState<string[] | null>(initial.folder ? null : []);
+  // Active collection filter: null = no collection filter (MAS-713)
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(initial.collection);
+
+  function handleSelectFolder(id: string | null, path?: string[]) {
+    setActiveFolderId(id);
+    setActiveFolderPath(id === null ? [] : path ?? null);
+  }
 
   const categoryMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -1885,6 +1897,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
       setActiveFolderId(filters.folder);
+      setActiveFolderPath(filters.folder ? null : []);
+      setSelectedCollectionId(filters.collection);
       // Restore preview asset from URL: fast-path lookup in already-loaded list
       if (filters.preview) {
         const found = assets.find((a) => a.id === filters.preview) ?? null;
@@ -1933,10 +1947,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     pushUrlFilters(
       { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
         category: selectedCategoryId, subcategory: selectedSubcategoryId,
-        folder: activeFolderId, preview: previewAsset?.id ?? null },
+        folder: activeFolderId, collection: selectedCollectionId, preview: previewAsset?.id ?? null },
       isMount, // replaceState on first render, pushState on subsequent filter changes
     );
-  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
+  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, selectedCollectionId, previewAsset]);
 
 
   // Load tags
@@ -1944,8 +1958,26 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     listTags().then(setAllTags).catch(() => {});
   }, []);
 
-  // Load assets: branch on activeFolderId — folder view vs. all-assets view
-  const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId].join(' ');
+  // Load collections for the sidebar filter (MAS-713)
+  const [allCollections, setAllCollections] = useState<Collection[]>([]);
+  const refreshCollections = useCallback(() => {
+    listCollections().then(setAllCollections).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshCollections();
+  }, [refreshCollections]);
+
+  // Keep the sidebar filter list in sync when a collection is created from
+  // the Add to Collection modal (MAS-720); asset_count is refreshed via
+  // onAdded once the membership write lands.
+  const handleModalCollectionCreated = useCallback((c: Collection) => {
+    setCollectionsForModal((prev) => [c, ...prev]);
+    setAllCollections((prev) => [c, ...prev]);
+  }, []);
+
+  // Load assets: single /api/files path — folderId composes with q/tags/collection
+  // server-side (MAS-719; the folder-assets endpoint dropped every other filter).
+  const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, selectedCollectionId].join('\u0000');
   const prevFilterKeyRef = useRef(filterKey);
   useEffect(() => {
     // Filter change invalidates the current page; snap back to 1 and let the
@@ -1961,31 +1993,23 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setError(null);
     let cancelled = false;
 
-    const fetch = activeFolderId
-      ? listFolderAssets(activeFolderId, { limit: 200 }).then((folderPage) => {
-          // Folder endpoint is cursor-based (no total envelope): count what we
-          // fetched and keep the page controls hidden.
-          if (cancelled) return;
-          setAssets(folderPage.assets);
-          setTotal(folderPage.assets.length);
-          setTotalPages(1);
-        })
-      : listFiles({
-          q: debouncedQuery || undefined,
-          // Pass single type to API; multi-type handled client-side below
-          assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
-          tags: selectedTags.length > 0 ? selectedTags : undefined,
-          categoryId: selectedCategoryId ?? undefined,
-          subcategoryId: selectedSubcategoryId ?? undefined,
-          page,
-        }).then((res) => {
-          if (cancelled) return;
-          setAssets(res.data);
-          setTotal(res.total);
-          setTotalPages(res.totalPages);
-        });
-
-    fetch
+    listFiles({
+      q: debouncedQuery || undefined,
+      // Pass single type to API; multi-type handled client-side below
+      assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      categoryId: selectedCategoryId ?? undefined,
+      subcategoryId: selectedSubcategoryId ?? undefined,
+      collectionId: selectedCollectionId ?? undefined,
+      folderId: activeFolderId ?? undefined,
+      page,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setAssets(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+      })
       .catch(() => { if (!cancelled) setError('Failed to load assets.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
 
@@ -2015,7 +2039,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     return Object.entries(counts).map(([ext, count]) => ({ ext, count })).sort((a, b) => b.count - a.count);
   }, [assets]);
 
-  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
+  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId || selectedCollectionId);
 
   function clearFilters() {
     setGlobalSearch('');
@@ -2023,7 +2047,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setSelectedSubcategoryId(null);
     setSelectedExts([]);
     setSelectedTags([]);
+    setSelectedCollectionId(null);
     setSort('newest');
+  }
+
+  function toggleCollection(id: string) {
+    // Single-select: picking the active collection again clears the filter.
+    setSelectedCollectionId((prev) => (prev === id ? null : id));
   }
 
   function toggleExt(ext: string) {
@@ -2128,10 +2158,40 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       {/* Unified sidebar: Folders tree + Filters (MAS-712) */}
       <MainSidebar
         activeFolderId={activeFolderId}
-        onSelectFolder={setActiveFolderId}
+        onSelectFolder={handleSelectFolder}
         hasFilters={hasFilters}
         onClearFilters={clearFilters}
       >
+        {/* Collections filter (MAS-713) — single-select, tag-like membership */}
+        {allCollections.length > 0 && (
+          <div className="px-4 py-3 border-b border-border/50">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              Collections
+            </div>
+            <div className="space-y-0.5 max-h-56 overflow-y-auto">
+              {allCollections.map((collection) => (
+                <label
+                  key={collection.id}
+                  className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedCollectionId === collection.id}
+                    onChange={() => toggleCollection(collection.id)}
+                    className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                  />
+                  <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 min-w-0 truncate">
+                    {collection.name}
+                  </span>
+                  <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                    {collection.asset_count}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* File type filter — dynamic from loaded assets */}
         {availableExts.length > 0 && (
           <div className="px-4 py-3 border-b border-border/50">
@@ -2266,6 +2326,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent-light hover:bg-accent/20 transition-colors"
               >
                 {subcategoryMap[selectedSubcategoryId] ?? 'Subcategory'}
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            {selectedCollectionId && (
+              <button
+                onClick={() => setSelectedCollectionId(null)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/15 text-accent-light hover:bg-accent/25 transition-colors"
+              >
+                {allCollections.find((c) => c.id === selectedCollectionId)?.name ?? 'Collection'}
                 <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -2444,11 +2515,20 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         )}
       </div>
 
-      {/* Upload wizard */}
+      {/* Upload wizard — prefilled from the active folder / collection filter (MAS-713) */}
       <UploadWizard
         open={upload.showWizard}
         onClose={upload.closeWizard}
         onComplete={handleWizardComplete}
+        prefill={{
+          // Path is only known when the folder was picked in the sidebar this
+          // session; skip the prefill on URL-restored deep links rather than
+          // show a wrong breadcrumb.
+          folder: activeFolderId && activeFolderPath
+            ? { id: activeFolderId, path: activeFolderPath }
+            : undefined,
+          collectionId: selectedCollectionId ?? undefined,
+        }}
       />
 
       {/* Detail modal */}
@@ -2480,7 +2560,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             pushUrlFilters(
               { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
                 category: selectedCategoryId, subcategory: selectedSubcategoryId,
-                folder: activeFolderId, preview: null },
+                folder: activeFolderId, collection: selectedCollectionId, preview: null },
               true, // replaceState
             );
           }}
@@ -2498,7 +2578,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={[addToCollectionAssetId]}
           collections={collectionsForModal}
           onClose={() => setAddToCollectionAssetId(null)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
+          onAdded={refreshCollections}
         />
       )}
 
@@ -2508,8 +2589,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={Array.from(selectedIds)}
           collections={collectionsForModal}
           onClose={() => setBulkAddToCollectionOpen(false)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
           onAdded={() => {
+            refreshCollections();
             const count = selectedIds.size;
             setBulkAddToCollectionOpen(false);
             setBulkSuccess(`${count} asset${count > 1 ? 's' : ''} added to collection.`);

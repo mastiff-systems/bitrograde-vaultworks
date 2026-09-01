@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { WizardState, WizardAction } from './useUploadWizard.js';
 import type { Category } from '../../api/categories.js';
+import type { Collection } from '../../api/collections.js';
 import { ALLOWED_LICENSES, MAX_CUSTOM_NAME_CHARS, MAX_DESCRIPTION_CHARS, MAX_TAGS, MAX_TAG_LENGTH } from './constants.js';
 import { FolderPickerDialog } from './FolderPickerDialog.js';
 import { FolderIcon } from '../MainSidebar.js';
@@ -11,6 +12,10 @@ interface Props {
   categories: Category[];
   categoriesLoading: boolean;
   categoriesError: string | null;
+  collections: Collection[];
+  collectionsLoading: boolean;
+  collectionsError: string | null;
+  onCreateCollection: (name: string) => Promise<void>;
 }
 
 function formatDuration(seconds: number): string {
@@ -19,11 +24,47 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-export function Step2MetadataForm({ state, dispatch, categories, categoriesLoading, categoriesError }: Props) {
+export function Step2MetadataForm({
+  state,
+  dispatch,
+  categories,
+  categoriesLoading,
+  categoriesError,
+  collections,
+  collectionsLoading,
+  collectionsError,
+  onCreateCollection,
+}: Props) {
   const [tagInput, setTagInput] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [creatingCollection, setCreatingCollection] = useState(false);
+  const [newCollectionName, setNewCollectionName] = useState('');
+  const [collectionCreatePending, setCollectionCreatePending] = useState(false);
+  const [collectionCreateError, setCollectionCreateError] = useState<string | null>(null);
   const tagInputRef = useRef<HTMLInputElement>(null);
+  const newCollectionRef = useRef<HTMLInputElement>(null);
   const { metadata } = state;
+
+  useEffect(() => {
+    if (creatingCollection && newCollectionRef.current) newCollectionRef.current.focus();
+  }, [creatingCollection]);
+
+  async function handleCreateCollection() {
+    const trimmed = newCollectionName.trim();
+    if (!trimmed || collectionCreatePending) return;
+    setCollectionCreatePending(true);
+    setCollectionCreateError(null);
+    try {
+      await onCreateCollection(trimmed);
+      // Reset only on success so the user can retry with the same name on error.
+      setNewCollectionName('');
+      setCreatingCollection(false);
+    } catch {
+      setCollectionCreateError('Could not create collection. Try again.');
+    } finally {
+      setCollectionCreatePending(false);
+    }
+  }
 
   const selectedCategory = categories.find((c) => c.id === metadata.categoryId);
   const subcategories = selectedCategory?.subcategories ?? [];
@@ -127,6 +168,71 @@ export function Step2MetadataForm({ state, dispatch, categories, categoriesLoadi
             setPickerOpen(false);
           }}
         />
+      </div>
+
+      {/* Collection (MAS-713) — tag-like membership, distinct from the single folder */}
+      <div>
+        <label className="label">Collection</label>
+        {collectionsError ? (
+          <p className="text-xs text-amber-400">{collectionsError} — you can add one from the asset's details later.</p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <select
+                className="input flex-1 min-w-0"
+                value={state.collectionId ?? ''}
+                disabled={collectionsLoading}
+                onChange={(e) => dispatch({ type: 'SET_COLLECTION', collectionId: e.target.value || null })}
+                aria-label="Collection"
+              >
+                <option value="">{collectionsLoading ? 'Loading…' : 'No collection'}</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              {!creatingCollection && (
+                <button
+                  className="btn-secondary btn-sm shrink-0"
+                  onClick={() => { setCreatingCollection(true); setCollectionCreateError(null); }}
+                >
+                  New
+                </button>
+              )}
+            </div>
+            {creatingCollection && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  ref={newCollectionRef}
+                  className="input py-2 text-sm flex-1 min-w-0"
+                  placeholder="Collection name…"
+                  value={newCollectionName}
+                  maxLength={255}
+                  onChange={(e) => setNewCollectionName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); handleCreateCollection(); }
+                    if (e.key === 'Escape') { setCreatingCollection(false); setNewCollectionName(''); setCollectionCreateError(null); }
+                  }}
+                />
+                <button
+                  className="btn-primary btn-sm shrink-0"
+                  disabled={!newCollectionName.trim() || collectionCreatePending}
+                  onClick={handleCreateCollection}
+                >
+                  {collectionCreatePending ? 'Creating…' : 'Create'}
+                </button>
+                <button
+                  className="btn-ghost btn-sm shrink-0"
+                  onClick={() => { setCreatingCollection(false); setNewCollectionName(''); setCollectionCreateError(null); }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {collectionCreateError && (
+              <p className="text-[10px] text-danger mt-1">{collectionCreateError}</p>
+            )}
+          </>
+        )}
       </div>
 
       {/* Category */}

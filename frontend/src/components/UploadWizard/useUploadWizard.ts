@@ -3,6 +3,12 @@ import type { Asset } from '../../api/client.js';
 import { uploadWithMetadata } from '../../api/client.js';
 import { listCategories, type Category } from '../../api/categories.js';
 import { addAssetsToFolder } from '../../api/folders.js';
+import {
+  addAssetsToCollection,
+  createCollection,
+  listCollections,
+  type Collection,
+} from '../../api/collections.js';
 import type { FolderSelection } from './FolderPickerDialog.js';
 
 export interface WizardState {
@@ -21,8 +27,12 @@ export interface WizardState {
   };
   /** Destination folder (MAS-712); `id: null` = vault root ("All assets"). */
   folder: FolderSelection;
+  /** Collection to add the asset to (MAS-713); `null` = no collection. */
+  collectionId: string | null;
   /** Upload succeeded but adding the asset to the chosen folder failed. */
   folderAttachFailed: boolean;
+  /** Upload succeeded but adding the asset to the chosen collection failed. */
+  collectionAttachFailed: boolean;
   uploadedAsset: Asset | null;
   uploadProgress: number;
   error: string | null;
@@ -37,9 +47,10 @@ export type WizardAction =
   | { type: 'SET_METADATA'; patch: Partial<WizardState['metadata']> }
   | { type: 'SET_CUSTOM_NAME'; name: string }
   | { type: 'SET_FOLDER'; selection: FolderSelection }
+  | { type: 'SET_COLLECTION'; collectionId: string | null }
   | { type: 'SUBMIT_START' }
   | { type: 'SUBMIT_PROGRESS'; pct: number }
-  | { type: 'SUBMIT_SUCCESS'; asset: Asset; folderAttachFailed?: boolean }
+  | { type: 'SUBMIT_SUCCESS'; asset: Asset; folderAttachFailed?: boolean; collectionAttachFailed?: boolean }
   | { type: 'SUBMIT_ERROR'; message: string }
   | { type: 'RETRY' }
   | { type: 'RESET' };
@@ -61,7 +72,9 @@ const initialState: WizardState = {
   detectedDuration: null,
   metadata: initialMetadata,
   folder: { id: null, path: [] },
+  collectionId: null,
   folderAttachFailed: false,
+  collectionAttachFailed: false,
   uploadedAsset: null,
   uploadProgress: 0,
   error: null,
@@ -99,6 +112,8 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
       return { ...state, metadata: { ...state.metadata, ...action.patch } };
     case 'SET_FOLDER':
       return { ...state, folder: action.selection };
+    case 'SET_COLLECTION':
+      return { ...state, collectionId: action.collectionId };
     case 'SUBMIT_START':
       return { ...state, step: 'submitting', uploadProgress: 0, error: null };
     case 'SUBMIT_PROGRESS':
@@ -110,6 +125,7 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
         uploadedAsset: action.asset,
         uploadProgress: 100,
         folderAttachFailed: action.folderAttachFailed ?? false,
+        collectionAttachFailed: action.collectionAttachFailed ?? false,
       };
     case 'SUBMIT_ERROR':
       return { ...state, step: 'error', error: action.message };
@@ -196,6 +212,11 @@ export interface UseUploadWizard {
   categories: Category[];
   categoriesLoading: boolean;
   categoriesError: string | null;
+  collections: Collection[];
+  collectionsLoading: boolean;
+  collectionsError: string | null;
+  /** Create a collection inline and select it as the wizard's collection. */
+  createNewCollection: (name: string) => Promise<void>;
   selectFile: (file: File) => Promise<void>;
   submit: () => Promise<void>;
 }
@@ -205,6 +226,9 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [collectionsLoading, setCollectionsLoading] = useState(false);
+  const [collectionsError, setCollectionsError] = useState<string | null>(null);
 
   useEffect(() => {
     setCategoriesLoading(true);
@@ -212,6 +236,20 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
       .then(setCategories)
       .catch(() => setCategoriesError('Could not load categories'))
       .finally(() => setCategoriesLoading(false));
+  }, []);
+
+  useEffect(() => {
+    setCollectionsLoading(true);
+    listCollections()
+      .then(setCollections)
+      .catch(() => setCollectionsError('Could not load collections'))
+      .finally(() => setCollectionsLoading(false));
+  }, []);
+
+  const createNewCollection = useCallback(async (name: string) => {
+    const collection = await createCollection(name.trim());
+    setCollections((prev) => [collection, ...prev]);
+    dispatch({ type: 'SET_COLLECTION', collectionId: collection.id });
   }, []);
 
   const selectFile = useCallback(async (file: File) => {
@@ -238,8 +276,9 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
         },
         (pct) => dispatch({ type: 'SUBMIT_PROGRESS', pct }),
       );
-      // Destination folder is a membership row, not upload metadata — attach
-      // after the upload succeeds. A failure here must not fail the upload.
+      // Destination folder / collection are membership rows, not upload
+      // metadata — attach after the upload succeeds. A failure here must not
+      // fail the upload.
       let folderAttachFailed = false;
       if (state.folder.id) {
         try {
@@ -249,12 +288,33 @@ export function useUploadWizard(onComplete: (asset: Asset) => void): UseUploadWi
           folderAttachFailed = true;
         }
       }
-      dispatch({ type: 'SUBMIT_SUCCESS', asset, folderAttachFailed });
+      let collectionAttachFailed = false;
+      if (state.collectionId) {
+        try {
+          await addAssetsToCollection(state.collectionId, [asset.id]);
+        } catch (err) {
+          console.error('Failed to add uploaded asset to collection:', err);
+          collectionAttachFailed = true;
+        }
+      }
+      dispatch({ type: 'SUBMIT_SUCCESS', asset, folderAttachFailed, collectionAttachFailed });
       onComplete(asset);
     } catch (err) {
       dispatch({ type: 'SUBMIT_ERROR', message: extractErrorMessage(err) });
     }
   }, [state, onComplete]);
 
-  return { state, dispatch, categories, categoriesLoading, categoriesError, selectFile, submit };
+  return {
+    state,
+    dispatch,
+    categories,
+    categoriesLoading,
+    categoriesError,
+    collections,
+    collectionsLoading,
+    collectionsError,
+    createNewCollection,
+    selectFile,
+    submit,
+  };
 }

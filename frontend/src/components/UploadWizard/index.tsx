@@ -1,24 +1,52 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { Asset } from '../../api/client.js';
 import { useUploadWizard } from './useUploadWizard.js';
 import { WizardStepper } from './WizardStepper.js';
 import { Step1FilePicker } from './Step1FilePicker.js';
 import { Step2MetadataForm } from './Step2MetadataForm.js';
 import { Step3ReviewSubmit } from './Step3ReviewSubmit.js';
+import type { FolderSelection } from './FolderPickerDialog.js';
+
+/**
+ * MAS-713: smart prefill — seeds the wizard from the browser's active context
+ * (current folder / active Collection filter). Prefilled values stay fully
+ * editable; they are just the starting selection.
+ */
+export interface WizardPrefill {
+  folder?: FolderSelection;
+  collectionId?: string;
+}
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onComplete: (asset: Asset) => void;
+  prefill?: WizardPrefill;
 }
 
-export function UploadWizard({ open, onClose, onComplete }: Props) {
+export function UploadWizard({ open, onClose, onComplete, prefill }: Props) {
   const wizard = useUploadWizard(onComplete);
-  const { state, dispatch, categories, categoriesLoading, categoriesError, selectFile, submit } = wizard;
+  const {
+    state, dispatch,
+    categories, categoriesLoading, categoriesError,
+    collections, collectionsLoading, collectionsError, createNewCollection,
+    selectFile, submit,
+  } = wizard;
 
-  // Reset wizard when closed
+  const applyPrefill = useCallback(() => {
+    if (prefill?.folder?.id) dispatch({ type: 'SET_FOLDER', selection: prefill.folder });
+    if (prefill?.collectionId) dispatch({ type: 'SET_COLLECTION', collectionId: prefill.collectionId });
+  }, [prefill, dispatch]);
+
+  // Reset wizard when closed; seed prefill each time it opens.
   useEffect(() => {
-    if (!open) dispatch({ type: 'RESET' });
+    if (!open) {
+      dispatch({ type: 'RESET' });
+    } else {
+      applyPrefill();
+    }
+    // applyPrefill is intentionally sampled only on open/close transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, dispatch]);
 
   if (!open) return null;
@@ -85,11 +113,17 @@ export function UploadWizard({ open, onClose, onComplete }: Props) {
                     You can add it from the asset's details.
                   </p>
                 )}
+                {state.collectionAttachFailed && (
+                  <p className="text-xs text-amber-400 mt-2 max-w-xs">
+                    The file uploaded, but couldn't be added to the selected collection.
+                    You can add it from the asset's details.
+                  </p>
+                )}
               </div>
               <div className="flex gap-3 mt-2">
                 <button
                   className="btn-secondary"
-                  onClick={() => dispatch({ type: 'RESET' })}
+                  onClick={() => { dispatch({ type: 'RESET' }); applyPrefill(); }}
                 >
                   Upload another
                 </button>
@@ -114,10 +148,14 @@ export function UploadWizard({ open, onClose, onComplete }: Props) {
                   categories={categories}
                   categoriesLoading={categoriesLoading}
                   categoriesError={categoriesError}
+                  collections={collections}
+                  collectionsLoading={collectionsLoading}
+                  collectionsError={collectionsError}
+                  onCreateCollection={createNewCollection}
                 />
               )}
               {(state.step === 'review' || isSubmitting || isRetry) && (
-                <Step3ReviewSubmit state={state} categories={categories} />
+                <Step3ReviewSubmit state={state} categories={categories} collections={collections} />
               )}
             </>
           )}

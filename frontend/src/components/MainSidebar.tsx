@@ -13,6 +13,11 @@
  *  - Child-row selection now fires onSelectFolder (was a no-op)
  *  - Children are cached across collapse/re-expand (was refetch-on-every-toggle)
  *  - `border-border-dark` (nonexistent token, silent no-op) → `border-border`
+ *
+ * MAS-716: per-row hover actions on FolderRow —
+ *  - [+] creates a subfolder nested under that row (inline input, auto-expand)
+ *  - [→] "Move to…" reuses FolderPickerDialog to reparent the folder (whole
+ *    subtree moves); self/descendant targets are rejected (client + server 409)
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -22,6 +27,7 @@ import {
   deleteFolder,
   type Folder,
 } from '../api/folders.js';
+import { FolderPickerDialog, type FolderSelection } from './UploadWizard/FolderPickerDialog.js';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +49,22 @@ function TrashIcon({ className }: { className?: string }) {
   return (
     <svg className={cls} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+    </svg>
+  );
+}
+
+function PlusIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-3.5 h-3.5'} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+    </svg>
+  );
+}
+
+function MoveIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-3.5 h-3.5'} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
     </svg>
   );
 }
@@ -82,16 +104,21 @@ interface FolderRowProps {
   onSelectFolder: (id: string | null, path?: string[]) => void;
   onDeleted: () => void;
   onRenamed: (updated: Folder) => void;
+  /** Opens the shared move-target picker (owned by MainSidebar). */
+  onRequestMove: (folder: Folder, path: string[]) => void;
   depth?: number;
 }
 
-function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted, onRenamed, depth = 0 }: FolderRowProps) {
+function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted, onRenamed, onRequestMove, depth = 0 }: FolderRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<Folder[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(folder.name);
   const renameRef = useRef<HTMLInputElement>(null);
+  const [addingChild, setAddingChild] = useState(false);
+  const [childName, setChildName] = useState('');
+  const childNameRef = useRef<HTMLInputElement>(null);
 
   const isActive = activeFolderId === folder.id;
   const path = [...ancestry, folder.name];
@@ -143,9 +170,39 @@ function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted
     if (e.key === 'Escape') { setRenaming(false); setRenameValue(folder.name); }
   }
 
+  async function commitAddChild() {
+    const trimmed = childName.trim();
+    if (!trimmed) { setAddingChild(false); return; }
+    try {
+      const created = await createFolder({ name: trimmed, parentFolderId: folder.id });
+      if (children === null) {
+        // Never expanded: fetch the full child list (which includes the new
+        // folder) instead of caching a lone child and hiding its siblings.
+        setChildren(await listFolders({ parentFolderId: folder.id }));
+      } else {
+        setChildren([...children, created].sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      setExpanded(true);
+      setChildName('');
+      setAddingChild(false);
+    } catch (err) {
+      console.error('Failed to create subfolder:', err);
+      // Leave the input open with the typed name so the user can retry.
+    }
+  }
+
+  function handleAddChildKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') commitAddChild();
+    if (e.key === 'Escape') { setAddingChild(false); setChildName(''); }
+  }
+
   useEffect(() => {
     if (renaming && renameRef.current) renameRef.current.select();
   }, [renaming]);
+
+  useEffect(() => {
+    if (addingChild && childNameRef.current) childNameRef.current.focus();
+  }, [addingChild]);
 
   const indent = depth * 12;
 
@@ -192,17 +249,52 @@ function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted
           </span>
         )}
 
-        {/* Delete button */}
+        {/* Hover actions: new subfolder / move / delete */}
         {!renaming && (
-          <button
-            className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded hover:bg-rose-500/20 hover:text-rose-400 transition-opacity"
-            onClick={handleDelete}
-            aria-label={`Delete folder ${folder.name}`}
-          >
-            <TrashIcon />
-          </button>
+          <>
+            <button
+              className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded hover:bg-surface-4 transition-opacity"
+              onClick={(e) => { e.stopPropagation(); setAddingChild(true); setChildName(''); }}
+              aria-label={`New subfolder in ${folder.name}`}
+              title="New subfolder"
+            >
+              <PlusIcon />
+            </button>
+            <button
+              className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded hover:bg-surface-4 transition-opacity"
+              onClick={(e) => { e.stopPropagation(); onRequestMove(folder, path); }}
+              aria-label={`Move folder ${folder.name}`}
+              title="Move to…"
+            >
+              <MoveIcon />
+            </button>
+            <button
+              className="opacity-0 group-hover:opacity-100 shrink-0 p-0.5 rounded hover:bg-rose-500/20 hover:text-rose-400 transition-opacity"
+              onClick={handleDelete}
+              aria-label={`Delete folder ${folder.name}`}
+            >
+              <TrashIcon />
+            </button>
+          </>
         )}
       </div>
+
+      {/* Inline subfolder-create input (indented one level under this row) */}
+      {addingChild && (
+        <div className="flex items-center gap-1 px-2 py-1 mt-0.5" style={{ paddingLeft: `${8 + (depth + 1) * 12}px` }}>
+          <FolderIcon className="w-4 h-4 shrink-0 text-content-muted" />
+          <input
+            ref={childNameRef}
+            className="flex-1 min-w-0 bg-surface-2 border border-border-light rounded px-1 py-0.5 text-sm text-content outline-none focus:ring-1 focus:ring-accent/50"
+            placeholder="Subfolder name…"
+            value={childName}
+            onChange={(e) => setChildName(e.target.value)}
+            onBlur={commitAddChild}
+            onKeyDown={handleAddChildKeyDown}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       {/* Children */}
       {expanded && children !== null && children.length > 0 && (
@@ -218,6 +310,7 @@ function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted
               onRenamed={(updated) =>
                 setChildren((prev) => (prev ?? []).map((c) => (c.id === updated.id ? updated : c)))
               }
+              onRequestMove={onRequestMove}
               depth={depth + 1}
             />
           ))}
@@ -245,6 +338,10 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
   const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  /** Folder currently being moved via the picker dialog (null = closed). */
+  const [moving, setMoving] = useState<{ folder: Folder; path: string[] } | null>(null);
+  /** Bumped after a move to remount all rows — drops every stale children cache. */
+  const [treeVersion, setTreeVersion] = useState(0);
   const newNameRef = useRef<HTMLInputElement>(null);
   const foldersSectionRef = useRef<HTMLDivElement>(null);
   const filtersSectionRef = useRef<HTMLDivElement>(null);
@@ -301,6 +398,35 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
   function handleCreateKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter') handleCreate();
     if (e.key === 'Escape') { setCreating(false); setNewName(''); }
+  }
+
+  async function handleMoveChoose(sel: FolderSelection) {
+    if (!moving) return;
+    const { folder } = moving;
+    if (sel.id === folder.id) {
+      window.alert('A folder cannot be moved into itself.');
+      return; // keep the dialog open so the user can pick another target
+    }
+    if (sel.id === folder.parent_folder_id) { setMoving(null); return; } // no-op move
+    try {
+      await updateFolder(folder.id, { parentFolderId: sel.id });
+      setMoving(null);
+      // The subtree moved: remount all rows (drops stale children caches) and
+      // reload the root list.
+      setTreeVersion((v) => v + 1);
+      await loadFolders();
+      // Keep the breadcrumb path current if the moved folder is the active one.
+      if (activeFolderId === folder.id) onSelectFolder(folder.id, [...sel.path, folder.name]);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      console.error('Failed to move folder:', err);
+      window.alert(
+        status === 409
+          ? 'A folder cannot be moved inside its own subfolders.'
+          : 'Failed to move the folder. Please try again.',
+      );
+      // Dialog stays open so the user can retry or cancel.
+    }
   }
 
   return (
@@ -385,7 +511,7 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
             ) : folders.length === 0 && !creating ? (
               <p className="text-xs text-content-muted px-3 py-1">No folders yet — create one to start organizing.</p>
             ) : (
-              <ul className="space-y-0.5">
+              <ul className="space-y-0.5" key={treeVersion}>
                 {folders.map((folder) => (
                   <FolderRow
                     key={folder.id}
@@ -401,6 +527,7 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
                           .sort((a, b) => a.name.localeCompare(b.name)),
                       )
                     }
+                    onRequestMove={(f, p) => setMoving({ folder: f, path: p })}
                   />
                 ))}
               </ul>
@@ -440,6 +567,14 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
           </div>
         </div>
       )}
+
+      {/* Move-target picker (MAS-716) — reuses the Upload Wizard's folder tree dialog */}
+      <FolderPickerDialog
+        open={moving !== null}
+        initial={{ id: null, path: [] }}
+        onCancel={() => setMoving(null)}
+        onChoose={handleMoveChoose}
+      />
     </aside>
   );
 }

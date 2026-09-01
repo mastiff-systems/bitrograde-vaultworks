@@ -336,3 +336,175 @@ describe('MainSidebar integration', () => {
     expect(onClear).toHaveBeenCalled();
   });
 });
+
+// ─── MAS-716: nested folder create + move ─────────────────────────────────────
+
+describe('MainSidebar nested create + move (MAS-716)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+  });
+
+  const parent = () => makeFolder({ id: 'parent-1', name: 'Characters' });
+
+  /** The dialog's tree duplicates sidebar row names; the dialog copy renders last. */
+  function lastMatch(name: string) {
+    const els = screen.getAllByText(name);
+    return els[els.length - 1];
+  }
+
+  // ── Nested create ─────────────────────────────────────────────────────────
+
+  it('per-row [+] creates a subfolder nested under that row and auto-expands it', async () => {
+    const child = makeFolder({ id: 'child-1', name: 'Heroes', parent_folder_id: 'parent-1' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [parent()] : params?.parentFolderId === 'parent-1' ? [child] : [],
+    );
+    vi.mocked(foldersApi.createFolder).mockResolvedValue(child);
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('Characters'));
+
+    fireEvent.click(screen.getByRole('button', { name: /new subfolder in characters/i }));
+    const input = screen.getByPlaceholderText(/subfolder name/i);
+    await userEvent.type(input, 'Heroes');
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(foldersApi.createFolder).toHaveBeenCalledWith({ name: 'Heroes', parentFolderId: 'parent-1' });
+      expect(screen.getByText('Heroes')).toBeInTheDocument();
+    });
+  });
+
+  it('escaping the subfolder input cancels without POST', async () => {
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [parent()] : [],
+    );
+    renderSidebar();
+    await waitFor(() => screen.getByText('Characters'));
+
+    fireEvent.click(screen.getByRole('button', { name: /new subfolder in characters/i }));
+    const input = screen.getByPlaceholderText(/subfolder name/i);
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText(/subfolder name/i)).not.toBeInTheDocument();
+    });
+    expect(foldersApi.createFolder).not.toHaveBeenCalled();
+  });
+
+  it('subfolder create on an already-expanded row merges into cached children without a refetch', async () => {
+    const alpha = makeFolder({ id: 'c-a', name: 'Alpha', parent_folder_id: 'parent-1' });
+    const beta = makeFolder({ id: 'c-b', name: 'Beta', parent_folder_id: 'parent-1' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [parent()] : params?.parentFolderId === 'parent-1' ? [alpha] : [],
+    );
+    vi.mocked(foldersApi.createFolder).mockResolvedValue(beta);
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('Characters'));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    await waitFor(() => screen.getByText('Alpha'));
+
+    fireEvent.click(screen.getByRole('button', { name: /new subfolder in characters/i }));
+    const input = screen.getByPlaceholderText(/subfolder name/i);
+    await userEvent.type(input, 'Beta');
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => screen.getByText('Beta'));
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(
+      vi.mocked(foldersApi.listFolders).mock.calls.filter(([p]) => p?.parentFolderId === 'parent-1').length,
+    ).toBe(1);
+  });
+
+  // ── Move ──────────────────────────────────────────────────────────────────
+
+  it('Move to… reparents the folder via the picker dialog', async () => {
+    const a = makeFolder({ id: 'a', name: 'Folder A' });
+    const b = makeFolder({ id: 'b', name: 'Folder B' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [a, b] : [],
+    );
+    vi.mocked(foldersApi.updateFolder).mockResolvedValue({ ...a, parent_folder_id: 'b' });
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('Folder A'));
+
+    fireEvent.click(screen.getByRole('button', { name: /move folder folder a/i }));
+    await waitFor(() => screen.getByText('Choose a folder'));
+
+    // The dialog's tree duplicates sidebar row names in the DOM; the dialog's
+    // copy renders after the sidebar's, so take the last match.
+    await waitFor(() => expect(screen.getAllByText('Folder B').length).toBeGreaterThan(1));
+    fireEvent.click(lastMatch('Folder B'));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+
+    await waitFor(() => {
+      expect(foldersApi.updateFolder).toHaveBeenCalledWith('a', { parentFolderId: 'b' });
+      expect(screen.queryByText('Choose a folder')).not.toBeInTheDocument();
+    });
+  });
+
+  it('blocks moving a folder into itself with an alert and no PATCH', async () => {
+    const a = makeFolder({ id: 'a', name: 'Folder A' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [a] : [],
+    );
+    renderSidebar();
+    await waitFor(() => screen.getByText('Folder A'));
+
+    fireEvent.click(screen.getByRole('button', { name: /move folder folder a/i }));
+    await waitFor(() => screen.getByText('Choose a folder'));
+    await waitFor(() => expect(screen.getAllByText('Folder A').length).toBeGreaterThan(1));
+    fireEvent.click(lastMatch('Folder A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+
+    await waitFor(() => expect(window.alert).toHaveBeenCalled());
+    expect(foldersApi.updateFolder).not.toHaveBeenCalled();
+    expect(screen.getByText('Choose a folder')).toBeInTheDocument();
+  });
+
+  it('shows the cycle message on a server 409 and keeps the dialog open', async () => {
+    const a = makeFolder({ id: 'a', name: 'Folder A' });
+    const b = makeFolder({ id: 'b', name: 'Folder B' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [a, b] : [],
+    );
+    vi.mocked(foldersApi.updateFolder).mockRejectedValue({ response: { status: 409 } });
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('Folder A'));
+    fireEvent.click(screen.getByRole('button', { name: /move folder folder a/i }));
+    await waitFor(() => expect(screen.getAllByText('Folder B').length).toBeGreaterThan(1));
+    fireEvent.click(lastMatch('Folder B'));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+
+    await waitFor(() =>
+      expect(window.alert).toHaveBeenCalledWith('A folder cannot be moved inside its own subfolders.'),
+    );
+    expect(screen.getByText('Choose a folder')).toBeInTheDocument();
+  });
+
+  it('re-fires onSelectFolder with the new path when the active folder is moved', async () => {
+    const a = makeFolder({ id: 'a', name: 'Folder A' });
+    const b = makeFolder({ id: 'b', name: 'Folder B' });
+    vi.mocked(foldersApi.listFolders).mockImplementation(async (params) =>
+      params?.parentFolderId === 'root' ? [a, b] : [],
+    );
+    vi.mocked(foldersApi.updateFolder).mockResolvedValue({ ...a, parent_folder_id: 'b' });
+    const onSelect = vi.fn();
+
+    renderSidebar('a', onSelect);
+    await waitFor(() => screen.getByText('Folder A'));
+
+    fireEvent.click(screen.getByRole('button', { name: /move folder folder a/i }));
+    await waitFor(() => expect(screen.getAllByText('Folder B').length).toBeGreaterThan(1));
+    fireEvent.click(lastMatch('Folder B'));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('a', ['Folder B', 'Folder A']));
+  });
+});

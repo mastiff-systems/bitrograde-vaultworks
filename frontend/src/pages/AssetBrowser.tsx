@@ -1961,8 +1961,19 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   // Load collections for the sidebar filter (MAS-713)
   const [allCollections, setAllCollections] = useState<Collection[]>([]);
-  useEffect(() => {
+  const refreshCollections = useCallback(() => {
     listCollections().then(setAllCollections).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshCollections();
+  }, [refreshCollections]);
+
+  // Keep the sidebar filter list in sync when a collection is created from
+  // the Add to Collection modal (MAS-720); asset_count is refreshed via
+  // onAdded once the membership write lands.
+  const handleModalCollectionCreated = useCallback((c: Collection) => {
+    setCollectionsForModal((prev) => [c, ...prev]);
+    setAllCollections((prev) => [c, ...prev]);
   }, []);
 
   // Load assets: branch on activeFolderId — folder view vs. all-assets view
@@ -2576,7 +2587,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={[addToCollectionAssetId]}
           collections={collectionsForModal}
           onClose={() => setAddToCollectionAssetId(null)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
+          onAdded={refreshCollections}
         />
       )}
 
@@ -2586,8 +2598,9 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={Array.from(selectedIds)}
           collections={collectionsForModal}
           onClose={() => setBulkAddToCollectionOpen(false)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
           onAdded={() => {
+            refreshCollections();
             const count = selectedIds.size;
             setBulkAddToCollectionOpen(false);
             setBulkSuccess(`${count} asset${count > 1 ? 's' : ''} added to collection.`);

@@ -911,6 +911,159 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ deleted, errors });
   });
 
+  const BulkUpdateSchema = z
+    .object({
+      ids: z.array(z.string().uuid()).min(1).max(100),
+      categoryId: z.string().uuid().nullable().optional(),
+      subcategoryId: z.string().uuid().nullable().optional(),
+      addTags: z.array(z.string().min(1).max(100)).max(20).optional(),
+      removeTags: z.array(z.string().min(1).max(100)).max(20).optional(),
+    })
+    .refine(
+      (b) =>
+        b.categoryId !== undefined ||
+        b.subcategoryId !== undefined ||
+        b.addTags !== undefined ||
+        b.removeTags !== undefined,
+      { message: 'At least one of categoryId, subcategoryId, addTags, removeTags is required' },
+    )
+    .refine((b) => !(b.subcategoryId != null && b.categoryId == null), {
+      message: 'subcategoryId requires categoryId',
+    });
+
+  // Bulk metadata edit: category/subcategory assignment plus tag add/remove DELTAS
+  // (unlike single-asset PATCH, tags are never replaced wholesale — replacing would
+  // nuke unrelated tags across a heterogeneous selection). Authz mirrors bulk-delete:
+  // per-id owner-or-admin, trashed assets excluded at the SQL level and reported as
+  // 'Not found'. Unlike bulk-delete there are no per-asset storage side effects, so
+  // the whole write for the authorized set runs in ONE transaction — a mid-batch DB
+  // failure applies nothing rather than leaving a half-updated batch.
+  app.post('/api/files/bulk-update', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+          categoryId: { type: ['string', 'null'], format: 'uuid' },
+          subcategoryId: { type: ['string', 'null'], format: 'uuid' },
+          addTags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 }, maxItems: 20 },
+          removeTags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 }, maxItems: 20 },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(BulkUpdateSchema, req.body, reply);
+    if (!body) return;
+
+    // Validate category/subcategory up front — a bad target fails the whole
+    // request (400) rather than producing per-asset errors.
+    if (body.categoryId) {
+      const category = await prisma.category.findUnique({ where: { id: body.categoryId }, select: { id: true } });
+      if (!category) return reply.status(400).send({ error: 'Invalid categoryId' });
+    }
+    if (body.subcategoryId) {
+      const subcategory = await prisma.subcategory.findUnique({
+        where: { id: body.subcategoryId },
+        select: { categoryId: true },
+      });
+      if (!subcategory || subcategory.categoryId !== body.categoryId) {
+        return reply.status(400).send({ error: 'Invalid subcategoryId for the given categoryId' });
+      }
+    }
+
+    const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
+
+    // Trashed assets are invisible to bulk ops — they report as Not found,
+    // deliberately indistinguishable from ids that never existed.
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: { id: true, uploadedBy: true, originalName: true },
+    });
+
+    const errors: { id: string; reason: string }[] = [];
+    const authorized: typeof assets = [];
+    for (const id of ids) {
+      const asset = assets.find((a) => a.id === id);
+      if (!asset) { errors.push({ id, reason: 'Not found' }); continue; }
+      if (role !== 'admin' && asset.uploadedBy !== userId) { errors.push({ id, reason: 'Unauthorized' }); continue; }
+      authorized.push(asset);
+    }
+
+    const authorizedIds = authorized.map((a) => a.id);
+    const normalizeTags = (names: string[] | undefined) =>
+      [...new Set((names ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean))];
+    const addTagNames = normalizeTags(body.addTags);
+    const removeTagNames = normalizeTags(body.removeTags);
+
+    if (authorizedIds.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        if (body.categoryId !== undefined) {
+          await tx.asset.updateMany({
+            where: { id: { in: authorizedIds } },
+            data: {
+              categoryId: body.categoryId,
+              // Never leave a subcategory dangling under the wrong (or no) category.
+              subcategoryId: body.categoryId === null ? null : body.subcategoryId ?? null,
+            },
+          });
+        } else if (body.subcategoryId === null) {
+          // Clear subcategory only, category untouched.
+          await tx.asset.updateMany({
+            where: { id: { in: authorizedIds } },
+            data: { subcategoryId: null },
+          });
+        }
+
+        if (addTagNames.length > 0) {
+          for (const name of addTagNames) {
+            await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+          }
+          const tagRecords = await tx.tag.findMany({ where: { name: { in: addTagNames } }, select: { id: true } });
+          await tx.assetTag.createMany({
+            data: authorizedIds.flatMap((assetId) => tagRecords.map((t) => ({ assetId, tagId: t.id }))),
+            skipDuplicates: true,
+          });
+        }
+
+        if (removeTagNames.length > 0) {
+          const removeRecords = await tx.tag.findMany({ where: { name: { in: removeTagNames } }, select: { id: true } });
+          if (removeRecords.length > 0) {
+            await tx.assetTag.deleteMany({
+              where: { assetId: { in: authorizedIds }, tagId: { in: removeRecords.map((t) => t.id) } },
+            });
+          }
+        }
+      });
+
+      for (const asset of authorized) {
+        void logAudit({
+          userId,
+          assetId: asset.id,
+          assetName: asset.originalName,
+          ipAddress: req.ip,
+          action:    AuditAction.UPDATE_METADATA,
+          details:   { userAgent: req.headers['user-agent'], bulkUpdate: true },
+        });
+      }
+    }
+
+    return reply.send({ updated: authorizedIds, errors });
+  });
+
   // Bulk download: streams the requested assets as a single ZIP archive.
   // Non-admins must own every requested asset (all-or-nothing 403).
   app.post('/api/files/bulk-download', {

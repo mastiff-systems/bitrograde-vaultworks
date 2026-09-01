@@ -17,6 +17,8 @@ import {
   getAsset,
   bulkDelete,
   bulkDownload,
+  bulkUpdate,
+  type BulkUpdatePayload,
   type Asset,
   type AssetVersion,
   type Tag,
@@ -43,8 +45,10 @@ import {
   type Collection,
   listCollections,
   addAssetsToCollection,
+  removeAssetsFromCollection,
   createCollection,
 } from '../api/collections.js';
+import type { Category } from '../api/categories.js';
 
 // --- Helpers ---
 
@@ -1713,6 +1717,271 @@ function AddToCollectionInlineModal({
   );
 }
 
+// --- Bulk Edit Modal (MAS-726) ---
+
+/** Per-collection intent: leave membership as-is, add all selected, or remove all selected. */
+type CollectionMark = 'none' | 'add' | 'remove';
+
+/** Server caps bulk endpoints at 100 ids per call; larger selections are chunked client-side. */
+const BULK_CHUNK = 100;
+
+function TagChipInput({
+  label,
+  placeholder,
+  tags,
+  onChange,
+  suggestions,
+  datalistId,
+}: {
+  label: string;
+  placeholder: string;
+  tags: string[];
+  onChange: (tags: string[]) => void;
+  suggestions: Tag[];
+  datalistId: string;
+}) {
+  const [input, setInput] = useState('');
+
+  function commit(raw: string) {
+    const name = raw.trim().toLowerCase();
+    if (!name) return;
+    if (!tags.includes(name)) onChange([...tags, name]);
+    setInput('');
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-content-secondary mb-1.5">{label}</p>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-1.5">
+          {tags.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/15 text-accent-light">
+              {t}
+              <button type="button" onClick={() => onChange(tags.filter((x) => x !== t))} aria-label={`Remove ${t}`}>
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        className="input py-1.5 text-xs w-full"
+        placeholder={placeholder}
+        value={input}
+        list={datalistId}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            commit(input);
+          }
+        }}
+        onBlur={() => commit(input)}
+      />
+      <datalist id={datalistId}>
+        {suggestions.map((t) => (
+          <option key={t.name} value={t.name} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+function BulkEditModal({
+  assetIds,
+  categories,
+  collections,
+  allTags,
+  onClose,
+  onApplied,
+}: {
+  assetIds: string[];
+  categories: Category[];
+  collections: Collection[];
+  allTags: Tag[];
+  onClose: () => void;
+  onApplied: (summary: string) => void;
+}) {
+  // '' = leave unchanged, 'none' = clear category, otherwise a category uuid
+  const [categoryChoice, setCategoryChoice] = useState('');
+  const [subcategoryChoice, setSubcategoryChoice] = useState('');
+  const [collectionMarks, setCollectionMarks] = useState<Record<string, CollectionMark>>({});
+  const [addTags, setAddTags] = useState<string[]>([]);
+  const [removeTags, setRemoveTags] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const chosenCategory = categories.find((c) => c.id === categoryChoice) ?? null;
+
+  function markCollection(id: string, mark: CollectionMark) {
+    setCollectionMarks((prev) => ({ ...prev, [id]: prev[id] === mark ? 'none' : mark }));
+  }
+
+  async function handleSave() {
+    const payload: BulkUpdatePayload = {};
+    if (categoryChoice === 'none') {
+      payload.categoryId = null;
+    } else if (categoryChoice) {
+      payload.categoryId = categoryChoice;
+      if (subcategoryChoice) payload.subcategoryId = subcategoryChoice;
+    }
+    if (addTags.length > 0) payload.addTags = addTags;
+    if (removeTags.length > 0) payload.removeTags = removeTags;
+
+    const marks = Object.entries(collectionMarks).filter(([, m]) => m !== 'none') as [string, CollectionMark][];
+    const hasMetadataChange = Object.keys(payload).length > 0;
+    if (!hasMetadataChange && marks.length === 0) {
+      onClose();
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    let updated = 0;
+    let failed = 0;
+    try {
+      if (hasMetadataChange) {
+        for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+          const res = await bulkUpdate(assetIds.slice(i, i + BULK_CHUNK), payload);
+          updated += res.updated.length;
+          failed += res.errors.length;
+        }
+      }
+      for (const [collectionId, mark] of marks) {
+        for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+          const chunk = assetIds.slice(i, i + BULK_CHUNK);
+          if (mark === 'add') await addAssetsToCollection(collectionId, chunk);
+          else await removeAssetsFromCollection(collectionId, chunk);
+        }
+      }
+      const touched = hasMetadataChange ? updated : assetIds.length;
+      onApplied(
+        failed > 0
+          ? `${touched} updated; ${failed} failed.`
+          : `${touched} asset${touched === 1 ? '' : 's'} updated.`,
+      );
+    } catch {
+      setError('Bulk edit failed. Please try again.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="card w-full max-w-md flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+          <h2 className="text-sm font-semibold text-content-primary">
+            Bulk Edit — {assetIds.length} {assetIds.length === 1 ? 'asset' : 'assets'}
+          </h2>
+          <button onClick={onClose} className="btn-ghost btn-sm" aria-label="Close">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-5 overflow-y-auto">
+          {/* Category */}
+          <div>
+            <p className="text-xs font-medium text-content-secondary mb-1.5">Category</p>
+            <select
+              className="input py-1.5 text-xs w-full bg-surface-2 cursor-pointer"
+              value={categoryChoice}
+              onChange={(e) => {
+                setCategoryChoice(e.target.value);
+                setSubcategoryChoice('');
+              }}
+            >
+              <option value="">Leave unchanged</option>
+              <option value="none">None (clear category)</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            {chosenCategory && chosenCategory.subcategories.length > 0 && (
+              <select
+                className="input py-1.5 text-xs w-full bg-surface-2 cursor-pointer mt-1.5"
+                value={subcategoryChoice}
+                onChange={(e) => setSubcategoryChoice(e.target.value)}
+              >
+                <option value="">No subcategory</option>
+                {chosenCategory.subcategories.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Collections */}
+          <div>
+            <p className="text-xs font-medium text-content-secondary mb-1.5">Collections</p>
+            {collections.length === 0 ? (
+              <p className="text-xs text-content-muted">No collections yet.</p>
+            ) : (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {collections.map((c) => {
+                  const mark = collectionMarks[c.id] ?? 'none';
+                  return (
+                    <div key={c.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-3 transition-colors">
+                      <p className="text-xs font-medium text-content-primary truncate min-w-0">{c.name}</p>
+                      <div className="flex items-center border border-border rounded-lg overflow-hidden flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => markCollection(c.id, 'add')}
+                          className={`px-2 py-1 text-[11px] transition-colors ${mark === 'add' ? 'bg-emerald-500/20 text-emerald-300' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => markCollection(c.id, 'remove')}
+                          className={`px-2 py-1 text-[11px] transition-colors border-l border-border ${mark === 'remove' ? 'bg-danger/20 text-danger' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Tags */}
+          <TagChipInput
+            label="Add tags"
+            placeholder="Type a tag and press Enter…"
+            tags={addTags}
+            onChange={setAddTags}
+            suggestions={allTags}
+            datalistId="bulk-edit-add-tags"
+          />
+          <TagChipInput
+            label="Remove tags"
+            placeholder="Type a tag and press Enter…"
+            tags={removeTags}
+            onChange={setRemoveTags}
+            suggestions={allTags}
+            datalistId="bulk-edit-remove-tags"
+          />
+        </div>
+
+        {error && <p className="px-5 pb-1 text-xs text-danger flex-shrink-0">{error}</p>}
+
+        <div className="px-5 py-4 border-t border-border flex justify-end gap-2 flex-shrink-0">
+          <button onClick={onClose} disabled={saving} className="btn-ghost btn-sm text-xs">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary btn-sm text-xs flex items-center gap-1.5">
+            {saving && <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />}
+            Apply to {assetIds.length} {assetIds.length === 1 ? 'asset' : 'assets'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Main AssetBrowser ---
 
 const PAGE_LIMIT = 24;
@@ -1786,6 +2055,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [collectionsForModal, setCollectionsForModal] = useState<Collection[]>([]);
   const [collectionsLoaded, setCollectionsLoaded] = useState(false);
   const [bulkAddToCollectionOpen, setBulkAddToCollectionOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   async function openAddToCollection(assetId: string) {
@@ -1803,6 +2073,19 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   async function openBulkAddToCollection() {
     setBulkAddToCollectionOpen(true);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
+
+  async function openBulkEdit() {
+    setBulkEditOpen(true);
     if (!collectionsLoaded) {
       try {
         const cols = await listCollections();
@@ -1979,6 +2262,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   // server-side (MAS-719; the folder-assets endpoint dropped every other filter).
   const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, selectedCollectionId].join('\u0000');
   const prevFilterKeyRef = useRef(filterKey);
+  // Bumped to force a refetch on the same filters (e.g. after a bulk edit).
+  const [reloadTick, setReloadTick] = useState(0);
   useEffect(() => {
     // Filter change invalidates the current page; snap back to 1 and let the
     // re-render trigger the actual fetch (avoids a wasted stale-page request).
@@ -2014,7 +2299,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [filterKey, page]);
+  }, [filterKey, page, reloadTick]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -2029,6 +2314,27 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     }
     return sortAssets(result, sort);
   }, [assets, selectedExts, selectedCategoryId, selectedSubcategoryId, sort]);
+
+  // Prune the selection when filters/search change while selecting: a bulk edit
+  // must never act on assets the user can no longer see (MAS-726).
+  useEffect(() => {
+    if (!selectionMode) return;
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(displayed.map((a) => a.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [displayed, selectionMode]);
+
+  // Tri-state "All (N)" checkbox: indeterminate when the selection is a strict
+  // subset of the displayed set.
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < displayed.length;
+    }
+  }, [selectedIds, displayed]);
 
   const availableExts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -2263,6 +2569,21 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
           <div className="flex items-center gap-2 ml-auto">
+            {/* Select All/None — operates on the filtered/visible set (MAS-726) */}
+            {selectionMode && (
+              <label className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-content-secondary cursor-pointer select-none rounded-lg hover:bg-surface-3 transition-colors">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={displayed.length > 0 && selectedIds.size === displayed.length}
+                  onChange={toggleSelectAll}
+                  disabled={displayed.length === 0}
+                  className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                  aria-label={`Select all ${displayed.length} visible assets`}
+                />
+                All ({displayed.length})
+              </label>
+            )}
             {/* Select toggle */}
             <button
               onClick={() => { if (selectionMode) { exitSelectionMode(); } else { setSelectionMode(true); } }}
@@ -2604,6 +2925,27 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         />
       )}
 
+      {/* Bulk Edit modal (MAS-726) */}
+      {bulkEditOpen && (
+        <BulkEditModal
+          assetIds={Array.from(selectedIds)}
+          categories={categories}
+          collections={collectionsForModal}
+          allTags={allTags}
+          onClose={() => setBulkEditOpen(false)}
+          onApplied={(summary) => {
+            setBulkEditOpen(false);
+            setBulkSuccess(summary);
+            setTimeout(() => setBulkSuccess(null), 3000);
+            exitSelectionMode();
+            // Refetch: category/tag changes can move assets out of the active filter view
+            setReloadTick((t) => t + 1);
+            listTags().then(setAllTags).catch(() => {});
+            refreshCollections();
+          }}
+        />
+      )}
+
       {/* Floating bulk action bar */}
       {selectionMode && selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-2xl bg-surface-1 border border-border shadow-2xl shadow-black/40">
@@ -2634,6 +2976,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
             </svg>
             Add to Collection
+          </button>
+          <button
+            onClick={openBulkEdit}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+            </svg>
+            Edit
           </button>
           <button
             onClick={handleBulkDelete}

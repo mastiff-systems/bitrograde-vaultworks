@@ -337,6 +337,55 @@ export async function collectionsRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ added: newIds.length });
   });
 
+  // POST /api/collections/:id/assets/remove — bulk-remove assets from a collection.
+  // Same authz stance as add + per-asset DELETE below: any authenticated user,
+  // membership is shared-library organization. POST-with-verb (not DELETE-with-body)
+  // matches the codebase's bulk convention. No asset-side check needed — this only
+  // deletes membership rows scoped to the given collection; removing an id that
+  // is not a member (or never existed) is a no-op, not an error, so the response
+  // is 200 { removed: n } even when n is 0.
+  app.post<{ Params: { id: string } }>('/api/collections/:id/assets/remove', {
+    preHandler: [authenticate],
+    schema: {
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['assetIds'],
+        additionalProperties: false,
+        properties: {
+          assetIds: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+        },
+      },
+    },
+    config: { rateLimit: { max: process.env.VITEST ? 10000 : 30, timeWindow: '1 minute' } },
+  }, async (req, reply) => {
+    const params = parseParams(UuidParams, req.params, reply);
+    if (!params) return;
+
+    const body = parseBody(AddAssetsSchema, req.body, reply);
+    if (!body) return;
+
+    const existing = await prisma.collection.findUnique({ where: { id: params.id } });
+    if (!existing) return reply.status(404).send({ error: 'Not found' });
+
+    const deleted = await prisma.collectionAsset.deleteMany({
+      where: { collectionId: params.id, assetId: { in: body.assetIds } },
+    });
+
+    return reply.status(200).send({ removed: deleted.count });
+  });
+
   // DELETE /api/collections/:id/assets/:assetId — remove asset from collection
   // (any authenticated user — membership is shared-library organization)
   app.delete<{ Params: { id: string; assetId: string } }>(

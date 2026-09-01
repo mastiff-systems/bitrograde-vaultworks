@@ -693,6 +693,120 @@ describe('DELETE /api/collections/:id/assets/:assetId (remove asset)', () => {
   });
 });
 
+// ─── POST /api/collections/:id/assets/remove (bulk remove) ──────────────────
+
+describe('POST /api/collections/:id/assets/remove (bulk remove)', () => {
+  async function makeCollectionWith(assetIds: string[], ownerToken = token) {
+    const createRes = await request(app.server)
+      .post('/api/collections')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: `Bulk Remove Coll ${Math.random().toString(36).slice(2)}` });
+    if (assetIds.length > 0) {
+      await request(app.server)
+        .post(`/api/collections/${createRes.body.id}/assets`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .send({ assetIds });
+    }
+    return createRes.body.id as string;
+  }
+
+  it('removes multiple assets and returns the removed count', async () => {
+    const a1 = await createAsset(userId, 'br1.png');
+    const a2 = await createAsset(userId, 'br2.png');
+    const a3 = await createAsset(userId, 'br3.png');
+    const collId = await makeCollectionWith([a1.id, a2.id, a3.id]);
+
+    const res = await request(app.server)
+      .post(`/api/collections/${collId}/assets/remove`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [a1.id, a2.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(2);
+
+    const remaining = await prisma.collectionAsset.findMany({ where: { collectionId: collId } });
+    expect(remaining.map((r) => r.assetId)).toEqual([a3.id]);
+  });
+
+  it('returns removed: 0 for assets not in the collection (no error)', async () => {
+    const inColl = await createAsset(userId, 'br_in.png');
+    const notInColl = await createAsset(userId, 'br_out.png');
+    const collId = await makeCollectionWith([inColl.id]);
+
+    const res = await request(app.server)
+      .post(`/api/collections/${collId}/assets/remove`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [notInColl.id, '00000000-0000-0000-0000-000000000000'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(0);
+
+    // Existing membership untouched
+    const remaining = await prisma.collectionAsset.findMany({ where: { collectionId: collId } });
+    expect(remaining).toHaveLength(1);
+  });
+
+  it('only removes membership from the targeted collection', async () => {
+    const asset = await createAsset(userId, 'br_shared.png');
+    const collA = await makeCollectionWith([asset.id]);
+    const collB = await makeCollectionWith([asset.id]);
+
+    const res = await request(app.server)
+      .post(`/api/collections/${collA}/assets/remove`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [asset.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(1);
+
+    const inB = await prisma.collectionAsset.findFirst({ where: { collectionId: collB, assetId: asset.id } });
+    expect(inB).not.toBeNull();
+  });
+
+  it('allows removing from another user\'s collection (shared membership, same as single DELETE)', async () => {
+    const asset = await createAsset(null, 'br_other.png');
+    const collId = await makeCollectionWith([asset.id], otherToken);
+
+    const res = await request(app.server)
+      .post(`/api/collections/${collId}/assets/remove`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [asset.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(1);
+  });
+
+  it('returns 404 when collection not found', async () => {
+    const asset = await createAsset(userId, 'br_ghost.png');
+
+    const res = await request(app.server)
+      .post('/api/collections/00000000-0000-0000-0000-000000000000/assets/remove')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [asset.id] });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects an empty assetIds array with 400', async () => {
+    const collId = await makeCollectionWith([]);
+
+    const res = await request(app.server)
+      .post(`/api/collections/${collId}/assets/remove`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ assetIds: [] });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 401 without auth', async () => {
+    const res = await request(app.server)
+      .post('/api/collections/00000000-0000-0000-0000-000000000000/assets/remove')
+      .send({ assetIds: ['00000000-0000-0000-0000-000000000001'] });
+
+    expect(res.status).toBe(401);
+  });
+});
+
 // ─── Trashed assets are hidden from collection views ─────────────────────────
 
 describe('trashed-asset filtering', () => {

@@ -2092,7 +2092,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   function handleWizardComplete(asset: Asset) {
     setAssets((prev) => [asset, ...prev]);
     listTags().then(setAllTags).catch(() => {});
-    upload.closeWizard();
+    // MAS-717: do not close the wizard here — closing in the same tick as
+    // SUBMIT_SUCCESS unmounts the 'done' step before it ever renders, hiding
+    // the success confirmation and folder/collection attach-failure warnings.
+    // The wizard closes itself via its Done button / backdrop (onClose).
   }
 
   function handleAssetUpdate(updated: Asset) {

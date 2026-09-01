@@ -84,6 +84,8 @@ export interface ListFilesParams {
   subcategoryId?: string;
   /** Filter to assets in this collection (MAS-711 backend filter). */
   collectionId?: string;
+  /** Filter to direct members of this folder (MAS-719: composes with q/tags/collectionId). */
+  folderId?: string;
   format?: string;
   limit?: number;
   page?: number;
@@ -114,6 +116,7 @@ export async function listFiles(params?: ListFilesParams): Promise<PaginatedFile
   if (params?.categoryId) p.categoryId = params.categoryId;
   if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
   if (params?.collectionId) p.collectionId = params.collectionId;
+  if (params?.folderId) p.folderId = params.folderId;
   if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
   if (params?.page) p.page = String(params.page);

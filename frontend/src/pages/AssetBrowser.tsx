@@ -26,7 +26,6 @@ import {
   type ShareLink,
 } from '../api/client.js';
 import {
-  listFolderAssets,
   listFolders,
   listFoldersForAsset,
   addAssetsToFolder,
@@ -1965,7 +1964,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     listCollections().then(setAllCollections).catch(() => {});
   }, []);
 
-  // Load assets: branch on activeFolderId — folder view vs. all-assets view
+  // Load assets: single /api/files path — folderId composes with q/tags/collection
+  // server-side (MAS-719; the folder-assets endpoint dropped every other filter).
   const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, selectedCollectionId].join('\u0000');
   const prevFilterKeyRef = useRef(filterKey);
   useEffect(() => {
@@ -1982,32 +1982,23 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setError(null);
     let cancelled = false;
 
-    const fetch = activeFolderId
-      ? listFolderAssets(activeFolderId, { limit: 200 }).then((folderPage) => {
-          // Folder endpoint is cursor-based (no total envelope): count what we
-          // fetched and keep the page controls hidden.
-          if (cancelled) return;
-          setAssets(folderPage.assets);
-          setTotal(folderPage.assets.length);
-          setTotalPages(1);
-        })
-      : listFiles({
-          q: debouncedQuery || undefined,
-          // Pass single type to API; multi-type handled client-side below
-          assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
-          tags: selectedTags.length > 0 ? selectedTags : undefined,
-          categoryId: selectedCategoryId ?? undefined,
-          subcategoryId: selectedSubcategoryId ?? undefined,
-          collectionId: selectedCollectionId ?? undefined,
-          page,
-        }).then((res) => {
-          if (cancelled) return;
-          setAssets(res.data);
-          setTotal(res.total);
-          setTotalPages(res.totalPages);
-        });
-
-    fetch
+    listFiles({
+      q: debouncedQuery || undefined,
+      // Pass single type to API; multi-type handled client-side below
+      assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      categoryId: selectedCategoryId ?? undefined,
+      subcategoryId: selectedSubcategoryId ?? undefined,
+      collectionId: selectedCollectionId ?? undefined,
+      folderId: activeFolderId ?? undefined,
+      page,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setAssets(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+      })
       .catch(() => { if (!cancelled) setError('Failed to load assets.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
 

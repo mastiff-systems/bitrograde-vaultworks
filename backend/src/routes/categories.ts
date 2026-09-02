@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db/client.js';
 import { parseBody, parseParams } from '../lib/validate.js';
+import { requireAdmin } from '../auth/middleware.js';
 
 function toSlug(name: string): string {
   return name
@@ -116,6 +117,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/categories', {
+    preHandler: [requireAdmin],
     schema: {
       body: {
         type: 'object',
@@ -150,6 +152,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { id: string } }>('/api/categories/:id', {
+    preHandler: [requireAdmin],
     schema: {
       params: {
         type: 'object',
@@ -196,6 +199,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { id: string } }>('/api/categories/:id', {
+    preHandler: [requireAdmin],
     schema: {
       params: {
         type: 'object',
@@ -259,6 +263,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { categoryId: string } }>(
     '/api/categories/:categoryId/subcategories',
     {
+      preHandler: [requireAdmin],
       schema: {
         params: {
           type: 'object',
@@ -313,6 +318,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
     {
+      preHandler: [requireAdmin],
       schema: {
         params: {
           type: 'object',
@@ -369,6 +375,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { categoryId: string; id: string } }>(
     '/api/categories/:categoryId/subcategories/:id',
     {
+      preHandler: [requireAdmin],
       schema: {
         params: {
           type: 'object',

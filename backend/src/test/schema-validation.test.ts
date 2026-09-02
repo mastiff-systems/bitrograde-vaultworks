@@ -216,7 +216,7 @@ describe('POST /api/categories — body validation', () => {
   it('returns 201 on valid create', async () => {
     const res = await request(app.server)
       .post('/api/categories')
-      .set('Authorization', `Bearer ${userToken}`)
+      .set('Authorization', `Bearer ${adminToken}`)
       .send({ name: 'Graphics' });
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('Graphics');

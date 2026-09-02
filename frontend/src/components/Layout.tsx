@@ -22,7 +22,7 @@ function CollectionsButton() {
       onClick={() => navigate('/collections')}
       aria-label="Collections"
       title="Collections"
-      className={`flex-shrink-0 p-1.5 rounded transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none ${
+      className={`relative flex-shrink-0 p-1.5 rounded transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none before:content-[''] before:absolute before:-inset-2 ${
         active
           ? 'text-accent bg-accent/5'
           : 'text-content-muted hover:text-content-primary hover:bg-surface-4'
@@ -59,7 +59,7 @@ function ProfileDropdown() {
         aria-label="Profile menu"
         aria-haspopup="true"
         aria-expanded={open}
-        className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center hover:bg-accent/30 transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none"
+        className="relative w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center hover:bg-accent/30 transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none before:content-[''] before:absolute before:-inset-1.5"
       >
         <span className="text-xs font-semibold text-accent-light">
           {user?.email?.[0]?.toUpperCase()}

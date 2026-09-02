@@ -6,6 +6,7 @@ import { prisma } from '../db/client.js';
 
 let app: FastifyInstance;
 let token: string;
+let nonAdminToken: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -17,10 +18,18 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await cleanDb();
+  // First registered user is admin (see routes/auth.ts) — `token` below is an
+  // admin token, which is why every pre-existing test in this file using it
+  // still passes after the requireAdmin fix.
   const res = await request(app.server)
     .post('/api/auth/register')
     .send({ email: 'taxonomy@example.com', password: 'password123' });
   token = res.body.token;
+
+  const nonAdminRes = await request(app.server)
+    .post('/api/auth/register')
+    .send({ email: 'taxonomy-nonadmin@example.com', password: 'password123' });
+  nonAdminToken = nonAdminRes.body.token;
 });
 
 // --- GET /api/categories ---
@@ -369,5 +378,91 @@ describe('GET /api/files taxonomy filters', () => {
     expect(res.body.data[0].category_id).toBe(cat.id);
     expect(res.body.data[0].license).toBe('CC-BY');
     expect(res.body.data[0].duration_seconds).toBe(120.5);
+  });
+});
+
+// --- Taxonomy mutation authz (security fix) ---
+//
+// Regression coverage for a Broken Function-Level Authorization gap: category
+// and subcategory create/update/delete had no admin check at all — any
+// authenticated user (any role) could mutate the site-wide taxonomy via a
+// direct API call, even though the only UI entry point (admin Settings →
+// Taxonomy tab) is admin-gated. GET endpoints intentionally remain readable
+// by any authenticated user (shared-library read model is unchanged).
+describe('taxonomy mutation routes require admin role', () => {
+  it('rejects category create for a non-admin user', async () => {
+    const res = await request(app.server)
+      .post('/api/categories')
+      .set('Authorization', `Bearer ${nonAdminToken}`)
+      .send({ name: 'Malicious' });
+    expect(res.status).toBe(403);
+    const count = await prisma.category.count();
+    expect(count).toBe(0);
+  });
+
+  it('rejects category update for a non-admin user', async () => {
+    const cat = await prisma.category.create({ data: { name: 'Original', slug: 'original' } });
+    const res = await request(app.server)
+      .patch(`/api/categories/${cat.id}`)
+      .set('Authorization', `Bearer ${nonAdminToken}`)
+      .send({ name: 'Hijacked' });
+    expect(res.status).toBe(403);
+    const unchanged = await prisma.category.findUnique({ where: { id: cat.id } });
+    expect(unchanged?.name).toBe('Original');
+  });
+
+  it('rejects category delete for a non-admin user', async () => {
+    const cat = await prisma.category.create({ data: { name: 'Protected', slug: 'protected' } });
+    const res = await request(app.server)
+      .delete(`/api/categories/${cat.id}`)
+      .set('Authorization', `Bearer ${nonAdminToken}`);
+    expect(res.status).toBe(403);
+    const stillThere = await prisma.category.findUnique({ where: { id: cat.id } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('rejects subcategory create/update/delete for a non-admin user', async () => {
+    const cat = await prisma.category.create({ data: { name: 'Graphics', slug: 'graphics' } });
+    const sub = await prisma.subcategory.create({ data: { categoryId: cat.id, name: 'Icons', slug: 'icons' } });
+
+    const create = await request(app.server)
+      .post(`/api/categories/${cat.id}/subcategories`)
+      .set('Authorization', `Bearer ${nonAdminToken}`)
+      .send({ name: 'Malicious Sub' });
+    expect(create.status).toBe(403);
+
+    const update = await request(app.server)
+      .patch(`/api/categories/${cat.id}/subcategories/${sub.id}`)
+      .set('Authorization', `Bearer ${nonAdminToken}`)
+      .send({ name: 'Hijacked' });
+    expect(update.status).toBe(403);
+
+    const del = await request(app.server)
+      .delete(`/api/categories/${cat.id}/subcategories/${sub.id}`)
+      .set('Authorization', `Bearer ${nonAdminToken}`);
+    expect(del.status).toBe(403);
+
+    const stillThere = await prisma.subcategory.findUnique({ where: { id: sub.id } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('still allows an admin to create/update/delete categories and subcategories', async () => {
+    const create = await request(app.server)
+      .post('/api/categories')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'AdminMade' });
+    expect(create.status).toBe(201);
+    const catId = create.body.id;
+
+    const update = await request(app.server)
+      .patch(`/api/categories/${catId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'AdminRenamed' });
+    expect(update.status).toBe(200);
+
+    const del = await request(app.server)
+      .delete(`/api/categories/${catId}`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(del.status).toBe(204);
   });
 });

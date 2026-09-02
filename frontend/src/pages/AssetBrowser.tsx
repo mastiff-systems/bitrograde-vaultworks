@@ -115,6 +115,7 @@ function getUrlFilters() {
     folder: p.get('folder') ?? null,
     collection: p.get('collection') ?? null,
     preview: p.get('preview') ?? null,
+    asset: p.get('asset') ?? null,
   };
 }
 
@@ -130,6 +131,7 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = fal
   if (filters.folder) p.set('folder', filters.folder);
   if (filters.collection) p.set('collection', filters.collection);
   if (filters.preview) p.set('preview', filters.preview);
+  if (filters.asset) p.set('asset', filters.asset);
   const search = p.toString();
   const url = search ? `?${search}` : window.location.pathname;
   if (replace) {
@@ -994,7 +996,7 @@ function AssetDetailModal({
                 Edit
               </button>
             )}
-            <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
+            <button onClick={onClose} aria-label="Close details" className="btn-ghost btn-sm flex-shrink-0">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -2042,6 +2044,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [totalPages, setTotalPages] = useState(1);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
+  // ?asset= URL param backing the detail panel deep link (MAS-762). Seeded
+  // synchronously from the URL so the mount-time replaceState in the URL-sync
+  // effect preserves it while getAssetById(initialDetailAssetId) is in flight.
+  const [urlAssetId, setUrlAssetId] = useState<string | null>(initialDetailAssetId ?? initial.asset);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [versionPreviewUrl, setVersionPreviewUrl] = useState<string | null>(null);
 
@@ -2154,6 +2160,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     getAssetById(initialDetailAssetId).then(setDetailAsset).catch(() => {});
   }, [initialDetailAssetId]);
 
+  // Keep ?asset= aligned with the detail panel whenever it opens (card
+  // Details, viewer→details, Logs click-through); clearing on close happens
+  // in the modal's onClose so the initial-load fetch gap doesn't wipe it.
+  useEffect(() => {
+    if (detailAsset) setUrlAssetId(detailAsset.id);
+  }, [detailAsset]);
+
   // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -2188,6 +2201,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         setPreviewAsset(found);
       } else {
         setPreviewAsset(null);
+      }
+      // Restore detail panel from ?asset= (MAS-762): fast-path lookup in the
+      // loaded list, falling back to a fetch (the asset may be filtered out).
+      setUrlAssetId(filters.asset);
+      if (filters.asset) {
+        const found = assets.find((a) => a.id === filters.asset);
+        if (found) setDetailAsset(found);
+        else getAssetById(filters.asset).then(setDetailAsset).catch(() => {});
+      } else {
+        setDetailAsset(null);
       }
     }
     window.addEventListener('popstate', handlePopState);
@@ -2230,10 +2253,11 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     pushUrlFilters(
       { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
         category: selectedCategoryId, subcategory: selectedSubcategoryId,
-        folder: activeFolderId, collection: selectedCollectionId, preview: previewAsset?.id ?? null },
+        folder: activeFolderId, collection: selectedCollectionId, preview: previewAsset?.id ?? null,
+        asset: urlAssetId },
       isMount, // replaceState on first render, pushState on subsequent filter changes
     );
-  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, selectedCollectionId, previewAsset]);
+  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, selectedCollectionId, previewAsset, urlAssetId]);
 
 
   // Load tags
@@ -2859,7 +2883,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       {detailAsset && (
         <AssetDetailModal
           asset={detailAsset}
-          onClose={() => setDetailAsset(null)}
+          onClose={() => {
+            setDetailAsset(null);
+            setUrlAssetId(null);
+          }}
           onTagClick={toggleTag}
           onUpdate={handleAssetUpdate}
           onVersionPreview={(url) => {
@@ -2884,7 +2911,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             pushUrlFilters(
               { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
                 category: selectedCategoryId, subcategory: selectedSubcategoryId,
-                folder: activeFolderId, collection: selectedCollectionId, preview: null },
+                folder: activeFolderId, collection: selectedCollectionId, preview: null,
+                asset: urlAssetId },
               true, // replaceState
             );
           }}

@@ -507,4 +507,26 @@ describe('MainSidebar nested create + move (MAS-716)', () => {
 
     await waitFor(() => expect(onSelect).toHaveBeenCalledWith('a', ['Folder B', 'Folder A']));
   });
+
+  // ── Version footer (MAS-732) ──────────────────────────────────────────────
+
+  it('renders the app version, small and non-interactive, at the sidebar bottom', async () => {
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    const version = screen.getByText(`v${__APP_VERSION__}`);
+    expect(version).toBeInTheDocument();
+    // Non-interactive muted text, not a control
+    expect(version.closest('button')).toBeNull();
+    expect(version.closest('a')).toBeNull();
+    expect(version.className).toContain('text-content-muted');
+  });
+
+  it('hides the version footer when the sidebar is collapsed', async () => {
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.queryByText(`v${__APP_VERSION__}`)).not.toBeInTheDocument();
+  });
 });

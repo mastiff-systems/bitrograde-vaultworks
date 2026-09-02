@@ -568,6 +568,14 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
         </div>
       )}
 
+      {/* Version footer (MAS-732) — build-time constant injected by vite `define`
+          from the root package.json (the version source of truth, MAS-731). */}
+      {!collapsed && (
+        <div className="px-2 py-1 text-right text-[10px] text-content-muted select-none shrink-0">
+          v{__APP_VERSION__}
+        </div>
+      )}
+
       {/* Move-target picker (MAS-716) — reuses the Upload Wizard's folder tree dialog */}
       <FolderPickerDialog
         open={moving !== null}

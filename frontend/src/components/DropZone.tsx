@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { findAssetByExactName, uploadFiles, uploadVersion } from '../api/client.js';
+import { findAssetByExactName, uploadFiles, uploadVersion, extractApiErrorMessage } from '../api/client.js';
 import type { Asset } from '../api/client.js';
 import { OverwriteConfirmDialog } from './OverwriteConfirmDialog.js';
 import type { ConflictResolution } from './OverwriteConfirmDialog.js';
@@ -71,8 +71,8 @@ export function DropZone({ onUploaded, onVersionsCreated }: Props) {
         }
 
         onUploaded(allAssets);
-      } catch {
-        setError('Upload failed. Check your connection and try again.');
+      } catch (err) {
+        setError(extractApiErrorMessage(err, 'Upload failed. Check your connection and try again.'));
       } finally {
         setUploading(false);
         setProgress(0);
@@ -197,7 +197,7 @@ export function DropZone({ onUploaded, onVersionsCreated }: Props) {
         ) : isDragActive ? (
           <p>Drop files here</p>
         ) : (
-          <p>Drag & drop files here, or click to select (up to 10 at once)</p>
+          <p>Drag & drop files here, or click to select</p>
         )}
       </div>
       {error && <p style={{ color: '#f66', marginTop: 8 }}>{error}</p>}

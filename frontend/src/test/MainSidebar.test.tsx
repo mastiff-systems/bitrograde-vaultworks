@@ -8,10 +8,15 @@
  *  - Filters section renders the children slot with a working "Clear all"
  *
  * API calls are mocked via vi.mock so no running server is needed.
+ *
+ * MAS-773: MainSidebar now consumes useAuth() (admin bar role gate) and
+ * react-router hooks (navigate + active-route highlight), so renders are
+ * wrapped in MemoryRouter and AuthContext is mocked (default: non-admin).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { MainSidebar } from '../components/MainSidebar';
 import type { Folder } from '../api/folders';
 
@@ -26,6 +31,12 @@ vi.mock('../api/folders.js', () => ({
   addAssetsToFolder: vi.fn(),
   removeAssetFromFolder: vi.fn(),
   listFoldersForAsset: vi.fn(),
+}));
+
+const mockUseAuth = vi.fn();
+
+vi.mock('../contexts/AuthContext.js', () => ({
+  useAuth: () => mockUseAuth(),
 }));
 
 import * as foldersApi from '../api/folders.js';
@@ -49,17 +60,24 @@ function makeFolder(overrides: Partial<Folder> = {}): Folder {
 function renderSidebar(
   activeFolderId: string | null = null,
   onSelectFolder: (id: string | null) => void = vi.fn(),
-  extra: { hasFilters?: boolean; onClearFilters?: () => void; children?: React.ReactNode } = {},
+  extra: {
+    hasFilters?: boolean;
+    onClearFilters?: () => void;
+    children?: React.ReactNode;
+    initialPath?: string;
+  } = {},
 ) {
   return render(
-    <MainSidebar
-      activeFolderId={activeFolderId}
-      onSelectFolder={onSelectFolder}
-      hasFilters={extra.hasFilters ?? false}
-      onClearFilters={extra.onClearFilters ?? vi.fn()}
-    >
-      {extra.children}
-    </MainSidebar>,
+    <MemoryRouter initialEntries={[extra.initialPath ?? '/']}>
+      <MainSidebar
+        activeFolderId={activeFolderId}
+        onSelectFolder={onSelectFolder}
+        hasFilters={extra.hasFilters ?? false}
+        onClearFilters={extra.onClearFilters ?? vi.fn()}
+      >
+        {extra.children}
+      </MainSidebar>
+    </MemoryRouter>,
   );
 }
 
@@ -69,6 +87,7 @@ describe('MainSidebar integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    mockUseAuth.mockReturnValue({ user: { email: 'u@v.w', role: 'user' } });
     vi.spyOn(window, 'confirm').mockReturnValue(false);
   });
 
@@ -324,13 +343,17 @@ describe('MainSidebar integration', () => {
   it('shows Clear all only when filters are active, and it fires onClearFilters', async () => {
     const onClear = vi.fn();
     const { rerender } = render(
-      <MainSidebar activeFolderId={null} onSelectFolder={vi.fn()} hasFilters={false} onClearFilters={onClear} />,
+      <MemoryRouter>
+        <MainSidebar activeFolderId={null} onSelectFolder={vi.fn()} hasFilters={false} onClearFilters={onClear} />
+      </MemoryRouter>,
     );
     await waitFor(() => screen.getByText('Filters'));
     expect(screen.queryByText('Clear all')).not.toBeInTheDocument();
 
     rerender(
-      <MainSidebar activeFolderId={null} onSelectFolder={vi.fn()} hasFilters={true} onClearFilters={onClear} />,
+      <MemoryRouter>
+        <MainSidebar activeFolderId={null} onSelectFolder={vi.fn()} hasFilters={true} onClearFilters={onClear} />
+      </MemoryRouter>,
     );
     fireEvent.click(screen.getByText('Clear all'));
     expect(onClear).toHaveBeenCalled();
@@ -343,6 +366,7 @@ describe('MainSidebar nested create + move (MAS-716)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    mockUseAuth.mockReturnValue({ user: { email: 'u@v.w', role: 'user' } });
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     vi.spyOn(window, 'alert').mockImplementation(() => {});
   });
@@ -522,11 +546,89 @@ describe('MainSidebar nested create + move (MAS-716)', () => {
     expect(version.className).toContain('text-content-muted');
   });
 
-  it('hides the version footer when the sidebar is collapsed', async () => {
+  it('keeps the version footer visible when the sidebar is collapsed (MAS-773)', async () => {
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
-    expect(screen.queryByText(`v${__APP_VERSION__}`)).not.toBeInTheDocument();
+    expect(screen.getByText(`v${__APP_VERSION__}`)).toBeInTheDocument();
+  });
+});
+
+// ─── MAS-773: bottom-pinned Administration bar ────────────────────────────────
+
+describe('MainSidebar admin bar (MAS-773)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  });
+
+  function setRole(role: string | undefined) {
+    mockUseAuth.mockReturnValue({ user: role ? { email: 'x@y.z', role } : null });
+  }
+
+  it('renders the Administration block with Settings, Collections and Users for admins', async () => {
+    setRole('admin');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    expect(screen.getByText('Administration')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collections' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Users' })).toBeInTheDocument();
+  });
+
+  it('leaves no trace of the Administration block in the DOM for non-admins', async () => {
+    setRole('user');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collections' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Users' })).not.toBeInTheDocument();
+  });
+
+  it('renders no admin bar when logged out', async () => {
+    setRole(undefined);
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+  });
+
+  it('highlights the active admin route', async () => {
+    setRole('admin');
+    renderSidebar(null, vi.fn(), { initialPath: '/admin/settings' });
+    await waitFor(() => screen.getByText('Administration'));
+
+    expect(screen.getByRole('button', { name: 'Settings' }).className).toContain('text-accent');
+    expect(screen.getByRole('button', { name: 'Users' }).className).not.toContain('text-accent');
+  });
+
+  it('collapsed rail shows an admin-only Administration icon that expands the sidebar', async () => {
+    setRole('admin');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    // Expanded admin bar is gone; rail icon remains
+    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+    const railButton = screen.getByRole('button', { name: 'Administration' });
+
+    fireEvent.click(railButton);
+    await waitFor(() => {
+      expect(screen.getByText('Administration')).toBeInTheDocument();
+    });
+  });
+
+  it('collapsed rail has no admin icon for non-admins, but keeps the version footer', async () => {
+    setRole('user');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.queryByRole('button', { name: 'Administration' })).not.toBeInTheDocument();
+    expect(screen.getByText(`v${__APP_VERSION__}`)).toBeInTheDocument();
   });
 });

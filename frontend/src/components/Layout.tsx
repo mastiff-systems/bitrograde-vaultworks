@@ -5,7 +5,6 @@ import { useTheme } from '../contexts/ThemeContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { useUpload } from '../contexts/UploadContext.js';
 import { NotificationBell } from './NotificationBell.js';
-import { AdminMenu } from './AdminMenu.js';
 
 interface Props {
   children: ReactNode;
@@ -216,7 +215,6 @@ export function Layout({ children }: Props) {
           <div className="flex items-center gap-1 flex-shrink-0 ml-1">
             <NotificationBell onNavigateDashboard={() => navigate('/')} />
             <CollectionsButton />
-            <AdminMenu />
             <ProfileDropdown />
           </div>
         </div>

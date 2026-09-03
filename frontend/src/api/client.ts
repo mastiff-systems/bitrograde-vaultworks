@@ -135,18 +135,48 @@ export async function updateAssetTags(id: string, tags: string[]): Promise<{ id:
   return data.tags;
 }
 
+/** Backend multipart limit (app.ts `limits.files`) — requests above this get a 413. */
+export const MAX_FILES_PER_UPLOAD = 10;
+
+/**
+ * Pull the backend's JSON `error` message out of an axios error, falling back
+ * to a generic string. Keeps upload failures loud and specific (MAS-804).
+ */
+export function extractApiErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const res = (err as { response?: { data?: { error?: string } } }).response;
+    if (res?.data?.error) return res.data.error;
+  }
+  return fallback;
+}
+
 export async function uploadFiles(
   files: File[],
   onProgress?: (pct: number) => void,
 ): Promise<Asset[]> {
-  const form = new FormData();
-  files.forEach((f) => form.append('files', f, f.name));
-  const { data } = await api.post<Asset[]>('/api/upload', form, {
-    onUploadProgress: (e) => {
-      if (e.total && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
-    },
-  });
-  return data;
+  // MAS-804: the backend rejects requests with more than MAX_FILES_PER_UPLOAD
+  // files (413 FST_FILES_LIMIT), so send sequential chunks with aggregate,
+  // byte-weighted progress instead of one oversized request.
+  const uploaded: Asset[] = [];
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0) || 1;
+  let completedBytes = 0;
+  for (let i = 0; i < files.length; i += MAX_FILES_PER_UPLOAD) {
+    const batch = files.slice(i, i + MAX_FILES_PER_UPLOAD);
+    const batchBytes = batch.reduce((sum, f) => sum + f.size, 0);
+    const form = new FormData();
+    batch.forEach((f) => form.append('files', f, f.name));
+    const { data } = await api.post<Asset[]>('/api/upload', form, {
+      onUploadProgress: (e) => {
+        if (e.total && onProgress) {
+          const batchLoaded = Math.min(e.loaded / e.total, 1) * batchBytes;
+          onProgress(Math.round(((completedBytes + batchLoaded) / totalBytes) * 100));
+        }
+      },
+    });
+    uploaded.push(...data);
+    completedBytes += batchBytes;
+  }
+  return uploaded;
 }
 
 export async function uploadWithMetadata(

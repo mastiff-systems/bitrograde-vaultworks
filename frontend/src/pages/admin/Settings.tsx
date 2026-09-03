@@ -14,6 +14,7 @@ import type { TrashedAsset, TrashedFolder } from '../../api/client.js';
 import { StorageSettings } from './StorageSettings.js';
 import { EmailSettings } from './EmailSettings.js';
 import { TaxonomyManager } from './TaxonomyManager.js';
+import { AdminUsers } from './Users.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -620,7 +621,7 @@ export function AdminSettings() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'taxonomy' | 'trash' | 'logs' | 'about'>('storage');
+  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'taxonomy' | 'users' | 'trash' | 'logs' | 'about'>('storage');
 
   useEffect(() => {
     fetchStats()
@@ -667,6 +668,7 @@ export function AdminSettings() {
           ['storage', 'Storage'],
           ['email', 'Email'],
           ['taxonomy', 'Taxonomy'],
+          ['users', 'Users'],
           ['trash', 'Trash'],
           ['logs', 'Logs'],
           ['about', 'About'],
@@ -706,6 +708,9 @@ export function AdminSettings() {
 
       {/* Taxonomy tab */}
       {!loading && activeTab === 'taxonomy' && <TaxonomyManager embedded />}
+
+      {/* Users tab (MAS-778) — embeds the standalone /admin/users page */}
+      {!loading && activeTab === 'users' && <AdminUsers embedded />}
 
       {/* Trash tab */}
       {!loading && activeTab === 'trash' && <TrashTab />}

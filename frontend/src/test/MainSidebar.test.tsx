@@ -12,11 +12,15 @@
  * MAS-773: MainSidebar now consumes useAuth() (admin bar role gate) and
  * react-router hooks (navigate + active-route highlight), so renders are
  * wrapped in MemoryRouter and AuthContext is mocked (default: non-admin).
+ *
+ * MAS-778: the three-link Administration block is a single "Admin" button
+ * (routes to /admin/settings, carries the version string), and an all-roles
+ * "Collections" row sits under "All assets".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { MainSidebar } from '../components/MainSidebar';
 import type { Folder } from '../api/folders';
 
@@ -57,6 +61,12 @@ function makeFolder(overrides: Partial<Folder> = {}): Folder {
   };
 }
 
+/** Exposes the router's current pathname for navigation assertions. */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
 function renderSidebar(
   activeFolderId: string | null = null,
   onSelectFolder: (id: string | null) => void = vi.fn(),
@@ -77,8 +87,13 @@ function renderSidebar(
       >
         {extra.children}
       </MainSidebar>
+      <LocationProbe />
     </MemoryRouter>,
   );
+}
+
+function currentPath() {
+  return screen.getByTestId('location-probe').textContent;
 }
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
@@ -555,9 +570,9 @@ describe('MainSidebar nested create + move (MAS-716)', () => {
   });
 });
 
-// ─── MAS-773: bottom-pinned Administration bar ────────────────────────────────
+// ─── MAS-773/MAS-778: bottom-pinned single Admin entry ────────────────────────
 
-describe('MainSidebar admin bar (MAS-773)', () => {
+describe('MainSidebar admin entry (MAS-773/MAS-778)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
@@ -568,58 +583,75 @@ describe('MainSidebar admin bar (MAS-773)', () => {
     mockUseAuth.mockReturnValue({ user: role ? { email: 'x@y.z', role } : null });
   }
 
-  it('renders the Administration block with Settings, Collections and Users for admins', async () => {
+  it('renders a single Admin button (no Administration heading or sub-links) for admins', async () => {
     setRole('admin');
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));
 
-    expect(screen.getByText('Administration')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Collections' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Users' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Admin' })).toBeInTheDocument();
+    // The MAS-773 three-link block is gone
+    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Users' })).not.toBeInTheDocument();
   });
 
-  it('leaves no trace of the Administration block in the DOM for non-admins', async () => {
+  it('shows the version on the Admin button itself, with no separate footer (admin, expanded)', async () => {
+    setRole('admin');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    const versions = screen.getAllByText(`v${__APP_VERSION__}`);
+    expect(versions).toHaveLength(1);
+    expect(versions[0].closest('button')).toBe(screen.getByRole('button', { name: 'Admin' }));
+  });
+
+  it('Admin button navigates to /admin/settings', async () => {
+    setRole('admin');
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    expect(currentPath()).toBe('/admin/settings');
+  });
+
+  it('highlights the Admin button on any /admin route', async () => {
+    setRole('admin');
+    renderSidebar(null, vi.fn(), { initialPath: '/admin/users' });
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    expect(screen.getByRole('button', { name: 'Admin' }).className).toContain('text-accent');
+  });
+
+  it('leaves no trace of the Admin entry in the DOM for non-admins', async () => {
     setRole('user');
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));
 
+    expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
     expect(screen.queryByText('Administration')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Collections' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Users' })).not.toBeInTheDocument();
   });
 
-  it('renders no admin bar when logged out', async () => {
+  it('renders no Admin entry when logged out', async () => {
     setRole(undefined);
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));
-    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
   });
 
-  it('highlights the active admin route', async () => {
-    setRole('admin');
-    renderSidebar(null, vi.fn(), { initialPath: '/admin/settings' });
-    await waitFor(() => screen.getByText('Administration'));
-
-    expect(screen.getByRole('button', { name: 'Settings' }).className).toContain('text-accent');
-    expect(screen.getByRole('button', { name: 'Users' }).className).not.toContain('text-accent');
-  });
-
-  it('collapsed rail shows an admin-only Administration icon that expands the sidebar', async () => {
+  it('collapsed rail gear routes straight to /admin/settings and keeps the version footer', async () => {
     setRole('admin');
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
-    // Expanded admin bar is gone; rail icon remains
-    expect(screen.queryByText('Administration')).not.toBeInTheDocument();
-    const railButton = screen.getByRole('button', { name: 'Administration' });
+    // Collapsed rail keeps the standalone version footer (MAS-773), outside any button
+    const version = screen.getByText(`v${__APP_VERSION__}`);
+    expect(version.closest('button')).toBeNull();
 
-    fireEvent.click(railButton);
-    await waitFor(() => {
-      expect(screen.getByText('Administration')).toBeInTheDocument();
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    expect(currentPath()).toBe('/admin/settings');
+    // Navigating does not expand the sidebar — there is no sub-list to reveal
+    expect(screen.queryByText('Folders')).not.toBeInTheDocument();
   });
 
   it('collapsed rail has no admin icon for non-admins, but keeps the version footer', async () => {
@@ -628,7 +660,35 @@ describe('MainSidebar admin bar (MAS-773)', () => {
     await waitFor(() => screen.getByText(/no folders yet/i));
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
-    expect(screen.queryByRole('button', { name: 'Administration' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
     expect(screen.getByText(`v${__APP_VERSION__}`)).toBeInTheDocument();
+  });
+});
+
+// ─── MAS-778: all-roles Collections row ───────────────────────────────────────
+
+describe('MainSidebar Collections row (MAS-778)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    mockUseAuth.mockReturnValue({ user: { email: 'u@v.w', role: 'user' } });
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  });
+
+  it('renders a Collections row for non-admins that navigates to /collections', async () => {
+    renderSidebar();
+    await waitFor(() => screen.getByText('Collections'));
+
+    fireEvent.click(screen.getByText('Collections'));
+    expect(currentPath()).toBe('/collections');
+  });
+
+  it('exposes a Collections shortcut in the collapsed rail', async () => {
+    renderSidebar();
+    await waitFor(() => screen.getByText(/no folders yet/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collections' }));
+    expect(currentPath()).toBe('/collections');
   });
 });

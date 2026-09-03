@@ -12,6 +12,7 @@ import { ChangePassword } from './pages/ChangePassword.js';
 import { useAuth } from './contexts/AuthContext.js';
 import { CategoryProvider } from './contexts/CategoryContext.js';
 import { UploadProvider } from './contexts/UploadContext.js';
+import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 /** Redirects non-admin users to the dashboard root. */
@@ -65,6 +66,20 @@ function AppShell() {
 
 export function App() {
   const { token, mustChangePassword } = useAuth();
+
+  // MAS-825: with the page-wide dropzone retired, a stray file drop would make
+  // the browser navigate away from the SPA to the local file. Swallow window
+  // drag/drop events so drops outside explicit dropzones (the upload wizard)
+  // are inert. Elements with their own drop handling still receive the events.
+  useEffect(() => {
+    const preventDefault = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('dragover', preventDefault);
+    window.addEventListener('drop', preventDefault);
+    return () => {
+      window.removeEventListener('dragover', preventDefault);
+      window.removeEventListener('drop', preventDefault);
+    };
+  }, []);
 
   return (
     <Routes>

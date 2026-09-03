@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDropzone } from 'react-dropzone';
 import {
   listFiles,
   listTags,
-  uploadFiles,
-  extractApiErrorMessage,
   deleteFile,
   updateAssetTags,
   updateFile,
@@ -2399,35 +2396,6 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     );
   }
 
-  // Upload drop
-  const onDrop = useCallback(async (files: File[]) => {
-    if (!files.length) return;
-    upload.setUploading(true);
-    upload.setProgress(0);
-    try {
-      const added = await uploadFiles(files, upload.setProgress);
-      setAssets((prev) => [...added, ...prev]);
-      listTags().then(setAllTags).catch(() => {});
-    } catch (err) {
-      setError(extractApiErrorMessage(err, 'Upload failed. Please try again.'));
-    } finally {
-      upload.setUploading(false);
-      upload.setProgress(0);
-    }
-  }, [upload]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    noClick: true,
-    noKeyboard: true,
-    multiple: false,
-    onDropRejected: (rejections) => {
-      if (rejections.some((r) => r.errors.some((e) => e.code === 'too-many-files'))) {
-        setError('Drop one file at a time. Use the Upload button to add files with details.');
-      }
-    },
-  });
-
   function handleWizardComplete(asset: Asset) {
     setAssets((prev) => [asset, ...prev]);
     listTags().then(setAllTags).catch(() => {});
@@ -2483,18 +2451,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     : SORT_OPTIONS.filter((o) => o.value !== 'relevance');
 
   return (
-    <div {...getRootProps()} className="flex flex-1 h-full overflow-hidden">
-      <input {...getInputProps()} />
-
-      {isDragActive && (
-        <div className="fixed inset-0 z-50 bg-accent/20 border-2 border-accent border-dashed flex items-center justify-center pointer-events-none">
-          <div className="text-center">
-            <p className="text-accent-light font-semibold text-xl">Drop to upload</p>
-            <p className="text-accent/70 text-sm mt-1">Files will be added to your vault</p>
-          </div>
-        </div>
-      )}
-
+    <div className="flex flex-1 h-full overflow-hidden">
       {/* Unified sidebar: Folders tree + Filters (MAS-712) */}
       <MainSidebar
         activeFolderId={activeFolderId}

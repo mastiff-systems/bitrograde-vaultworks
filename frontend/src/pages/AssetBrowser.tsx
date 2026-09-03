@@ -2416,10 +2416,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     }
   }, [upload]);
 
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     noClick: true,
     noKeyboard: true,
+    multiple: false,
+    onDropRejected: (rejections) => {
+      if (rejections.some((r) => r.errors.some((e) => e.code === 'too-many-files'))) {
+        setError('Drop one file at a time. Use the Upload button to add files with details.');
+      }
+    },
   });
 
   function handleWizardComplete(asset: Asset) {

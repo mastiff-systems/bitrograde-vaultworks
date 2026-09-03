@@ -384,4 +384,75 @@ describe('Folder trash lifecycle (MAS-715)', () => {
     expect(await prisma.asset.count({ where: { deletedAt: null } })).toBe(1);
     expect((await prisma.asset.findFirst())!.id).toBe(asset.id);
   });
+
+  it('does not purge a folder restored between selection and delete (MAS-792 TOCTOU guard)', async () => {
+    const racy = await createFolder('Racy');
+    await trashFolder(racy.id);
+    await prisma.folder.updateMany({
+      where: { id: racy.id },
+      data: { deletedAt: new Date(Date.now() - THIRTY_ONE_DAYS_MS) },
+    });
+
+    // Inject the race: restore the folder right after the job's expiry query
+    // resolves, before its delete runs.
+    const origFindMany = prisma.folder.findMany.bind(prisma.folder);
+    const findSpy = vi
+      .spyOn(prisma.folder, 'findMany')
+      .mockImplementation(async (args?: Parameters<typeof origFindMany>[0]) => {
+        const rows = await origFindMany(args);
+        await prisma.folder.update({ where: { id: racy.id }, data: { deletedAt: null } });
+        return rows;
+      });
+
+    try {
+      await purgeExpiredFolders();
+    } finally {
+      // mockRestore() on a Prisma proxy delegate deletes the method outright;
+      // re-point the spy at the original instead.
+      findSpy.mockImplementation(origFindMany);
+    }
+
+    const survivor = await prisma.folder.findUnique({ where: { id: racy.id } });
+    expect(survivor).not.toBeNull();
+    expect(survivor!.deletedAt).toBeNull();
+
+    // Skipped purge must not log an audit entry
+    const audits = await prisma.auditLog.findMany();
+    expect(
+      audits.filter((a) => (a.details as { purgedFolderId?: string })?.purgedFolderId === racy.id)
+    ).toHaveLength(0);
+  });
+
+  it('a failure purging one folder does not prevent purging the next (MAS-792)', async () => {
+    const doomed = await createFolder('Doomed');
+    const alsoDoomed = await createFolder('AlsoDoomed');
+    await trashFolder(doomed.id);
+    await trashFolder(alsoDoomed.id);
+    await prisma.folder.updateMany({
+      data: { deletedAt: new Date(Date.now() - THIRTY_ONE_DAYS_MS) },
+    });
+
+    const origDeleteMany = prisma.folder.deleteMany.bind(prisma.folder);
+    const deleteSpy = vi
+      .spyOn(prisma.folder, 'deleteMany')
+      .mockImplementation(async (args?: Parameters<typeof origDeleteMany>[0]) => {
+        if ((args?.where as { id?: string })?.id === doomed.id) {
+          throw new Error('simulated purge failure');
+        }
+        return origDeleteMany(args);
+      });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await purgeExpiredFolders();
+    } finally {
+      // Same Prisma-proxy caveat as above: re-point rather than mockRestore().
+      deleteSpy.mockImplementation(origDeleteMany);
+      errorSpy.mockRestore();
+    }
+
+    // The failed folder is untouched, the rest of the run completed
+    expect(await prisma.folder.findUnique({ where: { id: doomed.id } })).not.toBeNull();
+    expect(await prisma.folder.findUnique({ where: { id: alsoDoomed.id } })).toBeNull();
+  });
 });

@@ -64,23 +64,38 @@ export async function purgeExpiredFolders(): Promise<void> {
   const expiredIds = new Set(expired.map((f) => f.id));
   const topLevel = expired.filter((f) => !f.parentFolderId || !expiredIds.has(f.parentFolderId));
 
+  let purged = 0;
   for (const folder of topLevel) {
-    await prisma.folder.delete({ where: { id: folder.id } });
+    // One folder's failure must not abort the remaining purges — the next
+    // attempt is a full day away.
+    try {
+      // deletedAt is re-asserted so a folder restored between the findMany
+      // above and this delete survives (same TOCTOU guard as the manual purge
+      // route); deleteMany also makes a row already gone via parent cascade a
+      // count-0 no-op instead of a P2025 throw.
+      const { count } = await prisma.folder.deleteMany({
+        where: { id: folder.id, deletedAt: { lt: cutoff } },
+      });
+      if (count === 0) continue;
+      purged += 1;
 
-    // No FK reference: the folder row is already deleted, so identifiers go in details.
-    void logAudit({
-      action: AuditAction.DELETE,
-      details: {
-        source: 'auto-purge',
-        purgedFolderId: folder.id,
-        folderName: folder.name,
-        cutoffDate: cutoff.toISOString(),
-      },
-    });
+      // No FK reference: the folder row is already deleted, so identifiers go in details.
+      void logAudit({
+        action: AuditAction.DELETE,
+        details: {
+          source: 'auto-purge',
+          purgedFolderId: folder.id,
+          folderName: folder.name,
+          cutoffDate: cutoff.toISOString(),
+        },
+      });
+    } catch (err) {
+      console.error(`[trashPurge] failed to purge folder ${folder.id}:`, err);
+    }
   }
 
-  if (topLevel.length > 0) {
-    console.log(`[trashPurge] purged ${topLevel.length} expired folder(s)`);
+  if (purged > 0) {
+    console.log(`[trashPurge] purged ${purged} expired folder(s)`);
   }
 }
 

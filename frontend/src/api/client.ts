@@ -82,6 +82,10 @@ export interface ListFilesParams {
   mimeType?: string;
   categoryId?: string;
   subcategoryId?: string;
+  /** Filter to assets in this collection (MAS-711 backend filter). */
+  collectionId?: string;
+  /** Filter to direct members of this folder (MAS-719: composes with q/tags/collectionId). */
+  folderId?: string;
   format?: string;
   limit?: number;
   page?: number;
@@ -111,6 +115,8 @@ export async function listFiles(params?: ListFilesParams): Promise<PaginatedFile
   if (params?.mimeType) p.mimeType = params.mimeType;
   if (params?.categoryId) p.categoryId = params.categoryId;
   if (params?.subcategoryId) p.subcategoryId = params.subcategoryId;
+  if (params?.collectionId) p.collectionId = params.collectionId;
+  if (params?.folderId) p.folderId = params.folderId;
   if (params?.format) p.format = params.format;
   if (params?.limit) p.limit = String(params.limit);
   if (params?.page) p.page = String(params.page);
@@ -232,6 +238,37 @@ export async function listTrashedFiles(): Promise<TrashedAsset[]> {
   return data;
 }
 
+/** A top-level trashed folder as returned by GET /api/trash/folders (MAS-715). */
+export interface TrashedFolder {
+  id: string;
+  name: string;
+  deleted_at: string;
+  deleted_by: string | null;
+  descendant_count: number;
+}
+
+/** Fetch top-level trashed folders. Calls GET /api/trash/folders. */
+export async function listTrashedFolders(): Promise<TrashedFolder[]> {
+  const { data } = await api.get<TrashedFolder[]>('/api/trash/folders');
+  return data;
+}
+
+/**
+ * Restore a trashed folder and its whole trashed subtree back to the live tree.
+ * Re-parents to root if the original parent is trashed/gone. Calls POST /api/folders/:id/restore.
+ */
+export async function restoreFolder(id: string): Promise<void> {
+  await api.post(`/api/folders/${id}/restore`);
+}
+
+/**
+ * Permanently purge a trashed folder — removes the folder, its descendant folders,
+ * and their memberships; assets survive. Calls POST /api/folders/:id/purge.
+ */
+export async function purgeFolder(id: string): Promise<void> {
+  await api.post(`/api/folders/${id}/purge`);
+}
+
 export interface BulkDeleteResult {
   deleted: string[];
   errors: { id: string; reason: string }[];
@@ -239,6 +276,27 @@ export interface BulkDeleteResult {
 
 export async function bulkDelete(ids: string[]): Promise<BulkDeleteResult> {
   const { data } = await api.post<BulkDeleteResult>('/api/files/bulk-delete', { ids });
+  return data;
+}
+
+export interface BulkUpdatePayload {
+  /** uuid to assign, null to clear category (also clears subcategory) */
+  categoryId?: string | null;
+  /** only valid alongside categoryId; must belong to it */
+  subcategoryId?: string | null;
+  /** tag-name deltas — existing unrelated tags are preserved */
+  addTags?: string[];
+  removeTags?: string[];
+}
+
+export interface BulkUpdateResult {
+  updated: string[];
+  errors: { id: string; reason: string }[];
+}
+
+/** Bulk metadata edit (category/subcategory + tag add/remove deltas). Server caps ids at 100 per call. */
+export async function bulkUpdate(ids: string[], payload: BulkUpdatePayload): Promise<BulkUpdateResult> {
+  const { data } = await api.post<BulkUpdateResult>('/api/files/bulk-update', { ids, ...payload });
   return data;
 }
 

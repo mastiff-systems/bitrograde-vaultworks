@@ -1,10 +1,19 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { fetchStats, fetchAuditLogs, fetchAuditUsers } from '../../api/admin.js';
 import type { AdminStats, AuditLogEntry, AuditLogsParams, AuditAction, AuditUser } from '../../api/admin.js';
-import { listTrashedFiles, purgeFile, restoreFile } from '../../api/client.js';
-import type { TrashedAsset } from '../../api/client.js';
+import {
+  listTrashedFiles,
+  listTrashedFolders,
+  purgeFile,
+  purgeFolder,
+  restoreFile,
+  restoreFolder,
+} from '../../api/client.js';
+import type { TrashedAsset, TrashedFolder } from '../../api/client.js';
 import { StorageSettings } from './StorageSettings.js';
 import { EmailSettings } from './EmailSettings.js';
+import { TaxonomyManager } from './TaxonomyManager.js';
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`;
@@ -63,6 +72,7 @@ interface LogTableProps {
 }
 
 function LogTable({ mode }: LogTableProps) {
+  const navigate = useNavigate();
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -222,7 +232,21 @@ function LogTable({ mode }: LogTableProps) {
                 </td>
                 <td><ActionBadge action={log.action} /></td>
                 <td className="text-sm text-content-secondary max-w-[200px] truncate">
-                  {log.asset_name ?? '—'}
+                  {log.asset_name ? (
+                    log.asset_id ? (
+                      <button
+                        onClick={() => navigate(`/?asset=${log.asset_id}`)}
+                        className="text-accent-light font-medium hover:underline text-left truncate max-w-full"
+                        title={`Open ${log.asset_name}`}
+                      >
+                        {log.asset_name}
+                      </button>
+                    ) : (
+                      log.asset_name
+                    )
+                  ) : (
+                    '—'
+                  )}
                 </td>
                 <td className="text-xs text-content-muted font-mono">
                   {log.ip_address ?? '—'}
@@ -290,6 +314,7 @@ function LogsTab() {
 
 function TrashTab() {
   const [items, setItems] = useState<TrashedAsset[]>([]);
+  const [folders, setFolders] = useState<TrashedFolder[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -298,8 +323,9 @@ function TrashTab() {
     setLoading(true);
     setError(null);
     try {
-      const data = await listTrashedFiles();
-      setItems(data);
+      const [files, trashedFolders] = await Promise.all([listTrashedFiles(), listTrashedFolders()]);
+      setItems(files);
+      setFolders(trashedFolders);
     } catch {
       setError('Failed to load trash. Please try again.');
     } finally {
@@ -336,11 +362,39 @@ function TrashTab() {
     }
   }
 
+  async function handleFolderRestore(folder: TrashedFolder) {
+    if (actionInProgress) return;
+    setActionInProgress(folder.id);
+    try {
+      await restoreFolder(folder.id);
+      setFolders((prev) => prev.filter((f) => f.id !== folder.id));
+    } catch {
+      setError(`Failed to restore folder "${folder.name}".`);
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  async function handleFolderPurge(folder: TrashedFolder) {
+    if (actionInProgress) return;
+    const subtree = folder.descendant_count > 0 ? ` and its ${folder.descendant_count} subfolder(s)` : '';
+    if (!confirm(`Permanently delete folder "${folder.name}"${subtree}? Files inside are kept in the library, but the folder structure cannot be undone.`)) return;
+    setActionInProgress(folder.id);
+    try {
+      await purgeFolder(folder.id);
+      setFolders((prev) => prev.filter((f) => f.id !== folder.id));
+    } catch {
+      setError(`Failed to permanently delete folder "${folder.name}".`);
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-content-muted">
-          Files moved to trash are automatically purged after 30 days. You can restore or permanently delete them here.
+          Files and folders moved to trash are automatically purged after 30 days. You can restore or permanently delete them here.
         </p>
         <button onClick={load} disabled={loading} className="btn-ghost btn-sm text-xs flex-shrink-0 ml-4">
           <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
@@ -358,17 +412,104 @@ function TrashTab() {
         <div className="flex items-center justify-center py-16">
           <div className="w-6 h-6 border-2 border-surface-4 border-t-accent rounded-full animate-spin" />
         </div>
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && folders.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <svg className="w-12 h-12 text-content-muted mb-3" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
           </svg>
           <p className="text-sm text-content-secondary font-medium">Trash is empty</p>
-          <p className="text-xs text-content-muted mt-1">Deleted files will appear here.</p>
+          <p className="text-xs text-content-muted mt-1">Deleted files and folders will appear here.</p>
         </div>
       ) : (
-        <div className="table-wrapper">
-          <table className="table">
+        <div className="space-y-6">
+          {folders.length > 0 && (
+            <div>
+              <h3 className="text-xs font-semibold text-content-secondary uppercase tracking-wide mb-2">Folders</h3>
+              <div className="table-wrapper">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Folder</th>
+                      <th>Subfolders</th>
+                      <th>Deleted</th>
+                      <th className="text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {folders.map((folder) => {
+                      const busy = actionInProgress === folder.id;
+                      return (
+                        <tr key={folder.id} className="hover:bg-surface-1">
+                          <td>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <svg className="w-4 h-4 text-content-muted flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                              </svg>
+                              <span className="text-sm text-content-primary truncate max-w-[260px]" title={folder.name}>
+                                {folder.name}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="text-xs text-content-muted tabular-nums whitespace-nowrap">
+                            {folder.descendant_count}
+                          </td>
+                          <td className="text-xs text-content-muted tabular-nums whitespace-nowrap">
+                            {formatDate(folder.deleted_at)}
+                          </td>
+                          <td className="text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => handleFolderRestore(folder)}
+                                disabled={!!actionInProgress}
+                                className="btn-ghost btn-sm text-xs"
+                                title="Restore folder and its subfolders"
+                              >
+                                {busy ? (
+                                  <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <>
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                                    </svg>
+                                    Restore
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleFolderPurge(folder)}
+                                disabled={!!actionInProgress}
+                                className="btn-ghost btn-sm text-xs text-danger hover:text-danger"
+                                title="Permanently delete folder structure (files are kept)"
+                              >
+                                {busy ? (
+                                  <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <>
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                    </svg>
+                                    Delete permanently
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div>
+              {folders.length > 0 && (
+                <h3 className="text-xs font-semibold text-content-secondary uppercase tracking-wide mb-2">Files</h3>
+              )}
+              <div className="table-wrapper">
+                <table className="table">
             <thead>
               <tr>
                 <th>File</th>
@@ -440,9 +581,35 @@ function TrashTab() {
                 );
               })}
             </tbody>
-          </table>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── About Tab ──────────────────────────────────────────────────────────────
+
+// Single-column key/value layout with room for future rows (git SHA, build
+// time, deploy status) as the MAS-730 versioning rollout exposes them.
+function AboutTab() {
+  const rows: Array<{ label: string; value: string }> = [
+    { label: 'Version', value: `v${__APP_VERSION__}` },
+  ];
+
+  return (
+    <div className="max-w-md">
+      <div className="card divide-y divide-border/50">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between px-4 py-3">
+            <span className="text-sm text-content-secondary">{row.label}</span>
+            <span className="text-sm text-content-primary font-medium tabular-nums">{row.value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -453,7 +620,7 @@ export function AdminSettings() {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'logs' | 'trash'>('storage');
+  const [activeTab, setActiveTab] = useState<'storage' | 'email' | 'taxonomy' | 'trash' | 'logs' | 'about'>('storage');
 
   useEffect(() => {
     fetchStats()
@@ -496,7 +663,14 @@ export function AdminSettings() {
 
       {/* Tab bar */}
       <div className="flex items-center gap-0.5 border-b border-border mb-6">
-        {(['storage', 'email', 'trash', 'logs'] as const).map((tab) => (
+        {([
+          ['storage', 'Storage'],
+          ['email', 'Email'],
+          ['taxonomy', 'Taxonomy'],
+          ['trash', 'Trash'],
+          ['logs', 'Logs'],
+          ['about', 'About'],
+        ] as const).map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -506,7 +680,7 @@ export function AdminSettings() {
                 : 'border-transparent text-content-secondary hover:text-content-primary'
             }`}
           >
-            {tab === 'storage' ? 'Storage' : tab === 'email' ? 'Email' : tab === 'trash' ? 'Trash' : 'Logs'}
+            {label}
           </button>
         ))}
       </div>
@@ -530,11 +704,17 @@ export function AdminSettings() {
       {/* Email tab */}
       {!loading && activeTab === 'email' && <EmailSettings embedded />}
 
+      {/* Taxonomy tab */}
+      {!loading && activeTab === 'taxonomy' && <TaxonomyManager embedded />}
+
       {/* Trash tab */}
       {!loading && activeTab === 'trash' && <TrashTab />}
 
       {/* Logs tab */}
       {!loading && activeTab === 'logs' && <LogsTab />}
+
+      {/* About tab */}
+      {!loading && activeTab === 'about' && <AboutTab />}
     </div>
   );
 }

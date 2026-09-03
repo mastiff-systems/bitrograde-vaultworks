@@ -74,3 +74,9 @@ export async function addAssetsToCollection(id: string, assetIds: string[]): Pro
 export async function removeAssetFromCollection(id: string, assetId: string): Promise<void> {
   await api.delete(`/api/collections/${id}/assets/${assetId}`);
 }
+
+/** Bulk-remove assets from a collection; removing non-members is a no-op. Server caps at 100 per call. */
+export async function removeAssetsFromCollection(id: string, assetIds: string[]): Promise<{ removed: number }> {
+  const { data } = await api.post<{ removed: number }>(`/api/collections/${id}/assets/remove`, { assetIds });
+  return data;
+}

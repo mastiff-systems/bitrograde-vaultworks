@@ -37,6 +37,7 @@ const TINY_PNG = Buffer.from(
 
 let app: FastifyInstance;
 let token: string;
+let userId: string;
 
 beforeAll(async () => {
   app = await buildApp();
@@ -52,6 +53,7 @@ beforeEach(async () => {
     .post('/api/auth/register')
     .send({ email: 'uploader@example.com', password: 'password123' });
   token = res.body.token;
+  userId = res.body.user.id;
 });
 
 describe('POST /api/upload', () => {
@@ -294,6 +296,124 @@ describe('POST /api/upload', () => {
 
       expect(res.status).toBe(201);
       expect(res.body[0].category_mismatch_warning).toBeUndefined();
+    });
+  });
+
+  // --- Collection assignment at upload time (MAS-711) ---
+
+  describe('collection_id assignment', () => {
+    it('attaches a streamed (non-image) upload to the collection', async () => {
+      const coll = await prisma.collection.create({
+        data: { name: 'Upload Coll', createdBy: userId },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', coll.id)
+        .attach('files', Buffer.from('hello'), { filename: 'in_coll.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].collection_id).toBe(coll.id);
+
+      const link = await prisma.collectionAsset.findFirst({
+        where: { collectionId: coll.id, assetId: res.body[0].id },
+      });
+      expect(link).not.toBeNull();
+    });
+
+    it('attaches a buffered (image) upload to the collection', async () => {
+      const coll = await prisma.collection.create({
+        data: { name: 'Image Coll', createdBy: userId },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', coll.id)
+        .attach('files', TINY_PNG, { filename: 'in_coll.png', contentType: 'image/png' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].collection_id).toBe(coll.id);
+
+      const link = await prisma.collectionAsset.findFirst({
+        where: { collectionId: coll.id, assetId: res.body[0].id },
+      });
+      expect(link).not.toBeNull();
+    });
+
+    it('attaches every file of a multi-file upload to the collection', async () => {
+      const coll = await prisma.collection.create({
+        data: { name: 'Batch Coll', createdBy: userId },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', coll.id)
+        .attach('files', Buffer.from('one'), { filename: 'batch1.txt', contentType: 'text/plain' })
+        .attach('files', Buffer.from('two'), { filename: 'batch2.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toHaveLength(2);
+
+      const links = await prisma.collectionAsset.findMany({ where: { collectionId: coll.id } });
+      expect(links).toHaveLength(2);
+    });
+
+    it("attaches to another user's collection (shared membership)", async () => {
+      const otherRes = await request(app.server)
+        .post('/api/auth/register')
+        .send({ email: 'other-uploader@example.com', password: 'password123' });
+      const coll = await prisma.collection.create({
+        data: { name: 'Shared Coll', createdBy: otherRes.body.user.id },
+      });
+
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', coll.id)
+        .attach('files', Buffer.from('shared'), { filename: 'shared.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      const link = await prisma.collectionAsset.findFirst({
+        where: { collectionId: coll.id, assetId: res.body[0].id },
+      });
+      expect(link).not.toBeNull();
+    });
+
+    it('returns 400 for a non-existent collection_id and creates no asset', async () => {
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', '00000000-0000-0000-0000-000000000000')
+        .attach('files', Buffer.from('orphan'), { filename: 'orphan.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('collection_id does not exist');
+
+      const count = await prisma.asset.count();
+      expect(count).toBe(0);
+    });
+
+    it('returns 400 for a malformed collection_id', async () => {
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .field('collection_id', 'not-a-uuid')
+        .attach('files', Buffer.from('bad'), { filename: 'bad.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('response collection_id is null when no collection was given', async () => {
+      const res = await request(app.server)
+        .post('/api/upload')
+        .set('Authorization', `Bearer ${token}`)
+        .attach('files', Buffer.from('plain'), { filename: 'no_coll.txt', contentType: 'text/plain' });
+
+      expect(res.status).toBe(201);
+      expect(res.body[0].collection_id).toBeNull();
     });
   });
 });

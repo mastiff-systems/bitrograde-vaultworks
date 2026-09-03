@@ -5,10 +5,34 @@ import { useTheme } from '../contexts/ThemeContext.js';
 import { useCategoryContext } from '../contexts/CategoryContext.js';
 import { useUpload } from '../contexts/UploadContext.js';
 import { NotificationBell } from './NotificationBell.js';
-import { ThemeToggle } from './ThemeToggle.js';
+import { AdminMenu } from './AdminMenu.js';
 
 interface Props {
   children: ReactNode;
+}
+
+/** Icon-only header link to /collections — available to all roles (MAS-736). */
+function CollectionsButton() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const active = location.pathname === '/collections';
+
+  return (
+    <button
+      onClick={() => navigate('/collections')}
+      aria-label="Collections"
+      title="Collections"
+      className={`relative flex-shrink-0 p-1.5 rounded transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none before:content-[''] before:absolute before:-inset-2 ${
+        active
+          ? 'text-accent bg-accent/5'
+          : 'text-content-muted hover:text-content-primary hover:bg-surface-4'
+      }`}
+    >
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v8.25A2.25 2.25 0 004.5 16.5h15a2.25 2.25 0 002.25-2.25V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+      </svg>
+    </button>
+  );
 }
 
 function ProfileDropdown() {
@@ -16,7 +40,6 @@ function ProfileDropdown() {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const isAdmin = user?.role === 'admin';
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -36,7 +59,7 @@ function ProfileDropdown() {
         aria-label="Profile menu"
         aria-haspopup="true"
         aria-expanded={open}
-        className="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center hover:bg-accent/30 transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none"
+        className="relative w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center hover:bg-accent/30 transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 focus:outline-none before:content-[''] before:absolute before:-inset-1.5"
       >
         <span className="text-xs font-semibold text-accent-light">
           {user?.email?.[0]?.toUpperCase()}
@@ -67,78 +90,6 @@ function ProfileDropdown() {
               My Profile
             </button>
 
-            {isAdmin && (
-              <>
-                <button
-                  onClick={() => { setOpen(false); navigate('/admin/settings'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    location.pathname === '/admin/settings'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  Settings
-                </button>
-                <button
-                  onClick={() => { setOpen(false); navigate('/admin/taxonomy'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    location.pathname === '/admin/taxonomy'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
-                  </svg>
-                  Taxonomy
-                </button>
-                <button
-                  onClick={() => { setOpen(false); navigate('/admin/users'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    location.pathname === '/admin/users'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                  </svg>
-                  Users
-                </button>
-                <button
-                  onClick={() => { setOpen(false); navigate('/admin/audit'); }}
-                  className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                    location.pathname === '/admin/audit'
-                      ? 'text-accent bg-accent/5'
-                      : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-                  }`}
-                >
-                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
-                  </svg>
-                  Audit Log
-                </button>
-              </>
-            )}
-
-            {/* Collections — available to all users */}
-            <button
-              onClick={() => { setOpen(false); navigate('/collections'); }}
-              className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
-                location.pathname === '/collections'
-                  ? 'text-accent bg-accent/5'
-                  : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
-              }`}
-            >
-              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v8.25A2.25 2.25 0 004.5 16.5h15a2.25 2.25 0 002.25-2.25V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-              </svg>
-              Collections
-            </button>
-
             <div className="border-t border-border/50 mt-1 pt-1">
               <button
                 onClick={toggleTheme}
@@ -161,7 +112,7 @@ function ProfileDropdown() {
                 <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
-                Sign out
+                Log out
               </button>
             </div>
           </div>
@@ -264,7 +215,8 @@ export function Layout({ children }: Props) {
           {/* Right controls */}
           <div className="flex items-center gap-1 flex-shrink-0 ml-1">
             <NotificationBell onNavigateDashboard={() => navigate('/')} />
-            <ThemeToggle />
+            <CollectionsButton />
+            <AdminMenu />
             <ProfileDropdown />
           </div>
         </div>

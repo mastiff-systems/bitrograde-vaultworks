@@ -46,6 +46,12 @@ vi.mock('../api/client.js', () => ({
   uploadWithMetadata: vi.fn(),
 }));
 
+vi.mock('../api/collections.js', () => ({
+  listCollections: vi.fn().mockResolvedValue([]),
+  createCollection: vi.fn(),
+  addAssetsToCollection: vi.fn(),
+}));
+
 import * as clientApi from '../api/client.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -85,6 +91,10 @@ function makeWizardState(overrides: Partial<WizardState> = {}): WizardState {
       description: '',
       tags: [],
     },
+    folder: { id: null, path: [] },
+    collectionId: null,
+    folderAttachFailed: false,
+    collectionAttachFailed: false,
     uploadedAsset: null,
     uploadProgress: 0,
     error: null,
@@ -102,6 +112,10 @@ function renderStep2(stateOverrides: Partial<WizardState> = {}, dispatch = vi.fn
       categories={[]}
       categoriesLoading={false}
       categoriesError={null}
+      collections={[]}
+      collectionsLoading={false}
+      collectionsError={null}
+      onCreateCollection={vi.fn()}
     />,
   );
   return { ...utils, state, dispatch };

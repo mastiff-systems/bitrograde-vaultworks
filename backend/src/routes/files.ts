@@ -29,10 +29,47 @@ const FilesQuerySchema = z.object({
   mimeType: z.string().optional(),
   categoryId: z.string().uuid().optional(),
   subcategoryId: z.string().uuid().optional(),
+  collectionId: z.string().uuid().optional(),
   format: z.string().optional(),
+  folderId: z.string().uuid().optional(),
+  includeDescendants: z.coerce.boolean().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+
+/**
+ * MAS-710: resolve a folder filter to the set of folder IDs it covers.
+ * With includeDescendants the whole subtree is walked breadth-first — folder
+ * counts are small (MAS-708 §2), so iterative queries beat a recursive CTE.
+ * The visited-set guards against pre-existing cycles in corrupted data.
+ */
+async function collectFolderIds(folderId: string, includeDescendants: boolean): Promise<string[]> {
+  // MAS-715: a trashed folder is nonexistent to reads. Its memberships persist
+  // (restore reproduces the structure), so it must resolve to NO folder IDs —
+  // the empty set matches zero assets, same response as a nonexistent folder.
+  const root = await prisma.folder.findFirst({
+    where: { id: folderId, deletedAt: null },
+    select: { id: true },
+  });
+  if (!root) return [];
+
+  const ids = [folderId];
+  if (!includeDescendants) return ids;
+  const visited = new Set(ids);
+  let frontier = ids;
+  while (frontier.length > 0) {
+    const children = await prisma.folder.findMany({
+      where: { parentFolderId: { in: frontier }, deletedAt: null },
+      select: { id: true },
+    });
+    frontier = children.map((c) => c.id).filter((id) => !visited.has(id));
+    for (const id of frontier) {
+      visited.add(id);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
 
 type TagInfo = { id: string; name: string };
 
@@ -112,7 +149,10 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           mimeType: { type: 'string' },
           categoryId: { type: 'string', format: 'uuid' },
           subcategoryId: { type: 'string', format: 'uuid' },
+          collectionId: { type: 'string', format: 'uuid' },
           format: { type: 'string' },
+          folderId: { type: 'string', format: 'uuid' },
+          includeDescendants: { type: 'boolean' },
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
         },
@@ -146,6 +186,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
       ? params.tags.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
       : [];
 
+    // MAS-710: folder filter composes with q/tags/type/category in both branches
+    const folderIds = params.folderId
+      ? await collectFolderIds(params.folderId, params.includeDescendants ?? false)
+      : null;
+
     if (params.q) {
       const q = params.q.trim();
       if (!q) {
@@ -176,6 +221,12 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
         const prefix = `${params.format}/%`;
         extraFilters = Prisma.sql`${extraFilters} AND a.mime_type LIKE ${prefix}`;
       }
+      if (params.collectionId) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
+          SELECT ca.asset_id FROM collection_assets ca
+          WHERE ca.collection_id = ${params.collectionId}::uuid
+        )`;
+      }
       if (tagNames.length > 0) {
         extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
           SELECT jat2.asset_id FROM asset_tags jat2
@@ -183,6 +234,11 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
           WHERE t2.name = ANY(${tagNames})
           GROUP BY jat2.asset_id
           HAVING COUNT(DISTINCT t2.name) = ${tagNames.length}
+        )`;
+      }
+      if (folderIds) {
+        extraFilters = Prisma.sql`${extraFilters} AND a.id IN (
+          SELECT fa.asset_id FROM folder_assets fa WHERE fa.folder_id = ANY(${folderIds}::uuid[])
         )`;
       }
 
@@ -280,8 +336,14 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     if (params.format) {
       conditions.push({ mimeType: { startsWith: `${params.format}/` } });
     }
+    if (params.collectionId) {
+      conditions.push({ collectionAssets: { some: { collectionId: params.collectionId } } });
+    }
     for (const name of tagNames) {
       conditions.push({ tags: { some: { tag: { name } } } });
+    }
+    if (folderIds) {
+      conditions.push({ folders: { some: { folderId: { in: folderIds } } } });
     }
 
     const where: Prisma.AssetWhereInput = { AND: conditions };
@@ -847,6 +909,159 @@ export async function filesRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.send({ deleted, errors });
+  });
+
+  const BulkUpdateSchema = z
+    .object({
+      ids: z.array(z.string().uuid()).min(1).max(100),
+      categoryId: z.string().uuid().nullable().optional(),
+      subcategoryId: z.string().uuid().nullable().optional(),
+      addTags: z.array(z.string().min(1).max(100)).max(20).optional(),
+      removeTags: z.array(z.string().min(1).max(100)).max(20).optional(),
+    })
+    .refine(
+      (b) =>
+        b.categoryId !== undefined ||
+        b.subcategoryId !== undefined ||
+        b.addTags !== undefined ||
+        b.removeTags !== undefined,
+      { message: 'At least one of categoryId, subcategoryId, addTags, removeTags is required' },
+    )
+    .refine((b) => !(b.subcategoryId != null && b.categoryId == null), {
+      message: 'subcategoryId requires categoryId',
+    });
+
+  // Bulk metadata edit: category/subcategory assignment plus tag add/remove DELTAS
+  // (unlike single-asset PATCH, tags are never replaced wholesale — replacing would
+  // nuke unrelated tags across a heterogeneous selection). Authz mirrors bulk-delete:
+  // per-id owner-or-admin, trashed assets excluded at the SQL level and reported as
+  // 'Not found'. Unlike bulk-delete there are no per-asset storage side effects, so
+  // the whole write for the authorized set runs in ONE transaction — a mid-batch DB
+  // failure applies nothing rather than leaving a half-updated batch.
+  app.post('/api/files/bulk-update', {
+    schema: {
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'string', format: 'uuid' },
+            minItems: 1,
+            maxItems: 100,
+          },
+          categoryId: { type: ['string', 'null'], format: 'uuid' },
+          subcategoryId: { type: ['string', 'null'], format: 'uuid' },
+          addTags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 }, maxItems: 20 },
+          removeTags: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 100 }, maxItems: 20 },
+        },
+      },
+    },
+    config: {
+      rateLimit: {
+        max: process.env.VITEST ? 10000 : 20,
+        timeWindow: '1 minute',
+      },
+    },
+  }, async (req, reply) => {
+    const body = parseBody(BulkUpdateSchema, req.body, reply);
+    if (!body) return;
+
+    // Validate category/subcategory up front — a bad target fails the whole
+    // request (400) rather than producing per-asset errors.
+    if (body.categoryId) {
+      const category = await prisma.category.findUnique({ where: { id: body.categoryId }, select: { id: true } });
+      if (!category) return reply.status(400).send({ error: 'Invalid categoryId' });
+    }
+    if (body.subcategoryId) {
+      const subcategory = await prisma.subcategory.findUnique({
+        where: { id: body.subcategoryId },
+        select: { categoryId: true },
+      });
+      if (!subcategory || subcategory.categoryId !== body.categoryId) {
+        return reply.status(400).send({ error: 'Invalid subcategoryId for the given categoryId' });
+      }
+    }
+
+    const { userId, role } = req.user;
+    const ids = [...new Set(body.ids)];
+
+    // Trashed assets are invisible to bulk ops — they report as Not found,
+    // deliberately indistinguishable from ids that never existed.
+    const assets = await prisma.asset.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: { id: true, uploadedBy: true, originalName: true },
+    });
+
+    const errors: { id: string; reason: string }[] = [];
+    const authorized: typeof assets = [];
+    for (const id of ids) {
+      const asset = assets.find((a) => a.id === id);
+      if (!asset) { errors.push({ id, reason: 'Not found' }); continue; }
+      if (role !== 'admin' && asset.uploadedBy !== userId) { errors.push({ id, reason: 'Unauthorized' }); continue; }
+      authorized.push(asset);
+    }
+
+    const authorizedIds = authorized.map((a) => a.id);
+    const normalizeTags = (names: string[] | undefined) =>
+      [...new Set((names ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean))];
+    const addTagNames = normalizeTags(body.addTags);
+    const removeTagNames = normalizeTags(body.removeTags);
+
+    if (authorizedIds.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        if (body.categoryId !== undefined) {
+          await tx.asset.updateMany({
+            where: { id: { in: authorizedIds } },
+            data: {
+              categoryId: body.categoryId,
+              // Never leave a subcategory dangling under the wrong (or no) category.
+              subcategoryId: body.categoryId === null ? null : body.subcategoryId ?? null,
+            },
+          });
+        } else if (body.subcategoryId === null) {
+          // Clear subcategory only, category untouched.
+          await tx.asset.updateMany({
+            where: { id: { in: authorizedIds } },
+            data: { subcategoryId: null },
+          });
+        }
+
+        if (addTagNames.length > 0) {
+          for (const name of addTagNames) {
+            await tx.tag.upsert({ where: { name }, create: { name }, update: {} });
+          }
+          const tagRecords = await tx.tag.findMany({ where: { name: { in: addTagNames } }, select: { id: true } });
+          await tx.assetTag.createMany({
+            data: authorizedIds.flatMap((assetId) => tagRecords.map((t) => ({ assetId, tagId: t.id }))),
+            skipDuplicates: true,
+          });
+        }
+
+        if (removeTagNames.length > 0) {
+          const removeRecords = await tx.tag.findMany({ where: { name: { in: removeTagNames } }, select: { id: true } });
+          if (removeRecords.length > 0) {
+            await tx.assetTag.deleteMany({
+              where: { assetId: { in: authorizedIds }, tagId: { in: removeRecords.map((t) => t.id) } },
+            });
+          }
+        }
+      });
+
+      for (const asset of authorized) {
+        void logAudit({
+          userId,
+          assetId: asset.id,
+          assetName: asset.originalName,
+          ipAddress: req.ip,
+          action:    AuditAction.UPDATE_METADATA,
+          details:   { userAgent: req.headers['user-agent'], bulkUpdate: true },
+        });
+      }
+    }
+
+    return reply.send({ updated: authorizedIds, errors });
   });
 
   // Bulk download: streams the requested assets as a single ZIP archive.

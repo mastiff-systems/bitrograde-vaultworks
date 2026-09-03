@@ -17,6 +17,8 @@ import {
   getAsset,
   bulkDelete,
   bulkDownload,
+  bulkUpdate,
+  type BulkUpdatePayload,
   type Asset,
   type AssetVersion,
   type Tag,
@@ -26,7 +28,6 @@ import {
   type ShareLink,
 } from '../api/client.js';
 import {
-  listFolderAssets,
   listFolders,
   listFoldersForAsset,
   addAssetsToFolder,
@@ -34,7 +35,7 @@ import {
   type Folder,
 } from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
-import { FolderPanel } from '../components/FolderPanel.js';
+import { MainSidebar } from '../components/MainSidebar.js';
 import { Preview3D } from '../components/Preview3D.js';
 import { FileViewer } from '../components/FileViewer/index.js';
 import { UploadWizard } from '../components/UploadWizard/index.js';
@@ -44,8 +45,10 @@ import {
   type Collection,
   listCollections,
   addAssetsToCollection,
+  removeAssetsFromCollection,
   createCollection,
 } from '../api/collections.js';
+import type { Category } from '../api/categories.js';
 
 // --- Helpers ---
 
@@ -110,7 +113,9 @@ function getUrlFilters() {
     category: p.get('category') ?? null,
     subcategory: p.get('subcategory') ?? null,
     folder: p.get('folder') ?? null,
+    collection: p.get('collection') ?? null,
     preview: p.get('preview') ?? null,
+    asset: p.get('asset') ?? null,
   };
 }
 
@@ -124,7 +129,9 @@ function pushUrlFilters(filters: ReturnType<typeof getUrlFilters>, replace = fal
   if (filters.category) p.set('category', filters.category);
   if (filters.subcategory) p.set('subcategory', filters.subcategory);
   if (filters.folder) p.set('folder', filters.folder);
+  if (filters.collection) p.set('collection', filters.collection);
   if (filters.preview) p.set('preview', filters.preview);
+  if (filters.asset) p.set('asset', filters.asset);
   const search = p.toString();
   const url = search ? `?${search}` : window.location.pathname;
   if (replace) {
@@ -989,7 +996,7 @@ function AssetDetailModal({
                 Edit
               </button>
             )}
-            <button onClick={onClose} className="btn-ghost btn-sm flex-shrink-0">
+            <button onClick={onClose} aria-label="Close details" className="btn-ghost btn-sm flex-shrink-0">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -1712,6 +1719,271 @@ function AddToCollectionInlineModal({
   );
 }
 
+// --- Bulk Edit Modal (MAS-726) ---
+
+/** Per-collection intent: leave membership as-is, add all selected, or remove all selected. */
+type CollectionMark = 'none' | 'add' | 'remove';
+
+/** Server caps bulk endpoints at 100 ids per call; larger selections are chunked client-side. */
+const BULK_CHUNK = 100;
+
+function TagChipInput({
+  label,
+  placeholder,
+  tags,
+  onChange,
+  suggestions,
+  datalistId,
+}: {
+  label: string;
+  placeholder: string;
+  tags: string[];
+  onChange: (tags: string[]) => void;
+  suggestions: Tag[];
+  datalistId: string;
+}) {
+  const [input, setInput] = useState('');
+
+  function commit(raw: string) {
+    const name = raw.trim().toLowerCase();
+    if (!name) return;
+    if (!tags.includes(name)) onChange([...tags, name]);
+    setInput('');
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-medium text-content-secondary mb-1.5">{label}</p>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-1.5">
+          {tags.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/15 text-accent-light">
+              {t}
+              <button type="button" onClick={() => onChange(tags.filter((x) => x !== t))} aria-label={`Remove ${t}`}>
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        className="input py-1.5 text-xs w-full"
+        placeholder={placeholder}
+        value={input}
+        list={datalistId}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            commit(input);
+          }
+        }}
+        onBlur={() => commit(input)}
+      />
+      <datalist id={datalistId}>
+        {suggestions.map((t) => (
+          <option key={t.name} value={t.name} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+function BulkEditModal({
+  assetIds,
+  categories,
+  collections,
+  allTags,
+  onClose,
+  onApplied,
+}: {
+  assetIds: string[];
+  categories: Category[];
+  collections: Collection[];
+  allTags: Tag[];
+  onClose: () => void;
+  onApplied: (summary: string) => void;
+}) {
+  // '' = leave unchanged, 'none' = clear category, otherwise a category uuid
+  const [categoryChoice, setCategoryChoice] = useState('');
+  const [subcategoryChoice, setSubcategoryChoice] = useState('');
+  const [collectionMarks, setCollectionMarks] = useState<Record<string, CollectionMark>>({});
+  const [addTags, setAddTags] = useState<string[]>([]);
+  const [removeTags, setRemoveTags] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const chosenCategory = categories.find((c) => c.id === categoryChoice) ?? null;
+
+  function markCollection(id: string, mark: CollectionMark) {
+    setCollectionMarks((prev) => ({ ...prev, [id]: prev[id] === mark ? 'none' : mark }));
+  }
+
+  async function handleSave() {
+    const payload: BulkUpdatePayload = {};
+    if (categoryChoice === 'none') {
+      payload.categoryId = null;
+    } else if (categoryChoice) {
+      payload.categoryId = categoryChoice;
+      if (subcategoryChoice) payload.subcategoryId = subcategoryChoice;
+    }
+    if (addTags.length > 0) payload.addTags = addTags;
+    if (removeTags.length > 0) payload.removeTags = removeTags;
+
+    const marks = Object.entries(collectionMarks).filter(([, m]) => m !== 'none') as [string, CollectionMark][];
+    const hasMetadataChange = Object.keys(payload).length > 0;
+    if (!hasMetadataChange && marks.length === 0) {
+      onClose();
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    let updated = 0;
+    let failed = 0;
+    try {
+      if (hasMetadataChange) {
+        for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+          const res = await bulkUpdate(assetIds.slice(i, i + BULK_CHUNK), payload);
+          updated += res.updated.length;
+          failed += res.errors.length;
+        }
+      }
+      for (const [collectionId, mark] of marks) {
+        for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+          const chunk = assetIds.slice(i, i + BULK_CHUNK);
+          if (mark === 'add') await addAssetsToCollection(collectionId, chunk);
+          else await removeAssetsFromCollection(collectionId, chunk);
+        }
+      }
+      const touched = hasMetadataChange ? updated : assetIds.length;
+      onApplied(
+        failed > 0
+          ? `${touched} updated; ${failed} failed.`
+          : `${touched} asset${touched === 1 ? '' : 's'} updated.`,
+      );
+    } catch {
+      setError('Bulk edit failed. Please try again.');
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-6" onClick={onClose}>
+      <div className="card w-full max-w-md flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+          <h2 className="text-sm font-semibold text-content-primary">
+            Bulk Edit — {assetIds.length} {assetIds.length === 1 ? 'asset' : 'assets'}
+          </h2>
+          <button onClick={onClose} className="btn-ghost btn-sm" aria-label="Close">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-5 overflow-y-auto">
+          {/* Category */}
+          <div>
+            <p className="text-xs font-medium text-content-secondary mb-1.5">Category</p>
+            <select
+              className="input py-1.5 text-xs w-full bg-surface-2 cursor-pointer"
+              value={categoryChoice}
+              onChange={(e) => {
+                setCategoryChoice(e.target.value);
+                setSubcategoryChoice('');
+              }}
+            >
+              <option value="">Leave unchanged</option>
+              <option value="none">None (clear category)</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            {chosenCategory && chosenCategory.subcategories.length > 0 && (
+              <select
+                className="input py-1.5 text-xs w-full bg-surface-2 cursor-pointer mt-1.5"
+                value={subcategoryChoice}
+                onChange={(e) => setSubcategoryChoice(e.target.value)}
+              >
+                <option value="">No subcategory</option>
+                {chosenCategory.subcategories.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Collections */}
+          <div>
+            <p className="text-xs font-medium text-content-secondary mb-1.5">Collections</p>
+            {collections.length === 0 ? (
+              <p className="text-xs text-content-muted">No collections yet.</p>
+            ) : (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {collections.map((c) => {
+                  const mark = collectionMarks[c.id] ?? 'none';
+                  return (
+                    <div key={c.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-3 transition-colors">
+                      <p className="text-xs font-medium text-content-primary truncate min-w-0">{c.name}</p>
+                      <div className="flex items-center border border-border rounded-lg overflow-hidden flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => markCollection(c.id, 'add')}
+                          className={`px-2 py-1 text-[11px] transition-colors ${mark === 'add' ? 'bg-emerald-500/20 text-emerald-300' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => markCollection(c.id, 'remove')}
+                          className={`px-2 py-1 text-[11px] transition-colors border-l border-border ${mark === 'remove' ? 'bg-danger/20 text-danger' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Tags */}
+          <TagChipInput
+            label="Add tags"
+            placeholder="Type a tag and press Enter…"
+            tags={addTags}
+            onChange={setAddTags}
+            suggestions={allTags}
+            datalistId="bulk-edit-add-tags"
+          />
+          <TagChipInput
+            label="Remove tags"
+            placeholder="Type a tag and press Enter…"
+            tags={removeTags}
+            onChange={setRemoveTags}
+            suggestions={allTags}
+            datalistId="bulk-edit-remove-tags"
+          />
+        </div>
+
+        {error && <p className="px-5 pb-1 text-xs text-danger flex-shrink-0">{error}</p>}
+
+        <div className="px-5 py-4 border-t border-border flex justify-end gap-2 flex-shrink-0">
+          <button onClick={onClose} disabled={saving} className="btn-ghost btn-sm text-xs">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary btn-sm text-xs flex items-center gap-1.5">
+            {saving && <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />}
+            Apply to {assetIds.length} {assetIds.length === 1 ? 'asset' : 'assets'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Main AssetBrowser ---
 
 const PAGE_LIMIT = 24;
@@ -1731,13 +2003,23 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [selectedExts, setSelectedExts] = useState<string[]>(initial.exts);
   const [selectedTags, setSelectedTags] = useState<string[]>(initial.tags);
   const [selectedTypes, setSelectedTypes] = useState<string[]>(initial.types);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
 
   const upload = useUpload();
   const [sort, setSort] = useState<SortKey>(initial.sort);
   // Active folder: null = show all assets, uuid = show folder assets
   const [activeFolderId, setActiveFolderId] = useState<string | null>(initial.folder);
+  // Breadcrumb (names root → self) of the active folder, known only when the
+  // user picked it in the sidebar this session; null when restored from URL.
+  // Used to prefill the Upload Wizard's Location field (MAS-713).
+  const [activeFolderPath, setActiveFolderPath] = useState<string[] | null>(initial.folder ? null : []);
+  // Active collection filter: null = no collection filter (MAS-713)
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(initial.collection);
+
+  function handleSelectFolder(id: string | null, path?: string[]) {
+    setActiveFolderId(id);
+    setActiveFolderPath(id === null ? [] : path ?? null);
+  }
 
   const categoryMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -1762,6 +2044,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [totalPages, setTotalPages] = useState(1);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
+  // ?asset= URL param backing the detail panel deep link (MAS-762). Seeded
+  // synchronously from the URL so the mount-time replaceState in the URL-sync
+  // effect preserves it while getAssetById(initialDetailAssetId) is in flight.
+  const [urlAssetId, setUrlAssetId] = useState<string | null>(initialDetailAssetId ?? initial.asset);
   const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
   const [versionPreviewUrl, setVersionPreviewUrl] = useState<string | null>(null);
 
@@ -1775,6 +2061,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [collectionsForModal, setCollectionsForModal] = useState<Collection[]>([]);
   const [collectionsLoaded, setCollectionsLoaded] = useState(false);
   const [bulkAddToCollectionOpen, setBulkAddToCollectionOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   async function openAddToCollection(assetId: string) {
@@ -1792,6 +2079,19 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
 
   async function openBulkAddToCollection() {
     setBulkAddToCollectionOpen(true);
+    if (!collectionsLoaded) {
+      try {
+        const cols = await listCollections();
+        setCollectionsForModal(cols);
+        setCollectionsLoaded(true);
+      } catch {
+        setCollectionsForModal([]);
+      }
+    }
+  }
+
+  async function openBulkEdit() {
+    setBulkEditOpen(true);
     if (!collectionsLoaded) {
       try {
         const cols = await listCollections();
@@ -1860,6 +2160,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     getAssetById(initialDetailAssetId).then(setDetailAsset).catch(() => {});
   }, [initialDetailAssetId]);
 
+  // Keep ?asset= aligned with the detail panel whenever it opens (card
+  // Details, viewer→details, Logs click-through); clearing on close happens
+  // in the modal's onClose so the initial-load fetch gap doesn't wipe it.
+  useEffect(() => {
+    if (detailAsset) setUrlAssetId(detailAsset.id);
+  }, [detailAsset]);
+
   // Debounce search from context
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -1886,12 +2193,24 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       setSelectedCategoryId(filters.category);
       setSelectedSubcategoryId(filters.subcategory);
       setActiveFolderId(filters.folder);
+      setActiveFolderPath(filters.folder ? null : []);
+      setSelectedCollectionId(filters.collection);
       // Restore preview asset from URL: fast-path lookup in already-loaded list
       if (filters.preview) {
         const found = assets.find((a) => a.id === filters.preview) ?? null;
         setPreviewAsset(found);
       } else {
         setPreviewAsset(null);
+      }
+      // Restore detail panel from ?asset= (MAS-762): fast-path lookup in the
+      // loaded list, falling back to a fetch (the asset may be filtered out).
+      setUrlAssetId(filters.asset);
+      if (filters.asset) {
+        const found = assets.find((a) => a.id === filters.asset);
+        if (found) setDetailAsset(found);
+        else getAssetById(filters.asset).then(setDetailAsset).catch(() => {});
+      } else {
+        setDetailAsset(null);
       }
     }
     window.addEventListener('popstate', handlePopState);
@@ -1934,10 +2253,11 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     pushUrlFilters(
       { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
         category: selectedCategoryId, subcategory: selectedSubcategoryId,
-        folder: activeFolderId, preview: previewAsset?.id ?? null },
+        folder: activeFolderId, collection: selectedCollectionId, preview: previewAsset?.id ?? null,
+        asset: urlAssetId },
       isMount, // replaceState on first render, pushState on subsequent filter changes
     );
-  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, previewAsset]);
+  }, [debouncedQuery, selectedExts, selectedTypes, selectedTags, sort, selectedCategoryId, selectedSubcategoryId, activeFolderId, selectedCollectionId, previewAsset, urlAssetId]);
 
 
   // Load tags
@@ -1945,9 +2265,29 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     listTags().then(setAllTags).catch(() => {});
   }, []);
 
-  // Load assets: branch on activeFolderId — folder view vs. all-assets view
-  const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId].join(' ');
+  // Load collections for the sidebar filter (MAS-713)
+  const [allCollections, setAllCollections] = useState<Collection[]>([]);
+  const refreshCollections = useCallback(() => {
+    listCollections().then(setAllCollections).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshCollections();
+  }, [refreshCollections]);
+
+  // Keep the sidebar filter list in sync when a collection is created from
+  // the Add to Collection modal (MAS-720); asset_count is refreshed via
+  // onAdded once the membership write lands.
+  const handleModalCollectionCreated = useCallback((c: Collection) => {
+    setCollectionsForModal((prev) => [c, ...prev]);
+    setAllCollections((prev) => [c, ...prev]);
+  }, []);
+
+  // Load assets: single /api/files path — folderId composes with q/tags/collection
+  // server-side (MAS-719; the folder-assets endpoint dropped every other filter).
+  const filterKey = [activeFolderId, debouncedQuery, selectedTypes.join(','), selectedTags.join(','), selectedCategoryId, selectedSubcategoryId, selectedCollectionId].join('\u0000');
   const prevFilterKeyRef = useRef(filterKey);
+  // Bumped to force a refetch on the same filters (e.g. after a bulk edit).
+  const [reloadTick, setReloadTick] = useState(0);
   useEffect(() => {
     // Filter change invalidates the current page; snap back to 1 and let the
     // re-render trigger the actual fetch (avoids a wasted stale-page request).
@@ -1962,36 +2302,28 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setError(null);
     let cancelled = false;
 
-    const fetch = activeFolderId
-      ? listFolderAssets(activeFolderId, { limit: 200 }).then((folderPage) => {
-          // Folder endpoint is cursor-based (no total envelope): count what we
-          // fetched and keep the page controls hidden.
-          if (cancelled) return;
-          setAssets(folderPage.assets);
-          setTotal(folderPage.assets.length);
-          setTotalPages(1);
-        })
-      : listFiles({
-          q: debouncedQuery || undefined,
-          // Pass single type to API; multi-type handled client-side below
-          assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
-          tags: selectedTags.length > 0 ? selectedTags : undefined,
-          categoryId: selectedCategoryId ?? undefined,
-          subcategoryId: selectedSubcategoryId ?? undefined,
-          page,
-        }).then((res) => {
-          if (cancelled) return;
-          setAssets(res.data);
-          setTotal(res.total);
-          setTotalPages(res.totalPages);
-        });
-
-    fetch
+    listFiles({
+      q: debouncedQuery || undefined,
+      // Pass single type to API; multi-type handled client-side below
+      assetType: selectedTypes.length === 1 ? selectedTypes[0] : undefined,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      categoryId: selectedCategoryId ?? undefined,
+      subcategoryId: selectedSubcategoryId ?? undefined,
+      collectionId: selectedCollectionId ?? undefined,
+      folderId: activeFolderId ?? undefined,
+      page,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setAssets(res.data);
+        setTotal(res.total);
+        setTotalPages(res.totalPages);
+      })
       .catch(() => { if (!cancelled) setError('Failed to load assets.'); })
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [filterKey, page]);
+  }, [filterKey, page, reloadTick]);
 
   const displayed = useMemo(() => {
     let result = assets;
@@ -2007,6 +2339,27 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     return sortAssets(result, sort);
   }, [assets, selectedExts, selectedCategoryId, selectedSubcategoryId, sort]);
 
+  // Prune the selection when filters/search change while selecting: a bulk edit
+  // must never act on assets the user can no longer see (MAS-726).
+  useEffect(() => {
+    if (!selectionMode) return;
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(displayed.map((a) => a.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [displayed, selectionMode]);
+
+  // Tri-state "All (N)" checkbox: indeterminate when the selection is a strict
+  // subset of the displayed set.
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedIds.size > 0 && selectedIds.size < displayed.length;
+    }
+  }, [selectedIds, displayed]);
+
   const availableExts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const a of assets) {
@@ -2016,7 +2369,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     return Object.entries(counts).map(([ext, count]) => ({ ext, count })).sort((a, b) => b.count - a.count);
   }, [assets]);
 
-  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId);
+  const hasFilters = !!(debouncedQuery || selectedExts.length || selectedTags.length || selectedCategoryId || selectedSubcategoryId || selectedCollectionId);
 
   function clearFilters() {
     setGlobalSearch('');
@@ -2024,7 +2377,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
     setSelectedSubcategoryId(null);
     setSelectedExts([]);
     setSelectedTags([]);
+    setSelectedCollectionId(null);
     setSort('newest');
+  }
+
+  function toggleCollection(id: string) {
+    // Single-select: picking the active collection again clears the filter.
+    setSelectedCollectionId((prev) => (prev === id ? null : id));
   }
 
   function toggleExt(ext: string) {
@@ -2065,7 +2424,10 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   function handleWizardComplete(asset: Asset) {
     setAssets((prev) => [asset, ...prev]);
     listTags().then(setAllTags).catch(() => {});
-    upload.closeWizard();
+    // MAS-717: do not close the wizard here — closing in the same tick as
+    // SUBMIT_SUCCESS unmounts the 'done' step before it ever renders, hiding
+    // the success confirmation and folder/collection attach-failure warnings.
+    // The wizard closes itself via its Done button / backdrop (onClose).
   }
 
   function handleAssetUpdate(updated: Asset) {
@@ -2126,112 +2488,126 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         </div>
       )}
 
-      {/* Filter sidebar */}
-      <aside className={`flex-shrink-0 border-r border-border flex flex-col bg-surface-1 transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-10'}`}>
-        {/* Sidebar header with collapse toggle */}
-        <div className={`px-2 py-3.5 border-b border-border flex items-center ${sidebarOpen ? 'justify-between px-4' : 'justify-center'}`}>
-          {sidebarOpen && (
-            <>
-              <span className="text-xs font-semibold text-content-secondary uppercase tracking-wider">Filters</span>
-              {hasFilters && (
-                <button
-                  onClick={clearFilters}
-                  className="text-xs text-accent-light hover:text-accent transition-colors"
+      {/* Unified sidebar: Folders tree + Filters (MAS-712) */}
+      <MainSidebar
+        activeFolderId={activeFolderId}
+        onSelectFolder={handleSelectFolder}
+        hasFilters={hasFilters}
+        onClearFilters={clearFilters}
+      >
+        {/* Collections filter (MAS-713) — single-select, tag-like membership */}
+        {allCollections.length > 0 && (
+          <div className="px-4 py-3 border-b border-border/50">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              Collections
+            </div>
+            <div className="space-y-0.5 max-h-56 overflow-y-auto">
+              {allCollections.map((collection) => (
+                <label
+                  key={collection.id}
+                  className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
                 >
-                  Clear all
-                </button>
-              )}
-            </>
-          )}
-          <button
-            onClick={() => setSidebarOpen((o) => !o)}
-            aria-label={sidebarOpen ? 'Collapse filters' : 'Expand filters'}
-            className={`flex-shrink-0 p-1 rounded text-content-muted hover:text-content-primary hover:bg-surface-3 transition-colors ${sidebarOpen ? '' : 'mx-auto'}`}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              {sidebarOpen
-                ? <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                : <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              }
-            </svg>
-          </button>
-        </div>
+                  <input
+                    type="checkbox"
+                    checked={selectedCollectionId === collection.id}
+                    onChange={() => toggleCollection(collection.id)}
+                    className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
+                  />
+                  <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 min-w-0 truncate">
+                    {collection.name}
+                  </span>
+                  <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                    {collection.asset_count}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
-        {sidebarOpen && (
-          <div className="overflow-y-auto flex-1">
-            {/* File type filter — dynamic from loaded assets */}
-            {availableExts.length > 0 && (
-              <div className="px-4 py-3 border-b border-border/50">
-                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-                  File type
-                </div>
-                {availableExts.map(({ ext, count }) => (
+        {/* File type filter — dynamic from loaded assets */}
+        {availableExts.length > 0 && (
+          <div className="px-4 py-3 border-b border-border/50">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              File type
+            </div>
+            {availableExts.map(({ ext, count }) => (
+              <label
+                key={ext}
+                className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedExts.includes(ext)}
+                  onChange={() => toggleExt(ext)}
+                  className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                />
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
+                <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
+                  .{ext}
+                </span>
+                <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {/* Tags filter */}
+        {allTags.length > 0 && (
+          <div className="px-4 py-3">
+            <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
+              Tags
+            </div>
+            <div className="space-y-0.5 max-h-72 overflow-y-auto">
+              {allTags.map((tag) => {
+                const p = tagPalette(tag.name);
+                return (
                   <label
-                    key={ext}
+                    key={tag.id}
                     className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
                   >
                     <input
                       type="checkbox"
-                      checked={selectedExts.includes(ext)}
-                      onChange={() => toggleExt(ext)}
-                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                      checked={selectedTags.includes(tag.name)}
+                      onChange={() => toggleTag(tag.name)}
+                      className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
                     />
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${EXT_DOT_CLS[ext] ?? 'bg-content-muted'}`} />
-                    <span className="text-sm text-content-secondary group-hover:text-content-primary transition-colors flex-1 font-mono">
-                      .{ext}
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
+                    >
+                      {tag.name}
                     </span>
-                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">{count}</span>
+                    <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
+                      {tag.asset_count}
+                    </span>
                   </label>
-                ))}
-              </div>
-            )}
-
-            {/* Tags filter */}
-            {allTags.length > 0 && (
-              <div className="px-4 py-3">
-                <div className="text-[10px] font-semibold text-content-muted uppercase tracking-widest mb-2">
-                  Tags
-                </div>
-                <div className="space-y-0.5 max-h-72 overflow-y-auto">
-                  {allTags.map((tag) => {
-                    const p = tagPalette(tag.name);
-                    return (
-                      <label
-                        key={tag.id}
-                        className="flex items-center gap-2.5 py-1.5 cursor-pointer group"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedTags.includes(tag.name)}
-                          onChange={() => toggleTag(tag.name)}
-                          className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500 flex-shrink-0"
-                        />
-                        <span
-                          className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-1 min-w-0 truncate ${p.bg} ${p.text}`}
-                        >
-                          {tag.name}
-                        </span>
-                        <span className="text-[10px] text-content-muted tabular-nums flex-shrink-0">
-                          {tag.asset_count}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+                );
+              })}
+            </div>
           </div>
         )}
-      </aside>
-
-      {/* Folder sidebar */}
-      <FolderPanel activeFolderId={activeFolderId} onSelectFolder={setActiveFolderId} />
+      </MainSidebar>
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
         <div className="flex items-center gap-3 px-6 py-3.5 border-b border-border flex-shrink-0 bg-surface-0/60">
           <div className="flex items-center gap-2 ml-auto">
+            {/* Select All/None — operates on the filtered/visible set (MAS-726) */}
+            {selectionMode && (
+              <label className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-content-secondary cursor-pointer select-none rounded-lg hover:bg-surface-3 transition-colors">
+                <input
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={displayed.length > 0 && selectedIds.size === displayed.length}
+                  onChange={toggleSelectAll}
+                  disabled={displayed.length === 0}
+                  className="w-3.5 h-3.5 rounded cursor-pointer accent-violet-500"
+                  aria-label={`Select all ${displayed.length} visible assets`}
+                />
+                All ({displayed.length})
+              </label>
+            )}
             {/* Select toggle */}
             <button
               onClick={() => { if (selectionMode) { exitSelectionMode(); } else { setSelectionMode(true); } }}
@@ -2298,6 +2674,17 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/10 text-accent-light hover:bg-accent/20 transition-colors"
               >
                 {subcategoryMap[selectedSubcategoryId] ?? 'Subcategory'}
+                <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            {selectedCollectionId && (
+              <button
+                onClick={() => setSelectedCollectionId(null)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-accent/15 text-accent-light hover:bg-accent/25 transition-colors"
+              >
+                {allCollections.find((c) => c.id === selectedCollectionId)?.name ?? 'Collection'}
                 <svg className="w-2.5 h-2.5 opacity-70" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -2476,18 +2863,30 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
         )}
       </div>
 
-      {/* Upload wizard */}
+      {/* Upload wizard — prefilled from the active folder / collection filter (MAS-713) */}
       <UploadWizard
         open={upload.showWizard}
         onClose={upload.closeWizard}
         onComplete={handleWizardComplete}
+        prefill={{
+          // Path is only known when the folder was picked in the sidebar this
+          // session; skip the prefill on URL-restored deep links rather than
+          // show a wrong breadcrumb.
+          folder: activeFolderId && activeFolderPath
+            ? { id: activeFolderId, path: activeFolderPath }
+            : undefined,
+          collectionId: selectedCollectionId ?? undefined,
+        }}
       />
 
       {/* Detail modal */}
       {detailAsset && (
         <AssetDetailModal
           asset={detailAsset}
-          onClose={() => setDetailAsset(null)}
+          onClose={() => {
+            setDetailAsset(null);
+            setUrlAssetId(null);
+          }}
           onTagClick={toggleTag}
           onUpdate={handleAssetUpdate}
           onVersionPreview={(url) => {
@@ -2512,7 +2911,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
             pushUrlFilters(
               { q: debouncedQuery, exts: selectedExts, types: selectedTypes, tags: selectedTags, sort,
                 category: selectedCategoryId, subcategory: selectedSubcategoryId,
-                folder: activeFolderId, preview: null },
+                folder: activeFolderId, collection: selectedCollectionId, preview: null,
+                asset: urlAssetId },
               true, // replaceState
             );
           }}
@@ -2530,7 +2930,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={[addToCollectionAssetId]}
           collections={collectionsForModal}
           onClose={() => setAddToCollectionAssetId(null)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
+          onAdded={refreshCollections}
         />
       )}
 
@@ -2540,13 +2941,35 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={Array.from(selectedIds)}
           collections={collectionsForModal}
           onClose={() => setBulkAddToCollectionOpen(false)}
-          onCollectionCreated={(c) => setCollectionsForModal((prev) => [c, ...prev])}
+          onCollectionCreated={handleModalCollectionCreated}
           onAdded={() => {
+            refreshCollections();
             const count = selectedIds.size;
             setBulkAddToCollectionOpen(false);
             setBulkSuccess(`${count} asset${count > 1 ? 's' : ''} added to collection.`);
             setTimeout(() => setBulkSuccess(null), 3000);
             exitSelectionMode();
+          }}
+        />
+      )}
+
+      {/* Bulk Edit modal (MAS-726) */}
+      {bulkEditOpen && (
+        <BulkEditModal
+          assetIds={Array.from(selectedIds)}
+          categories={categories}
+          collections={collectionsForModal}
+          allTags={allTags}
+          onClose={() => setBulkEditOpen(false)}
+          onApplied={(summary) => {
+            setBulkEditOpen(false);
+            setBulkSuccess(summary);
+            setTimeout(() => setBulkSuccess(null), 3000);
+            exitSelectionMode();
+            // Refetch: category/tag changes can move assets out of the active filter view
+            setReloadTick((t) => t + 1);
+            listTags().then(setAllTags).catch(() => {});
+            refreshCollections();
           }}
         />
       )}
@@ -2581,6 +3004,16 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
             </svg>
             Add to Collection
+          </button>
+          <button
+            onClick={openBulkEdit}
+            disabled={bulkActionPending}
+            className="btn-secondary btn-sm text-xs flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+            </svg>
+            Edit
           </button>
           <button
             onClick={handleBulkDelete}

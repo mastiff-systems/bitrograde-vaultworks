@@ -426,3 +426,256 @@ describe('POST /api/files/bulk-download', () => {
     ).rejects.toThrow();
   });
 });
+
+// ─── POST /api/files/bulk-update ────────────────────────────────────────────
+
+describe('POST /api/files/bulk-update', () => {
+  async function createCategory(name: string) {
+    return prisma.category.create({ data: { name, slug: name.toLowerCase().replace(/\s+/g, '-') } });
+  }
+  async function createSubcategory(categoryId: string, name: string) {
+    return prisma.subcategory.create({ data: { categoryId, name, slug: name.toLowerCase().replace(/\s+/g, '-') } });
+  }
+  async function tagNamesOf(assetId: string) {
+    const rows = await prisma.assetTag.findMany({ where: { assetId }, include: { tag: true } });
+    return rows.map((r) => r.tag.name).sort();
+  }
+
+  it('sets category and subcategory on multiple owned assets', async () => {
+    const a1 = await createAsset(userId, 'bu1.txt');
+    const a2 = await createAsset(userId, 'bu2.txt');
+    const cat = await createCategory('Bulk Cat');
+    const sub = await createSubcategory(cat.id, 'Bulk Sub');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [a1.id, a2.id], categoryId: cat.id, subcategoryId: sub.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toEqual(expect.arrayContaining([a1.id, a2.id]));
+    expect(res.body.errors).toHaveLength(0);
+
+    const rows = await prisma.asset.findMany({ where: { id: { in: [a1.id, a2.id] } } });
+    for (const row of rows) {
+      expect(row.categoryId).toBe(cat.id);
+      expect(row.subcategoryId).toBe(sub.id);
+    }
+  });
+
+  it('clears category AND subcategory with categoryId: null', async () => {
+    const cat = await createCategory('Clear Cat');
+    const sub = await createSubcategory(cat.id, 'Clear Sub');
+    const asset = await prisma.asset.create({
+      data: {
+        originalName: 'clear.txt', storageKey: 'assets/bulk-test/clear.txt', assetType: 'other',
+        uploadedBy: userId, categoryId: cat.id, subcategoryId: sub.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], categoryId: null });
+
+    expect(res.status).toBe(200);
+    const row = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(row?.categoryId).toBeNull();
+    expect(row?.subcategoryId).toBeNull();
+  });
+
+  it('nulls subcategory when category changes without a new subcategory', async () => {
+    const oldCat = await createCategory('Old Cat');
+    const oldSub = await createSubcategory(oldCat.id, 'Old Sub');
+    const newCat = await createCategory('New Cat');
+    const asset = await prisma.asset.create({
+      data: {
+        originalName: 'recat.txt', storageKey: 'assets/bulk-test/recat.txt', assetType: 'other',
+        uploadedBy: userId, categoryId: oldCat.id, subcategoryId: oldSub.id,
+      },
+    });
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], categoryId: newCat.id });
+
+    expect(res.status).toBe(200);
+    const row = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(row?.categoryId).toBe(newCat.id);
+    expect(row?.subcategoryId).toBeNull();
+  });
+
+  it('rejects a subcategory that does not belong to the given category', async () => {
+    const catA = await createCategory('Cat A');
+    const catB = await createCategory('Cat B');
+    const subB = await createSubcategory(catB.id, 'Sub of B');
+    const asset = await createAsset(userId, 'mismatch.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], categoryId: catA.id, subcategoryId: subB.id });
+
+    expect(res.status).toBe(400);
+    const row = await prisma.asset.findUnique({ where: { id: asset.id } });
+    expect(row?.categoryId).toBeNull();
+  });
+
+  it('rejects subcategoryId without categoryId', async () => {
+    const cat = await createCategory('Lone Cat');
+    const sub = await createSubcategory(cat.id, 'Lone Sub');
+    const asset = await createAsset(userId, 'lone.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], subcategoryId: sub.id });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an unknown categoryId with 400', async () => {
+    const asset = await createAsset(userId, 'badcat.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], categoryId: '00000000-0000-0000-0000-000000000000' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('adds and removes tags as deltas, preserving unrelated tags', async () => {
+    const a1 = await createAsset(userId, 'tag1.txt');
+    const a2 = await createAsset(userId, 'tag2.txt');
+    // a1 starts with tags [keep, drop]; a2 starts with [drop]
+    const keep = await prisma.tag.create({ data: { name: 'keep' } });
+    const drop = await prisma.tag.create({ data: { name: 'drop' } });
+    await prisma.assetTag.createMany({ data: [
+      { assetId: a1.id, tagId: keep.id },
+      { assetId: a1.id, tagId: drop.id },
+      { assetId: a2.id, tagId: drop.id },
+    ]});
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [a1.id, a2.id], addTags: ['Added '], removeTags: ['drop'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toEqual(expect.arrayContaining([a1.id, a2.id]));
+
+    // Names are normalized (trimmed + lowercased); 'keep' survives on a1
+    expect(await tagNamesOf(a1.id)).toEqual(['added', 'keep']);
+    expect(await tagNamesOf(a2.id)).toEqual(['added']);
+  });
+
+  it('is idempotent for addTags already present (skipDuplicates)', async () => {
+    const asset = await createAsset(userId, 'idem.txt');
+    const existing = await prisma.tag.create({ data: { name: 'already' } });
+    await prisma.assetTag.create({ data: { assetId: asset.id, tagId: existing.id } });
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], addTags: ['already'] });
+
+    expect(res.status).toBe(200);
+    expect(await tagNamesOf(asset.id)).toEqual(['already']);
+  });
+
+  it('reports per-id errors: trashed → Not found, foreign-owned → Unauthorized, rest updated', async () => {
+    const mine = await createAsset(userId, 'mine.txt');
+    const theirs = await createAsset(adminId, 'theirs.txt');
+    const trashed = await prisma.asset.create({
+      data: {
+        originalName: 'trashed.txt', storageKey: 'trash/x/trashed.txt', assetType: 'other',
+        uploadedBy: userId, deletedAt: new Date(), deletedBy: userId,
+      },
+    });
+    const ghost = '00000000-0000-0000-0000-000000000000';
+    const cat = await createCategory('Partial Cat');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [mine.id, theirs.id, trashed.id, ghost], categoryId: cat.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toEqual([mine.id]);
+    expect(res.body.errors).toEqual(expect.arrayContaining([
+      { id: theirs.id, reason: 'Unauthorized' },
+      { id: trashed.id, reason: 'Not found' },
+      { id: ghost, reason: 'Not found' },
+    ]));
+
+    // Trashed + foreign assets untouched
+    const trashedRow = await prisma.asset.findUnique({ where: { id: trashed.id } });
+    expect(trashedRow?.categoryId).toBeNull();
+    const theirsRow = await prisma.asset.findUnique({ where: { id: theirs.id } });
+    expect(theirsRow?.categoryId).toBeNull();
+    const mineRow = await prisma.asset.findUnique({ where: { id: mine.id } });
+    expect(mineRow?.categoryId).toBe(cat.id);
+  });
+
+  it('lets an admin bulk-update assets they do not own', async () => {
+    const asset = await createAsset(userId, 'admin-target.txt');
+    const cat = await createCategory('Admin Cat');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [asset.id], categoryId: cat.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.updated).toEqual([asset.id]);
+  });
+
+  it('rejects a body with no operation (only ids) with 400', async () => {
+    const asset = await createAsset(userId, 'noop.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id] });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects unknown body properties (additionalProperties: false)', async () => {
+    const asset = await createAsset(userId, 'extra.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [asset.id], addTags: ['x'], nope: true });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('writes an UPDATE_METADATA audit row per updated asset', async () => {
+    const a1 = await createAsset(userId, 'audit1.txt');
+    const a2 = await createAsset(userId, 'audit2.txt');
+
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ ids: [a1.id, a2.id], addTags: ['audited'] });
+
+    expect(res.status).toBe(200);
+
+    // logAudit is fire-and-forget; give it a tick to land
+    await new Promise((r) => setTimeout(r, 50));
+    const logs = await prisma.auditLog.findMany({ where: { action: 'UPDATE_METADATA' } });
+    expect(logs.map((l) => l.assetId).sort()).toEqual([a1.id, a2.id].sort());
+  });
+
+  it('returns 401 without auth', async () => {
+    const res = await request(app.server)
+      .post('/api/files/bulk-update')
+      .send({ ids: ['00000000-0000-0000-0000-000000000000'], addTags: ['x'] });
+
+    expect(res.status).toBe(401);
+  });
+});

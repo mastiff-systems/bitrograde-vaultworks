@@ -679,6 +679,109 @@ describe('ownership checks on delete/restore/purge (MAS-608)', () => {
   });
 });
 
+describe('GET /api/files?collectionId= (filter by collection, MAS-711)', () => {
+  let collectionId: string;
+  let inCollection: { id: string };
+  let outOfCollection: { id: string };
+
+  beforeEach(async () => {
+    inCollection = await prisma.asset.create({
+      data: {
+        originalName: 'in_collection.png',
+        storageKey: 'assets/c/in_collection.png',
+        assetType: 'image',
+        mimeType: 'image/png',
+      },
+    });
+    outOfCollection = await prisma.asset.create({
+      data: {
+        originalName: 'loose_asset.png',
+        storageKey: 'assets/c/loose_asset.png',
+        assetType: 'image',
+        mimeType: 'image/png',
+      },
+    });
+    const collection = await prisma.collection.create({
+      data: { name: 'Game Alpha', createdBy: userId },
+    });
+    collectionId = collection.id;
+    await prisma.collectionAsset.create({
+      data: { collectionId, assetId: inCollection.id },
+    });
+  });
+
+  it('returns only assets in the collection', async () => {
+    const res = await request(app.server)
+      .get(`/api/files?collectionId=${collectionId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].id).toBe(inCollection.id);
+  });
+
+  it('composes with other filters (assetType)', async () => {
+    const res = await request(app.server)
+      .get(`/api/files?collectionId=${collectionId}&assetType=audio`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+  });
+
+  it('composes with q search', async () => {
+    const res = await request(app.server)
+      .get(`/api/files?q=collection&collectionId=${collectionId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].id).toBe(inCollection.id);
+  });
+
+  it('q search with collectionId excludes assets outside the collection', async () => {
+    // 'loose_asset.png' matches q=asset but is not in the collection
+    const res = await request(app.server)
+      .get(`/api/files?q=png&collectionId=${collectionId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.every((a: { id: string }) => a.id === inCollection.id)).toBe(true);
+  });
+
+  it('excludes trashed assets from collection-filtered results', async () => {
+    await prisma.asset.update({
+      where: { id: inCollection.id },
+      data: { deletedAt: new Date() },
+    });
+
+    const res = await request(app.server)
+      .get(`/api/files?collectionId=${collectionId}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+  });
+
+  it('returns empty result for an unknown collection id', async () => {
+    const res = await request(app.server)
+      .get('/api/files?collectionId=00000000-0000-0000-0000-000000000000')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+  });
+
+  it('returns 400 when collectionId is not a valid UUID', async () => {
+    const res = await request(app.server)
+      .get('/api/files?collectionId=not-a-uuid')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /api/files query validation', () => {
   it('returns 400 when categoryId is not a valid UUID', async () => {
     const res = await request(app.server)

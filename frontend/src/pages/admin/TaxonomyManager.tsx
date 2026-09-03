@@ -143,7 +143,12 @@ interface DeleteTarget {
   categoryId?: string;
 }
 
-export function TaxonomyManager() {
+interface TaxonomyManagerProps {
+  /** When true, renders without page chrome for embedding in a Settings tab. */
+  embedded?: boolean;
+}
+
+export function TaxonomyManager({ embedded = false }: TaxonomyManagerProps = {}) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -387,13 +392,15 @@ export function TaxonomyManager() {
     : '';
 
   return (
-    <div className="flex-1 p-8">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Taxonomy</h1>
-          <p className="page-subtitle">Manage categories and subcategories for asset organization</p>
+    <div className={embedded ? '' : 'flex-1 p-8'}>
+      {!embedded && (
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Taxonomy</h1>
+            <p className="page-subtitle">Manage categories and subcategories for asset organization</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">

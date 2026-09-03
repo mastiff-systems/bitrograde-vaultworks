@@ -97,6 +97,11 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     const existingAssets = await prisma.asset.findMany({ select: { originalName: true } });
     const takenNames: string[] = existingAssets.map((a) => a.originalName);
 
+    // MAS-804: the parts() iterator itself can throw (FST_FILES_LIMIT when the
+    // 11th file arrives, file-size limit, malformed multipart, client abort)
+    // AFTER some non-image files were already streamed to S3. Without this
+    // try/catch those objects are orphaned: no DB row, no cleanup, generic 500.
+    try {
     for await (const part of parts) {
       if (part.type === 'field') {
         fields[part.fieldname] = part.value as string;
@@ -150,16 +155,18 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
         });
         part.file.pipe(counter);
 
-        try {
-          await storage.streamUpload(storageKey, counter, mime);
-        } catch (err) {
-          // Clean up already-completed streamed uploads before propagating.
-          await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
-          throw err;
-        }
+        await storage.streamUpload(storageKey, counter, mime);
 
         streamedFiles.push({ id, filename: part.filename, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes });
       }
+    }
+    } catch (err) {
+      // Clean up every S3 object streamed so far before surfacing the error.
+      await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
+      if ((err as { code?: string })?.code === 'FST_FILES_LIMIT') {
+        return reply.status(413).send({ error: 'Too many files — maximum 10 per upload.' });
+      }
+      throw err;
     }
 
     if (files.length === 0 && streamedFiles.length === 0) {
@@ -312,6 +319,9 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         await storage.delete(storageKey).catch(() => {});
         if (thumbnailKey) await storage.delete(thumbnailKey).catch(() => {});
+        // Streamed files are already on S3 but their DB rows are inserted in the
+        // next loop, which will never run — clean them up too (MAS-804).
+        await Promise.all(streamedFiles.map((f) => storage.delete(f.storageKey).catch(() => {})));
         throw err;
       }
 
@@ -377,7 +387,8 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     // ── Streamed files (non-images) ──────────────────────────────────────────
     // Already on S3 — just create the DB record.
 
-    for (const sf of streamedFiles) {
+    for (let sfIndex = 0; sfIndex < streamedFiles.length; sfIndex++) {
+      const sf = streamedFiles[sfIndex];
       const { id, resolvedName, mimetype: mime, storageKey, assetType, sizeBytes } = sf;
 
       if (categoryMimeRestrictions.length > 0 && !categoryMimeRestrictions.includes(mime)) {
@@ -442,8 +453,11 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           });
         }
       } catch (err) {
-        // Storage object already exists; clean it up to avoid orphans.
-        await storage.delete(storageKey).catch(() => {});
+        // Storage objects already exist for this file AND every later streamed
+        // file whose DB row will now never be inserted — clean them all up (MAS-804).
+        await Promise.all(
+          streamedFiles.slice(sfIndex).map((f) => storage.delete(f.storageKey).catch(() => {})),
+        );
         throw err;
       }
 

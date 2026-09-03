@@ -230,7 +230,13 @@ function CreateUserModal({ onCreated, onClose }: CreateUserModalProps) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function AdminUsers() {
+interface AdminUsersProps {
+  /** Render without the page wrapper/header, for embedding inside the admin
+   *  Settings "Users" tab (MAS-778). The /admin/users route stays standalone. */
+  embedded?: boolean;
+}
+
+export function AdminUsers({ embedded = false }: AdminUsersProps) {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -262,12 +268,16 @@ export function AdminUsers() {
   };
 
   return (
-    <div className="flex-1 p-8">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Users</h1>
-          <p className="page-subtitle">{users.length} registered account{users.length !== 1 ? 's' : ''}</p>
-        </div>
+    <div className={embedded ? '' : 'flex-1 p-8'}>
+      <div className={embedded ? 'flex items-center justify-between mb-4' : 'page-header'}>
+        {embedded ? (
+          <p className="text-sm text-content-secondary">{users.length} registered account{users.length !== 1 ? 's' : ''}</p>
+        ) : (
+          <div>
+            <h1 className="page-title">Users</h1>
+            <p className="page-subtitle">{users.length} registered account{users.length !== 1 ? 's' : ''}</p>
+          </div>
+        )}
         <button
           onClick={() => setShowCreateModal(true)}
           className="btn-primary btn-sm"

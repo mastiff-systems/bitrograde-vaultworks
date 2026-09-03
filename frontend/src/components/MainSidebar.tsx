@@ -18,8 +18,21 @@
  *  - [+] creates a subfolder nested under that row (inline input, auto-expand)
  *  - [→] "Move to…" reuses FolderPickerDialog to reparent the folder (whole
  *    subtree moves); self/descendant targets are rejected (client + server 409)
+ *
+ * MAS-773: bottom-pinned Administration bar — replaces the header AdminMenu
+ * dropdown. Admin-only (DOM-absent for non-admins, route authz unchanged —
+ * AdminRoute in App.tsx still gates /admin/*).
+ *
+ * MAS-778: the MAS-773 three-link admin block (Settings / Collections / Users)
+ * is collapsed to a single "Admin" button routing to /admin/settings (Users is
+ * now a tab there; /admin/users stays alive for deep links). The version string
+ * renders on the Admin button itself; the standalone footer remains only for
+ * non-admins and the collapsed rail. An all-roles "Collections" row next to
+ * "All assets" keeps /collections reachable after the header icon swap.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext.js';
 import {
   listFolders,
   createFolder,
@@ -90,6 +103,29 @@ function FilterIcon({ className }: { className?: string }) {
   return (
     <svg className={className ?? 'w-4 h-4'} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+    </svg>
+  );
+}
+
+// ─── Admin entry + Collections row (MAS-773 / MAS-778) ───────────────────────
+
+/** Gear path reused from the old header AdminMenu trigger (MAS-773). */
+const GEAR_ICON_PATH =
+  'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z';
+
+function GearIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-4 h-4'} fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d={GEAR_ICON_PATH} />
+    </svg>
+  );
+}
+
+/** Collections path reused from the old header CollectionsButton (MAS-736). */
+function CollectionsIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className ?? 'w-4 h-4'} fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v8.25A2.25 2.25 0 004.5 16.5h15a2.25 2.25 0 002.25-2.25V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
     </svg>
   );
 }
@@ -333,6 +369,10 @@ export interface MainSidebarProps {
 }
 
 export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilters, onClearFilters }: MainSidebarProps) {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isAdmin = user?.role === 'admin';
   const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
@@ -368,7 +408,8 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
   // Collapsed-rail icons expand the sidebar and jump to their section.
   useEffect(() => {
     if (collapsed || !pendingScrollRef.current) return;
-    const target = pendingScrollRef.current === 'folders' ? foldersSectionRef.current : filtersSectionRef.current;
+    const target =
+      pendingScrollRef.current === 'folders' ? foldersSectionRef.current : filtersSectionRef.current;
     pendingScrollRef.current = null;
     // Optional call: jsdom (tests) doesn't implement scrollIntoView.
     target?.scrollIntoView?.({ block: 'start' });
@@ -462,6 +503,14 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
             <HomeGridIcon />
           </button>
           <button
+            className={`p-1.5 rounded hover:bg-surface-3 ${location.pathname === '/collections' ? 'text-accent' : 'text-content-muted hover:text-content'}`}
+            onClick={() => navigate('/collections')}
+            aria-label="Collections"
+            title="Collections"
+          >
+            <CollectionsIcon />
+          </button>
+          <button
             className="p-1.5 rounded hover:bg-surface-3 text-content-muted hover:text-content"
             onClick={() => expandTo('folders')}
             aria-label="Show folders"
@@ -477,6 +526,19 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
           >
             <FilterIcon />
           </button>
+          {/* Admin-only rail shortcut (MAS-773/778) — absent from the DOM for
+              non-admins; routes straight to the admin settings page since the
+              expanded bar no longer has a sub-list to reveal. */}
+          {isAdmin && (
+            <button
+              className={`p-1.5 rounded hover:bg-surface-3 ${location.pathname.startsWith('/admin') ? 'text-accent' : 'text-content-muted hover:text-content'}`}
+              onClick={() => navigate('/admin/settings')}
+              aria-label="Admin"
+              title="Admin"
+            >
+              <GearIcon />
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
@@ -488,6 +550,17 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
           >
             <HomeGridIcon className="w-4 h-4 shrink-0" />
             <span>All assets</span>
+          </div>
+
+          {/* Collections — all roles (MAS-778): sole click path to /collections
+              after the header CollectionsButton became the theme toggle. */}
+          <div
+            className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer text-sm rounded mx-1 mt-0.5 shrink-0
+              ${location.pathname === '/collections' ? 'bg-accent/20 text-accent' : 'text-content-secondary hover:bg-surface-3 hover:text-content'}`}
+            onClick={() => navigate('/collections')}
+          >
+            <CollectionsIcon className="w-4 h-4 shrink-0" />
+            <span>Collections</span>
           </div>
 
           {/* Section 1 — Folders */}
@@ -568,13 +641,39 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
         </div>
       )}
 
-      {/* Version footer (MAS-732) — build-time constant injected by vite `define`
-          from the root package.json (the version source of truth, MAS-731). */}
-      {!collapsed && (
-        <div className="px-2 py-1 text-right text-[10px] text-content-muted select-none shrink-0">
-          v{__APP_VERSION__}
-        </div>
-      )}
+      {/* Bottom-pinned region (MAS-773/778): single Admin button (admin-only,
+          carries the version string) + version footer for everyone else.
+          mt-auto pins it to the bottom in the collapsed state too, where the
+          icon rail above doesn't stretch. */}
+      <div className="mt-auto shrink-0">
+        {isAdmin && !collapsed && (
+          <div className="border-t border-border px-1 py-2">
+            <button
+              onClick={() => navigate('/admin/settings')}
+              aria-label="Admin"
+              className={`w-full text-left px-3 py-1.5 text-sm rounded flex items-center gap-2 transition-colors ${
+                location.pathname.startsWith('/admin')
+                  ? 'text-accent bg-accent/5'
+                  : 'text-content-secondary hover:text-content-primary hover:bg-surface-3'
+              }`}
+            >
+              <GearIcon className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="flex-1">Admin</span>
+              <span className="text-[10px] text-content-muted tabular-nums select-none">v{__APP_VERSION__}</span>
+            </button>
+          </div>
+        )}
+
+        {/* Version footer (MAS-732) — build-time constant injected by vite `define`
+            from the root package.json (the version source of truth, MAS-731).
+            The expanded admin state shows the version on the Admin button instead
+            (MAS-778); everyone else keeps the footer. */}
+        {!(isAdmin && !collapsed) && (
+          <div className={`px-2 py-1 text-[10px] text-content-muted select-none ${collapsed ? 'text-center' : 'text-right'}`}>
+            v{__APP_VERSION__}
+          </div>
+        )}
+      </div>
 
       {/* Move-target picker (MAS-716) — reuses the Upload Wizard's folder tree dialog */}
       <FolderPickerDialog

@@ -4,6 +4,7 @@ import {
   listFiles,
   listTags,
   uploadFiles,
+  extractApiErrorMessage,
   deleteFile,
   updateAssetTags,
   updateFile,
@@ -2407,8 +2408,8 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       const added = await uploadFiles(files, upload.setProgress);
       setAssets((prev) => [...added, ...prev]);
       listTags().then(setAllTags).catch(() => {});
-    } catch {
-      setError('Upload failed. Please try again.');
+    } catch (err) {
+      setError(extractApiErrorMessage(err, 'Upload failed. Please try again.'));
     } finally {
       upload.setUploading(false);
       upload.setProgress(0);

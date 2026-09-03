@@ -200,7 +200,8 @@ function extractErrorMessage(err: unknown): string {
   if (err && typeof err === 'object' && 'response' in err) {
     const res = (err as { response?: { status?: number; data?: { error?: string } } }).response;
     if (res?.status === 409) return 'A file with this name already exists.';
-    if (res?.status === 400 && res?.data?.error) return res.data.error;
+    if ((res?.status === 400 || res?.status === 413) && res?.data?.error) return res.data.error;
+    if (res?.status === 413) return 'Upload rejected: file too large or too many files.';
     if (res?.status && res.status >= 500) return 'Server error. Please try again.';
   }
   return 'Upload failed. Please try again.';

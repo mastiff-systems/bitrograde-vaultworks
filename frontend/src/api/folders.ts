@@ -77,3 +77,17 @@ export async function addAssetsToFolder(folderId: string, assetIds: string[]): P
 export async function removeAssetFromFolder(folderId: string, assetId: string): Promise<void> {
   await api.delete(`/api/folders/${folderId}/assets/${assetId}`);
 }
+
+/**
+ * MAS-834: Bulk-remove assets from a folder. Non-members are silent no-ops;
+ * `removed` counts only rows actually deleted. Max 100 ids per call.
+ */
+export async function removeAssetsFromFolder(
+  folderId: string,
+  assetIds: string[],
+): Promise<{ removed: number }> {
+  const { data } = await api.post<{ removed: number }>(`/api/folders/${folderId}/assets/remove`, {
+    assetIds,
+  });
+  return data;
+}

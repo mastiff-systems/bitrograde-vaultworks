@@ -607,6 +607,31 @@ export async function foldersRoutes(app: FastifyInstance) {
     return reply.send({ added: result.count });
   });
 
+  // POST /api/folders/:id/assets/remove — bulk-remove assets from a folder.
+  // POST-with-verb (not DELETE-with-body) matches the codebase's bulk convention
+  // (see collections.ts). Removal is set-subtraction: ids that aren't members
+  // (or don't exist) are silent no-ops, so the response is 200 { removed: n }
+  // even when n is 0, and repeat calls are idempotent.
+  app.post('/api/folders/:id/assets/remove', async (req, reply) => {
+    const params = parseParams(FolderIdParams, req.params, reply);
+    if (!params) return;
+    const body = parseBody(AddAssetsBody, req.body, reply);
+    if (!body) return;
+
+    // Trashed folders are invisible to membership routes (MAS-715)
+    const folder = await prisma.folder.findFirst({
+      where: { id: params.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!folder) return reply.status(404).send({ error: 'Folder not found' });
+
+    const deleted = await prisma.folderAsset.deleteMany({
+      where: { folderId: params.id, assetId: { in: body.assetIds } },
+    });
+
+    return reply.send({ removed: deleted.count });
+  });
+
   // DELETE /api/folders/:id/assets/:assetId
   app.delete('/api/folders/:id/assets/:assetId', async (req, reply) => {
     const params = parseParams(FolderAssetParams, req.params, reply);

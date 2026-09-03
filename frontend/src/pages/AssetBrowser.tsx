@@ -30,6 +30,7 @@ import {
   listFoldersForAsset,
   addAssetsToFolder,
   removeAssetFromFolder,
+  removeAssetsFromFolder,
   type Folder,
 } from '../api/folders.js';
 import { AudioPreview } from '../components/AudioPreview.js';
@@ -1719,7 +1720,7 @@ function AddToCollectionInlineModal({
 
 // --- Bulk Edit Modal (MAS-726) ---
 
-/** Per-collection intent: leave membership as-is, add all selected, or remove all selected. */
+/** Per-collection/folder intent: leave membership as-is, add all selected, or remove all selected. */
 type CollectionMark = 'none' | 'add' | 'remove';
 
 /** Server caps bulk endpoints at 100 ids per call; larger selections are chunked client-side. */
@@ -1793,6 +1794,7 @@ function BulkEditModal({
   assetIds,
   categories,
   collections,
+  folders,
   allTags,
   onClose,
   onApplied,
@@ -1800,6 +1802,7 @@ function BulkEditModal({
   assetIds: string[];
   categories: Category[];
   collections: Collection[];
+  folders: Folder[];
   allTags: Tag[];
   onClose: () => void;
   onApplied: (summary: string) => void;
@@ -1808,6 +1811,8 @@ function BulkEditModal({
   const [categoryChoice, setCategoryChoice] = useState('');
   const [subcategoryChoice, setSubcategoryChoice] = useState('');
   const [collectionMarks, setCollectionMarks] = useState<Record<string, CollectionMark>>({});
+  const [folderMarks, setFolderMarks] = useState<Record<string, CollectionMark>>({});
+  const [removeFromAllFolders, setRemoveFromAllFolders] = useState(false);
   const [addTags, setAddTags] = useState<string[]>([]);
   const [removeTags, setRemoveTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -1817,6 +1822,10 @@ function BulkEditModal({
 
   function markCollection(id: string, mark: CollectionMark) {
     setCollectionMarks((prev) => ({ ...prev, [id]: prev[id] === mark ? 'none' : mark }));
+  }
+
+  function markFolder(id: string, mark: CollectionMark) {
+    setFolderMarks((prev) => ({ ...prev, [id]: prev[id] === mark ? 'none' : mark }));
   }
 
   async function handleSave() {
@@ -1831,8 +1840,12 @@ function BulkEditModal({
     if (removeTags.length > 0) payload.removeTags = removeTags;
 
     const marks = Object.entries(collectionMarks).filter(([, m]) => m !== 'none') as [string, CollectionMark][];
+    // "Remove from all folders" supersedes per-folder marks (controls are disabled while it's on)
+    const fMarks = removeFromAllFolders
+      ? []
+      : (Object.entries(folderMarks).filter(([, m]) => m !== 'none') as [string, CollectionMark][]);
     const hasMetadataChange = Object.keys(payload).length > 0;
-    if (!hasMetadataChange && marks.length === 0) {
+    if (!hasMetadataChange && marks.length === 0 && fMarks.length === 0 && !removeFromAllFolders) {
       onClose();
       return;
     }
@@ -1854,6 +1867,22 @@ function BulkEditModal({
           const chunk = assetIds.slice(i, i + BULK_CHUNK);
           if (mark === 'add') await addAssetsToCollection(collectionId, chunk);
           else await removeAssetsFromCollection(collectionId, chunk);
+        }
+      }
+      for (const [folderId, mark] of fMarks) {
+        for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+          const chunk = assetIds.slice(i, i + BULK_CHUNK);
+          if (mark === 'add') await addAssetsToFolder(folderId, chunk);
+          else await removeAssetsFromFolder(folderId, chunk);
+        }
+      }
+      if (removeFromAllFolders) {
+        // Explicit opt-in reset: strip the selected assets from every folder.
+        // Non-members are silent no-ops server-side, so no membership lookup needed.
+        for (const folder of folders) {
+          for (let i = 0; i < assetIds.length; i += BULK_CHUNK) {
+            await removeAssetsFromFolder(folder.id, assetIds.slice(i, i + BULK_CHUNK));
+          }
         }
       }
       const touched = hasMetadataChange ? updated : assetIds.length;
@@ -1946,6 +1975,56 @@ function BulkEditModal({
                   );
                 })}
               </div>
+            )}
+          </div>
+
+          {/* Folders (MAS-834) — mirrors the Collections tri-state control */}
+          <div>
+            <p className="text-xs font-medium text-content-secondary mb-1.5">Folders</p>
+            {folders.length === 0 ? (
+              <p className="text-xs text-content-muted">No folders yet.</p>
+            ) : (
+              <>
+                <div className={`space-y-1 max-h-40 overflow-y-auto ${removeFromAllFolders ? 'opacity-40 pointer-events-none' : ''}`}>
+                  {folders.map((f) => {
+                    const mark = removeFromAllFolders ? 'none' : (folderMarks[f.id] ?? 'none');
+                    return (
+                      <div key={f.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-3 transition-colors">
+                        <p className="text-xs font-medium text-content-primary truncate min-w-0">{f.name}</p>
+                        <div className="flex items-center border border-border rounded-lg overflow-hidden flex-shrink-0">
+                          <button
+                            type="button"
+                            disabled={removeFromAllFolders}
+                            onClick={() => markFolder(f.id, 'add')}
+                            className={`px-2 py-1 text-[11px] transition-colors ${mark === 'add' ? 'bg-emerald-500/20 text-emerald-300' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                          >
+                            Add
+                          </button>
+                          <button
+                            type="button"
+                            disabled={removeFromAllFolders}
+                            onClick={() => markFolder(f.id, 'remove')}
+                            className={`px-2 py-1 text-[11px] transition-colors border-l border-border ${mark === 'remove' ? 'bg-danger/20 text-danger' : 'text-content-muted hover:text-content-primary hover:bg-surface-2'}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <label className="flex items-center gap-2 mt-2 px-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="accent-danger"
+                    checked={removeFromAllFolders}
+                    onChange={(e) => setRemoveFromAllFolders(e.target.checked)}
+                  />
+                  <span className="text-xs text-content-secondary">
+                    Remove from <span className="font-medium text-danger">all</span> folders
+                  </span>
+                </label>
+              </>
             )}
           </div>
 
@@ -2060,6 +2139,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
   const [collectionsLoaded, setCollectionsLoaded] = useState(false);
   const [bulkAddToCollectionOpen, setBulkAddToCollectionOpen] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [foldersForModal, setFoldersForModal] = useState<Folder[]>([]);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   async function openAddToCollection(assetId: string) {
@@ -2098,6 +2178,13 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
       } catch {
         setCollectionsForModal([]);
       }
+    }
+    // Folders can be created/renamed in the sidebar without leaving the page,
+    // so refresh the list on every open rather than caching like collections.
+    try {
+      setFoldersForModal(await listFolders());
+    } catch {
+      setFoldersForModal([]);
     }
   }
 
@@ -2923,6 +3010,7 @@ export function AssetBrowser({ initialDetailAssetId }: { initialDetailAssetId?: 
           assetIds={Array.from(selectedIds)}
           categories={categories}
           collections={collectionsForModal}
+          folders={foldersForModal}
           allTags={allTags}
           onClose={() => setBulkEditOpen(false)}
           onApplied={(summary) => {

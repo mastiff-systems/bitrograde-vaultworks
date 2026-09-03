@@ -47,6 +47,7 @@ vi.mock('../api/folders.js', () => ({
   listFolderAssets: vi.fn(),
   addAssetsToFolder: vi.fn(),
   removeAssetFromFolder: vi.fn(),
+  removeAssetsFromFolder: vi.fn(),
   listFoldersForAsset: vi.fn(),
 }));
 
@@ -114,6 +115,7 @@ vi.mock('../contexts/UploadContext.js', () => ({
 
 import * as clientApi from '../api/client.js';
 import * as collectionsApi from '../api/collections.js';
+import * as foldersApi from '../api/folders.js';
 
 function makeAsset(id: string, name: string, tags: string[] = []): clientApi.Asset {
   return {
@@ -128,6 +130,19 @@ function makeAsset(id: string, name: string, tags: string[] = []): clientApi.Ass
     tags: tags.map((t) => ({ id: `tag-${t}`, name: t })),
     category_id: null,
     subcategory_id: null,
+  };
+}
+
+function makeFolder(id: string, name: string): foldersApi.Folder {
+  return {
+    id,
+    name,
+    description: null,
+    parent_folder_id: null,
+    created_by_user_id: null,
+    asset_count: 0,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
   };
 }
 
@@ -154,6 +169,9 @@ describe('AssetBrowser bulk select-all + bulk edit (MAS-726)', () => {
     vi.mocked(collectionsApi.listCollections).mockResolvedValue([]);
     vi.mocked(collectionsApi.addAssetsToCollection).mockResolvedValue(undefined);
     vi.mocked(collectionsApi.removeAssetsFromCollection).mockResolvedValue({ removed: 0 });
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([]);
+    vi.mocked(foldersApi.addAssetsToFolder).mockResolvedValue({ added: 1 });
+    vi.mocked(foldersApi.removeAssetsFromFolder).mockResolvedValue({ removed: 1 });
   });
 
   afterEach(() => {
@@ -291,6 +309,88 @@ describe('AssetBrowser bulk select-all + bulk edit (MAS-726)', () => {
     await waitFor(() => expect(collectionsApi.addAssetsToCollection).toHaveBeenCalledWith('col-1', ['a1']));
     expect(collectionsApi.removeAssetsFromCollection).toHaveBeenCalledWith('col-2', ['a1']);
     expect(clientApi.bulkUpdate).not.toHaveBeenCalled();
+  });
+
+  it('applies folder add/remove marks via the folder endpoints (MAS-834)', async () => {
+    const assets = [makeAsset('a1', 'one.png')];
+    vi.mocked(clientApi.listFiles).mockResolvedValue(page(assets));
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([
+      makeFolder('f1', 'Renders'),
+      makeFolder('f2', 'Archive'),
+    ]);
+    render(<AssetBrowser />);
+    await waitFor(() => expect(screen.getByText('one.png')).toBeInTheDocument());
+
+    await enterSelectionMode();
+    fireEvent.click(screen.getByLabelText('Select all 1 visible assets'));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(screen.getByText('Renders')).toBeInTheDocument());
+
+    // Add to Renders, remove from Archive — no metadata changes, no collections
+    const addButtons = screen.getAllByRole('button', { name: 'Add' });
+    fireEvent.click(addButtons[0]);
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove' });
+    fireEvent.click(removeButtons[1]);
+
+    fireEvent.click(screen.getByRole('button', { name: /apply to 1 asset/i }));
+
+    await waitFor(() => expect(foldersApi.addAssetsToFolder).toHaveBeenCalledWith('f1', ['a1']));
+    expect(foldersApi.removeAssetsFromFolder).toHaveBeenCalledWith('f2', ['a1']);
+    expect(clientApi.bulkUpdate).not.toHaveBeenCalled();
+    expect(collectionsApi.addAssetsToCollection).not.toHaveBeenCalled();
+  });
+
+  it('"Remove from all folders" is opt-in and strips membership from every folder, superseding marks', async () => {
+    const assets = [makeAsset('a1', 'one.png'), makeAsset('a2', 'two.png')];
+    vi.mocked(clientApi.listFiles).mockResolvedValue(page(assets));
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([
+      makeFolder('f1', 'Renders'),
+      makeFolder('f2', 'Archive'),
+      makeFolder('f3', 'WIP'),
+    ]);
+    render(<AssetBrowser />);
+    await waitFor(() => expect(screen.getByText('one.png')).toBeInTheDocument());
+
+    await enterSelectionMode();
+    fireEvent.click(screen.getByLabelText('Select all 2 visible assets'));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(screen.getByText('Renders')).toBeInTheDocument());
+
+    // Mark an Add first, then opt into the full reset — the mark must be superseded
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add' })[0]);
+    fireEvent.click(screen.getByRole('checkbox', { name: /remove from all folders/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /apply to 2 assets/i }));
+
+    await waitFor(() => expect(foldersApi.removeAssetsFromFolder).toHaveBeenCalledTimes(3));
+    expect(foldersApi.removeAssetsFromFolder).toHaveBeenCalledWith('f1', ['a1', 'a2']);
+    expect(foldersApi.removeAssetsFromFolder).toHaveBeenCalledWith('f2', ['a1', 'a2']);
+    expect(foldersApi.removeAssetsFromFolder).toHaveBeenCalledWith('f3', ['a1', 'a2']);
+    expect(foldersApi.addAssetsToFolder).not.toHaveBeenCalled();
+  });
+
+  it('does not touch folder membership when folders are left unmarked (non-destructive default)', async () => {
+    const assets = [makeAsset('a1', 'one.png')];
+    vi.mocked(clientApi.listFiles).mockResolvedValue(page(assets));
+    vi.mocked(clientApi.bulkUpdate).mockResolvedValue({ updated: ['a1'], errors: [] });
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([makeFolder('f1', 'Renders')]);
+    render(<AssetBrowser />);
+    await waitFor(() => expect(screen.getByText('one.png')).toBeInTheDocument());
+
+    await enterSelectionMode();
+    fireEvent.click(screen.getByLabelText('Select all 1 visible assets'));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(screen.getByText('Renders')).toBeInTheDocument());
+
+    // Only a tag change — folder section untouched
+    const addInput = screen.getAllByPlaceholderText('Type a tag and press Enter…')[0];
+    fireEvent.change(addInput, { target: { value: 'hero' } });
+    fireEvent.keyDown(addInput, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: /apply to 1 asset/i }));
+
+    await waitFor(() => expect(clientApi.bulkUpdate).toHaveBeenCalledTimes(1));
+    expect(foldersApi.addAssetsToFolder).not.toHaveBeenCalled();
+    expect(foldersApi.removeAssetsFromFolder).not.toHaveBeenCalled();
   });
 
   it('surfaces partial failures in the summary toast', async () => {

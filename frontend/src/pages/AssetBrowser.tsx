@@ -48,6 +48,7 @@ import {
   createCollection,
 } from '../api/collections.js';
 import type { Category } from '../api/categories.js';
+import { naturalCompare } from '../utils/naturalSort.js';
 
 // --- Helpers ---
 
@@ -180,8 +181,8 @@ function sortAssets(assets: Asset[], sort: SortKey): Asset[] {
     switch (sort) {
       case 'newest': return new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime();
       case 'oldest': return new Date(a.uploaded_at).getTime() - new Date(b.uploaded_at).getTime();
-      case 'name-az': return a.original_name.localeCompare(b.original_name);
-      case 'name-za': return b.original_name.localeCompare(a.original_name);
+      case 'name-az': return naturalCompare(a.original_name, b.original_name);
+      case 'name-za': return naturalCompare(b.original_name, a.original_name);
       case 'largest': return (b.size_bytes ?? 0) - (a.size_bytes ?? 0);
       case 'smallest': return (a.size_bytes ?? 0) - (b.size_bytes ?? 0);
       default: return 0;

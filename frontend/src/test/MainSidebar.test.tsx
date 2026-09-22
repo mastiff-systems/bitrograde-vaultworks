@@ -147,6 +147,30 @@ describe('MainSidebar integration', () => {
     expect(screen.queryByText(/no folders yet/i)).not.toBeInTheDocument();
   });
 
+  it('inserts a created folder in natural numeric order (MAS-839)', async () => {
+    vi.mocked(foldersApi.listFolders).mockResolvedValue([
+      makeFolder({ id: 'f1', name: 'Folder 1' }),
+      makeFolder({ id: 'f10', name: 'Folder 10' }),
+    ]);
+    vi.mocked(foldersApi.createFolder).mockResolvedValue(
+      makeFolder({ id: 'f2', name: 'Folder 2' }),
+    );
+
+    renderSidebar();
+    await waitFor(() => screen.getByText('Folder 1'));
+
+    fireEvent.click(screen.getByRole('button', { name: /new folder/i }));
+    const input = screen.getByPlaceholderText(/folder name/i);
+    await userEvent.type(input, 'Folder 2');
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => screen.getByText('Folder 2'));
+    // getAllByText returns nodes in document order: "Folder 2" must land
+    // between "Folder 1" and "Folder 10", not after "Folder 10".
+    const names = screen.getAllByText(/^Folder \d+$/).map((el) => el.textContent);
+    expect(names).toEqual(['Folder 1', 'Folder 2', 'Folder 10']);
+  });
+
   it('escaping the new-folder input cancels creation', async () => {
     renderSidebar();
     await waitFor(() => screen.getByText(/no folders yet/i));

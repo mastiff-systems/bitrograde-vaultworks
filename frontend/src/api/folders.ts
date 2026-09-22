@@ -6,6 +6,7 @@
  */
 import { api } from './client.js';
 import type { Asset } from './client.js';
+import { byName } from '../utils/naturalSort.js';
 
 export interface Folder {
   id: string;
@@ -23,18 +24,24 @@ export interface FolderAssetsPage {
   nextCursor: string | null;
 }
 
-/** List folders. Pass `parentFolderId: 'root'` for top-level only. */
+/**
+ * List folders. Pass `parentFolderId: 'root'` for top-level only.
+ * Returned in natural name order ("Folder 2" < "Folder 10") — MAS-839.
+ */
 export async function listFolders(params?: { parentFolderId?: string }): Promise<Folder[]> {
   const p: Record<string, string> = {};
   if (params?.parentFolderId) p.parentFolderId = params.parentFolderId;
   const { data } = await api.get<Folder[]>('/api/folders', { params: p });
-  return data;
+  return data.sort(byName);
 }
 
-/** List folders that contain the given asset (for the asset detail panel). */
+/**
+ * List folders that contain the given asset (for the asset detail panel).
+ * Returned in natural name order ("Folder 2" < "Folder 10") — MAS-839.
+ */
 export async function listFoldersForAsset(assetId: string): Promise<Folder[]> {
   const { data } = await api.get<Folder[]>('/api/folders', { params: { assetId } });
-  return data;
+  return data.sort(byName);
 }
 
 export async function createFolder(body: {

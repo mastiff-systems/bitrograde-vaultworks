@@ -40,6 +40,7 @@ import {
   deleteFolder,
   type Folder,
 } from '../api/folders.js';
+import { byName } from '../utils/naturalSort.js';
 import { FolderPickerDialog, type FolderSelection } from './UploadWizard/FolderPickerDialog.js';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -216,7 +217,7 @@ function FolderRow({ folder, ancestry, activeFolderId, onSelectFolder, onDeleted
         // folder) instead of caching a lone child and hiding its siblings.
         setChildren(await listFolders({ parentFolderId: folder.id }));
       } else {
-        setChildren([...children, created].sort((a, b) => a.name.localeCompare(b.name)));
+        setChildren([...children, created].sort(byName));
       }
       setExpanded(true);
       setChildName('');
@@ -425,7 +426,7 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
     if (!trimmed) { setCreating(false); return; }
     try {
       const folder = await createFolder({ name: trimmed });
-      setFolders((prev) => [...prev, folder].sort((a, b) => a.name.localeCompare(b.name)));
+      setFolders((prev) => [...prev, folder].sort(byName));
       // Reset only on success so the user can retry with the same name on error.
       setNewName('');
       setCreating(false);
@@ -597,7 +598,7 @@ export function MainSidebar({ activeFolderId, onSelectFolder, children, hasFilte
                       setFolders((prev) =>
                         prev
                           .map((f) => (f.id === updated.id ? updated : f))
-                          .sort((a, b) => a.name.localeCompare(b.name)),
+                          .sort(byName),
                       )
                     }
                     onRequestMove={(f, p) => setMoving({ folder: f, path: p })}

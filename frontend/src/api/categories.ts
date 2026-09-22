@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { isPasswordChangeRequired, emitPasswordChangeRequired } from './passwordGate.js';
+import { byName } from '../utils/naturalSort.js';
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? '' });
 
@@ -45,9 +46,10 @@ export interface Subcategory {
   asset_count: number;
 }
 
+/** Returned in natural name order ("Cat 2" < "Cat 10") — MAS-839. */
 export async function listCategories(): Promise<Category[]> {
   const { data } = await api.get<Category[]>('/api/categories');
-  return data;
+  return data.sort(byName);
 }
 
 export async function createCategory(name: string): Promise<Category> {

@@ -9,6 +9,7 @@ import {
   deleteSubcategory,
 } from '../../api/categories.js';
 import type { Category, SubcategoryRef } from '../../api/categories.js';
+import { byName } from '../../utils/naturalSort.js';
 
 // ── Delete confirmation dialog ────────────────────────────────────────────────
 
@@ -177,7 +178,7 @@ export function TaxonomyManager({ embedded = false }: TaxonomyManagerProps = {})
 
   const handleCreateCategory = async (name: string) => {
     const cat = await createCategory(name);
-    setCategories((prev) => [...prev, cat].sort((a, b) => a.name.localeCompare(b.name)));
+    setCategories((prev) => [...prev, cat].sort(byName));
     setSelectedCategoryId(cat.id);
     setShowCreateCategory(false);
   };
@@ -186,7 +187,7 @@ export function TaxonomyManager({ embedded = false }: TaxonomyManagerProps = {})
     const updated = await updateCategory(id, name);
     setCategories((prev) =>
       prev.map((c) => (c.id === id ? { ...updated, subcategories: c.subcategories } : c))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .sort(byName),
     );
     setEditingCategoryId(null);
   };
@@ -219,7 +220,7 @@ export function TaxonomyManager({ embedded = false }: TaxonomyManagerProps = {})
           ? {
               ...c,
               subcategories: [...c.subcategories, { id: sub.id, name: sub.name, slug: sub.slug, asset_count: sub.asset_count }]
-                .sort((a, b) => a.name.localeCompare(b.name)),
+                .sort(byName),
             }
           : c,
       ),
@@ -237,7 +238,7 @@ export function TaxonomyManager({ embedded = false }: TaxonomyManagerProps = {})
               ...c,
               subcategories: c.subcategories
                 .map((s) => (s.id === id ? { ...s, name: updated.name, slug: updated.slug } : s))
-                .sort((a, b) => a.name.localeCompare(b.name)),
+                .sort(byName),
             }
           : c,
       ),
